@@ -6,10 +6,10 @@ server.port: 5601
 # Elasticsearch connection
 elasticsearch.hosts: ["https://orochi-elasticsearch:9200"]
 elasticsearch.username: "kibana_system"
-elasticsearch.password: "{{ elastic_password }}"
+elasticsearch.password: "{{ kibana_password }}"
 
-# SSL/TLS settings
-elasticsearch.ssl.certificateAuthorities: ["config/certs/ca/ca.crt"]
+# SSL/TLS settings - FIXED PATH
+elasticsearch.ssl.certificateAuthorities: ["/usr/share/kibana/config/certs/ca/ca.crt"]
 elasticsearch.ssl.verificationMode: certificate
 
 # Security settings
@@ -36,41 +36,7 @@ logging.root.level: info
 xpack.security.session.idleTimeout: "1h"
 xpack.security.session.lifespan: "30d"
 
-# Maps configuration
-xpack.maps.enabled: true
-xpack.maps.showMapVisualizationTypes: true
 
 # Machine Learning
-xpack.ml.enabled: true
+#xpack.ml.enabled: "true"
 
-# Alerting
-xpack.actions.enabled: true
-xpack.alerting.enabled: true
-
-# Canvas
-xpack.canvas.enabled: true
-
-# Dev tools
-console.enabled: true
-dev_tools.enabled: true
-
-# Telemetry
-telemetry.enabled: false
-telemetry.optIn: false
-
-# Newsfeed
-newsfeed.enabled: false
-
-# Server configuration
-server.basePath: ""
-server.rewriteBasePath: false
-server.publicBaseUrl: "http://{{ ansible_default_ipv4.address }}:{{ kibana_port }}"
-
-# Memory circuit breaker
-server.maxPayload: 1048576
-
-# Search configuration
-data.search.aggs.shardDelay.enabled: true
-
-# Legacy browser support
-csp.strict: false

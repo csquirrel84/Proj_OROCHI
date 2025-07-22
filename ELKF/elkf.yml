@@ -66,7 +66,7 @@
         mode: '0755'
       loop:
         - "{{ data_path }}"
-        - "{{ data_path }}/elasticsearch"
+        - "{{ data_path }}/elasticsearch/data"
         - "{{ data_path }}/logstash"
         - "{{ data_path }}/logstash/pipeline"
         - "{{ data_path }}/kibana"
@@ -76,8 +76,7 @@
 
     - name: Set ownership of ELK directories
       file:
-        path: 
-          - "{{ data_path }}/"
+        path: "{{ data_path }}"
         owner: 1000
         group: 1000
         recurse: yes
@@ -110,13 +109,6 @@
         dest: "{{ data_path }}/elasticsearch/elasticsearch.yml"
         mode: '0644'
     
-    # Create Kibana configuration
-    - name: Create Kibana configuration
-      template:
-        src: kibana-docker.yml.j2
-        dest: "{{ data_path }}/kibana/kibana.yml"
-        mode: '0644'
-    
     # Create Logstash configuration
     - name: Create Logstash configuration
       template:
@@ -132,28 +124,51 @@
     
     - name: Generate SSL certificates for Elasticsearch
       shell: |
+        # Generate CA
         docker run --rm --user root -v {{ data_path }}/certs:/usr/share/elasticsearch/config/certs \
         docker.elastic.co/elasticsearch/elasticsearch:{{ elastic_version }} \
         bin/elasticsearch-certutil ca --silent --pem -out config/certs/ca.zip
         
+        # Extract CA
         docker run --rm --user root -v {{ data_path }}/certs:/usr/share/elasticsearch/config/certs \
         docker.elastic.co/elasticsearch/elasticsearch:{{ elastic_version }} \
         unzip config/certs/ca.zip -d config/certs
         
+        # Generate node certificates
         docker run --rm --user root -v {{ data_path }}/certs:/usr/share/elasticsearch/config/certs \
         docker.elastic.co/elasticsearch/elasticsearch:{{ elastic_version }} \
         bin/elasticsearch-certutil cert --silent --pem -out config/certs/certs.zip \
         --ca-cert config/certs/ca/ca.crt --ca-key config/certs/ca/ca.key \
-        --dns localhost --dns orochi-elasticsearch --ip 127.0.0.1
+        --dns localhost --dns orochi-elasticsearch --dns {{ ansible_default_ipv4.address }} \
+        --ip 127.0.0.1 --ip {{ ansible_default_ipv4.address }}
         
+        # Extract certificates
         docker run --rm --user root -v {{ data_path }}/certs:/usr/share/elasticsearch/config/certs \
         docker.elastic.co/elasticsearch/elasticsearch:{{ elastic_version }} \
         unzip config/certs/certs.zip -d config/certs
+        
+        # Create elasticsearch directory and move certificates
+        mkdir -p {{ data_path }}/certs/elasticsearch
+        cp {{ data_path }}/certs/instance/instance.crt {{ data_path }}/certs/elasticsearch/elasticsearch.crt
+        cp {{ data_path }}/certs/instance/instance.key {{ data_path }}/certs/elasticsearch/elasticsearch.key
+        
+        # Set proper permissions
+        chown -R 1000:1000 {{ data_path }}/certs
+        chmod -R 755 {{ data_path }}/certs
+        
+    - name: set vm.max_map_count
+      sysctl:
+        name: vm.max_map_count
+        value: 262144
+        state: present
+        reload: yes
 
-    # Start ELK stack
-    - name: Start ELK stack with docker-compose
+    # Start only Elasticsearch first
+    - name: Start Elasticsearch only
       community.docker.docker_compose_v2:
         project_src: /opt/elk-docker
+        services:
+          - elasticsearch
         state: present
       environment:
         COMPOSE_HTTP_TIMEOUT: "120"
@@ -170,8 +185,59 @@
       until: result.status == 200
       retries: 30
       delay: 10
-    
-    # Configure Fleet
+
+    # Reset built-in user passwords using official elasticsearch-reset-password tool
+    - name: Reset kibana_system user password (auto-generated)
+      shell: |
+        docker exec orochi-elasticsearch bin/elasticsearch-reset-password --batch --username kibana_system --url https://localhost:9200
+      register: kibana_reset_result
+      until: kibana_reset_result.rc == 0
+      retries: 10
+      delay: 5
+
+    - name: Extract kibana_system password from output
+      set_fact:
+        kibana_system_password: "{{ kibana_reset_result.stdout | regex_search('New value: (.+)', '\\1') | first }}"
+
+    - name: Reset logstash_system user password (auto-generated)
+      shell: |
+        docker exec orochi-elasticsearch bin/elasticsearch-reset-password --batch --username logstash_system --url https://localhost:9200
+      register: logstash_reset_result
+      until: logstash_reset_result.rc == 0
+      retries: 10
+      delay: 5
+
+    - name: Extract logstash_system password from output
+      set_fact:
+        logstash_system_password: "{{ logstash_reset_result.stdout | regex_search('New value: (.+)', '\\1') | first }}"
+
+    # Create Kibana configuration with the generated password
+    - name: Create Kibana configuration with generated password
+      template:
+        src: kibana-docker.yml.j2
+        dest: "{{ data_path }}/kibana/kibana.yml"
+        mode: '0644'
+      vars:
+        kibana_password: "{{ kibana_system_password }}"
+
+    # Update Logstash configuration with the generated password
+    - name: Update Logstash configuration with generated password
+      template:
+        src: logstash-docker.yml.j2
+        dest: "{{ data_path }}/logstash/logstash.yml"
+        mode: '0644'
+      vars:
+        logstash_password: "{{ logstash_system_password }}"
+
+    # Now start the complete ELK stack
+    - name: Start complete ELK stack
+      community.docker.docker_compose_v2:
+        project_src: /opt/elk-docker
+        state: present
+      environment:
+        COMPOSE_HTTP_TIMEOUT: "120"
+
+    # Wait for Kibana to be ready
     - name: Wait for Kibana to be ready
       uri:
         url: "http://{{ ansible_default_ipv4.address }}:{{ kibana_port }}/api/status"
@@ -181,6 +247,7 @@
       retries: 30
       delay: 10
     
+    # Configure Fleet
     - name: Configure Fleet settings in Kibana
       uri:
         url: "http://{{ ansible_default_ipv4.address }}:{{ kibana_port }}/api/fleet/settings"
@@ -216,5 +283,9 @@
           - "Elasticsearch: https://{{ ansible_default_ipv4.address }}:{{ elastic_port }}"
           - "Kibana: http://{{ ansible_default_ipv4.address }}:{{ kibana_port }}"
           - "Fleet Server: https://{{ ansible_default_ipv4.address }}:{{ fleet_port }}"
-          - "Username: elastic"
-          - "Password: {{ elastic_password }}"
+          - "Login credentials:"
+          - "  Username: elastic"
+          - "  Password: {{ elastic_password }}"
+          - "System user passwords (auto-generated):"
+          - "  kibana_system: {{ kibana_system_password }}"
+          - "  logstash_system: {{ logstash_system_password }}"
