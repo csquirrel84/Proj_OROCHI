@@ -1,0 +1,199 @@
+# Project OROCHI Logstash Pipeline Configuration
+
+input {
+  # Beats input (for Filebeat, Metricbeat, etc.)
+  beats {
+    port => 5044
+    host => "0.0.0.0"
+  }
+  
+  # TCP input for raw logs
+  tcp {
+    port => 5000
+    host => "0.0.0.0"
+    codec => json_lines
+  }
+  
+  # Syslog input
+  syslog {
+    port => 5514
+    host => "0.0.0.0"
+  }
+  
+  # UDP input for network logs
+  udp {
+    port => 5515
+    host => "0.0.0.0"
+    codec => json
+  }
+}
+
+filter {
+  # Add project metadata
+  mutate {
+    add_field => { "[@metadata][project]" => "orochi" }
+    add_field => { "[@metadata][environment]" => "production" }
+  }
+
+  # Parse different log types
+  if [fields][logtype] == "apache" {
+    grok {
+      match => { "message" => "%{COMBINEDAPACHELOG}" }
+    }
+    
+    date {
+      match => [ "timestamp", "dd/MMM/yyyy:HH:mm:ss Z" ]
+    }
+    
+    mutate {
+      convert => { "response" => "integer" }
+      convert => { "bytes" => "integer" }
+    }
+  }
+  
+  else if [fields][logtype] == "nginx" {
+    grok {
+      match => { "message" => "%{NGINXACCESS}" }
+    }
+    
+    date {
+      match => [ "timestamp", "dd/MMM/yyyy:HH:mm:ss Z" ]
+    }
+  }
+  
+  else if [fields][logtype] == "syslog" {
+    grok {
+      match => { "message" => "%{SYSLOGBASE}" }
+    }
+    
+    date {
+      match => [ "timestamp", "MMM  d HH:mm:ss", "MMM dd HH:mm:ss" ]
+    }
+  }
+  
+  else if [fields][logtype] == "json" {
+    json {
+      source => "message"
+    }
+  }
+  
+  # Security log parsing
+  if [fields][logtype] == "security" {
+    grok {
+      match => { 
+        "message" => [
+          "%{TIMESTAMP_ISO8601:timestamp} %{LOGLEVEL:level} %{GREEDYDATA:security_message}",
+          "%{SYSLOGBASE} %{GREEDYDATA:security_message}"
+        ]
+      }
+    }
+    
+    # Extract IPs for security analysis
+    grok {
+      match => { "security_message" => "%{IP:source_ip}" }
+      tag_on_failure => []
+    }
+    
+    # GeoIP enrichment for source IPs
+    if [source_ip] {
+      geoip {
+        source => "source_ip"
+        target => "geoip"
+      }
+    }
+  }
+  
+  # Network log parsing
+  if [fields][logtype] == "network" {
+    grok {
+      match => { 
+        "message" => "%{TIMESTAMP_ISO8601:timestamp} %{IP:src_ip}:%{INT:src_port} -> %{IP:dst_ip}:%{INT:dst_port} %{WORD:protocol} %{GREEDYDATA:network_message}"
+      }
+    }
+    
+    mutate {
+      convert => { "src_port" => "integer" }
+      convert => { "dst_port" => "integer" }
+    }
+    
+    # GeoIP for both source and destination
+    if [src_ip] {
+      geoip {
+        source => "src_ip"
+        target => "src_geoip"
+      }
+    }
+    
+    if [dst_ip] {
+      geoip {
+        source => "dst_ip"
+        target => "dst_geoip"
+      }
+    }
+  }
+  
+  # Add hostname if not present
+  if ![host][name] {
+    mutate {
+      add_field => { "[host][name]" => "%{[beat][hostname]}" }
+    }
+  }
+  
+  # Clean up fields
+  mutate {
+    remove_field => [ "[beat][version]", "[beat][hostname]" ]
+  }
+  
+  # Add processing timestamp
+  mutate {
+    add_field => { "[@metadata][processed_at]" => "%{+YYYY-MM-dd'T'HH:mm:ss.SSSZ}" }
+  }
+}
+
+output {
+  # Send to Elasticsearch
+  elasticsearch {
+    hosts => ["https://orochi-elasticsearch:9200"]
+    user => "elastic"
+    password => "{{ elastic_password }}"
+    ssl => true
+    cacert => "config/certs/ca/ca.crt"
+    ssl_certificate_verification => true
+    
+    # Dynamic index based on log type
+    index => "orochi-%{[fields][logtype]:logs}-%{+YYYY.MM.dd}"
+    
+    # Use document type based on source
+    template_name => "orochi"
+    template_pattern => "orochi-*"
+    template => {
+      "index_patterns" => ["orochi-*"]
+      "settings" => {
+        "number_of_shards" => 1
+        "number_of_replicas" => 0
+        "index.refresh_interval" => "5s"
+      }
+      "mappings" => {
+        "properties" => {
+          "@timestamp" => { "type" => "date" }
+          "message" => { "type" => "text" }
+          "host" => { "type" => "keyword" }
+          "source_ip" => { "type" => "ip" }
+          "dst_ip" => { "type" => "ip" }
+          "geoip" => {
+            "properties" => {
+              "location" => { "type" => "geo_point" }
+            }
+          }
+        }
+      }
+    }
+  }
+  
+  # Debug output (comment out in production)
+  # stdout { 
+  #   codec => rubydebug {
+  #     metadata => true
+  #   }
+  # }
+}

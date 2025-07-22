@@ -1,0 +1,58 @@
+# Project OROCHI Elasticsearch Configuration
+cluster.name: "orochi-cluster"
+node.name: "orochi-es-node"
+
+# Network settings
+network.host: 0.0.0.0
+http.port: 9200
+transport.port: 9300
+
+# Discovery settings for single node
+discovery.type: single-node
+
+# Path settings
+path.data: /usr/share/elasticsearch/data
+path.logs: /usr/share/elasticsearch/logs
+
+# Memory settings
+bootstrap.memory_lock: true
+
+# Security settings
+xpack.security.enabled: true
+xpack.security.enrollment.enabled: true
+
+# SSL/TLS settings for HTTP
+xpack.security.http.ssl.enabled: true
+xpack.security.http.ssl.key: certs/elasticsearch/elasticsearch.key
+xpack.security.http.ssl.certificate: certs/elasticsearch/elasticsearch.crt
+xpack.security.http.ssl.certificate_authorities: ["certs/ca/ca.crt"]
+xpack.security.http.ssl.verification_mode: certificate
+
+# SSL/TLS settings for Transport
+xpack.security.transport.ssl.enabled: true
+xpack.security.transport.ssl.key: certs/elasticsearch/elasticsearch.key
+xpack.security.transport.ssl.certificate: certs/elasticsearch/elasticsearch.crt
+xpack.security.transport.ssl.certificate_authorities: ["certs/ca/ca.crt"]
+xpack.security.transport.ssl.verification_mode: certificate
+
+# Authentication settings
+xpack.security.authc.api_key.enabled: true
+
+# Monitoring and Management
+xpack.monitoring.collection.enabled: true
+xpack.monitoring.elasticsearch.collection.enabled: false
+
+# Index settings
+action.auto_create_index: .monitoring*,.watches,.triggered_watches,.watcher-history*,.ml*
+
+# Logging level
+logger.level: INFO
+
+# CORS settings (for development)
+http.cors.enabled: true
+http.cors.allow-origin: "*"
+http.cors.allow-methods: OPTIONS, HEAD, GET, POST, PUT, DELETE
+http.cors.allow-headers: X-Requested-With,X-Auth-Token,Content-Type,Content-Length,Authorization
+
+# Snapshot repository settings
+path.repo: ["/usr/share/elasticsearch/backups"]

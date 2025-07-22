@@ -1,0 +1,220 @@
+#!/usr/bin/ansible-playbook
+---
+- name: Deploy ELK Stack with Elastic Fleet in Docker
+  hosts: elk_servers
+  become: yes
+  remote_user: root
+  vars_prompt:
+    - name: elastic_password
+      prompt: "Enter master password for Elastic user"
+      private: yes
+      confirm: yes
+    
+    - name: elastic_version
+      prompt: "Enter ELK version to install"
+      default: "9.0.3"
+      private: no
+  
+  vars:
+    elastic_port: 9200
+    kibana_port: 5601
+    fleet_port: 8220
+    logstash_port: 5044
+    logstash_beats_port: 5044
+    logstash_tcp_port: 5000
+    elastic_network: orochi-network
+    data_path: /opt/OROCHI/
+    
+  tasks:
+    # Install Docker Prerequisites
+    - name: Install required packages
+      package:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+          - python3-pip
+        state: latest
+      when: ansible_os_family == "Debian"
+    
+    - name: Install Docker
+      apt:
+        name: docker.io
+        state: latest
+
+    - name: Configure Docker service
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
+        daemon_reload: yes
+   
+    - name: wait for Docker to be ready
+      command: docker info
+      register: docker_info
+      until: docker_info.rc == 0
+      retries: 5
+      delay: 5
+    
+    # Create directories
+    - name: Create ELK directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ data_path }}"
+        - "{{ data_path }}/elasticsearch"
+        - "{{ data_path }}/logstash"
+        - "{{ data_path }}/logstash/pipeline"
+        - "{{ data_path }}/kibana"
+        - "{{ data_path }}/fleet"
+        - "{{ data_path }}/certs"
+        - /opt/elk-docker
+
+    - name: Set ownership of ELK directories
+      file:
+        path: 
+          - "{{ data_path }}/"
+        owner: 1000
+        group: 1000
+        recurse: yes
+        state: directory
+
+    # Create Docker network
+    - name: Create Docker network for ELK
+      docker_network:
+        name: "{{ elastic_network }}"
+        driver: bridge
+    
+    # Create docker-compose file
+    - name: Create docker-compose.yml
+      template:
+        src: docker-compose.yml.j2
+        dest: /opt/elk-docker/docker-compose.yml
+        mode: '0644'
+    
+    # Create .env file for docker-compose
+    - name: Create .env file
+      template:
+        src: docker-env.j2
+        dest: /opt/elk-docker/.env
+        mode: '0600'
+    
+    # Create Elasticsearch configuration
+    - name: Create Elasticsearch configuration
+      template:
+        src: elasticsearch-docker.yml.j2
+        dest: "{{ data_path }}/elasticsearch/elasticsearch.yml"
+        mode: '0644'
+    
+    # Create Kibana configuration
+    - name: Create Kibana configuration
+      template:
+        src: kibana-docker.yml.j2
+        dest: "{{ data_path }}/kibana/kibana.yml"
+        mode: '0644'
+    
+    # Create Logstash configuration
+    - name: Create Logstash configuration
+      template:
+        src: logstash-docker.yml.j2
+        dest: "{{ data_path }}/logstash/logstash.yml"
+        mode: '0644'
+    
+    - name: Create Logstash pipeline configuration
+      template:
+        src: logstash-pipeline-docker.conf.j2
+        dest: "{{ data_path }}/logstash/pipeline/logstash.conf"
+        mode: '0644'
+    
+    - name: Generate SSL certificates for Elasticsearch
+      shell: |
+        docker run --rm --user root -v {{ data_path }}/certs:/usr/share/elasticsearch/config/certs \
+        docker.elastic.co/elasticsearch/elasticsearch:{{ elastic_version }} \
+        bin/elasticsearch-certutil ca --silent --pem -out config/certs/ca.zip
+        
+        docker run --rm --user root -v {{ data_path }}/certs:/usr/share/elasticsearch/config/certs \
+        docker.elastic.co/elasticsearch/elasticsearch:{{ elastic_version }} \
+        unzip config/certs/ca.zip -d config/certs
+        
+        docker run --rm --user root -v {{ data_path }}/certs:/usr/share/elasticsearch/config/certs \
+        docker.elastic.co/elasticsearch/elasticsearch:{{ elastic_version }} \
+        bin/elasticsearch-certutil cert --silent --pem -out config/certs/certs.zip \
+        --ca-cert config/certs/ca/ca.crt --ca-key config/certs/ca/ca.key \
+        --dns localhost --dns orochi-elasticsearch --ip 127.0.0.1
+        
+        docker run --rm --user root -v {{ data_path }}/certs:/usr/share/elasticsearch/config/certs \
+        docker.elastic.co/elasticsearch/elasticsearch:{{ elastic_version }} \
+        unzip config/certs/certs.zip -d config/certs
+
+    # Start ELK stack
+    - name: Start ELK stack with docker-compose
+      community.docker.docker_compose_v2:
+        project_src: /opt/elk-docker
+        state: present
+      environment:
+        COMPOSE_HTTP_TIMEOUT: "120"
+    
+    # Wait for Elasticsearch to be ready
+    - name: Wait for Elasticsearch to be ready
+      uri:
+        url: "https://{{ ansible_default_ipv4.address }}:{{ elastic_port }}/_cluster/health"
+        user: elastic
+        password: "{{ elastic_password }}"
+        validate_certs: no
+        status_code: 200
+      register: result
+      until: result.status == 200
+      retries: 30
+      delay: 10
+    
+    # Configure Fleet
+    - name: Wait for Kibana to be ready
+      uri:
+        url: "http://{{ ansible_default_ipv4.address }}:{{ kibana_port }}/api/status"
+        status_code: 200
+      register: result
+      until: result.status == 200
+      retries: 30
+      delay: 10
+    
+    - name: Configure Fleet settings in Kibana
+      uri:
+        url: "http://{{ ansible_default_ipv4.address }}:{{ kibana_port }}/api/fleet/settings"
+        method: PUT
+        user: elastic
+        password: "{{ elastic_password }}"
+        headers:
+          Content-Type: "application/json"
+          kbn-xsrf: "true"
+        body_format: json
+        body:
+          fleet_server_hosts:
+            - "https://{{ ansible_default_ipv4.address }}:{{ fleet_port }}"
+    
+    # Firewall Configuration
+    - name: Configure firewall rules
+      ufw:
+        rule: allow
+        port: "{{ item }}"
+        proto: tcp
+      loop:
+        - "{{ elastic_port }}"
+        - "{{ kibana_port }}"
+        - "{{ fleet_port }}"
+        - "{{ logstash_port }}"
+        - "{{ logstash_tcp_port }}"
+      when: ansible_os_family == "Debian"
+    
+    - name: Display access information
+      debug:
+        msg:
+          - "ELK Stack deployed successfully!"
+          - "Elasticsearch: https://{{ ansible_default_ipv4.address }}:{{ elastic_port }}"
+          - "Kibana: http://{{ ansible_default_ipv4.address }}:{{ kibana_port }}"
+          - "Fleet Server: https://{{ ansible_default_ipv4.address }}:{{ fleet_port }}"
+          - "Username: elastic"
+          - "Password: {{ elastic_password }}"
