@@ -48,7 +48,17 @@ resource "proxmox_virtual_environment_vm" "vyos_router" {
     bridge = "vmbr0"
     model  = "virtio"
   }
+
+  network_device {
+    bridge = "vmbr1"
+    model  = "virtio"
+  }
   
+network_device {
+  bridge = "vmbr2"
+  model  = "virtio"
+}
+
   on_boot = true
   started = true
 }
