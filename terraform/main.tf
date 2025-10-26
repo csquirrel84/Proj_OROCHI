@@ -20,9 +20,13 @@ variable "proxmox_password" {
   sensitive   = true
 }
 
-resource "proxmox_virtual_environment_vm" "vyos_router" {
-  name        = "vyos-router"
-  node_name   = "Homelab"
+resource "proxmox_virtual_environment_vm" "ubuntu_router" {
+  name      = "ubuntu-router"
+  node_name = "Homelab"
+  
+  clone {
+    vm_id = 9000
+  }
   
   cpu {
     cores = 2
@@ -32,37 +36,29 @@ resource "proxmox_virtual_environment_vm" "vyos_router" {
     dedicated = 2048
   }
   
-  disk {
-    datastore_id = "local-lvm"
-    file_format  = "raw"
-    interface    = "scsi0"
-    size         = 10
+  initialization {
+    ip_config {
+      ipv4 {
+        address = "192.168.0.200/24"
+        gateway = "192.168.0.1"
+      }
+    }
+    
+    user_account {
+      username = "ubuntu"
+      keys     = [var.ssh_public_key]
+    }
   }
   
-  cdrom {
-    enabled   = true
-    file_id   = "local:iso/vyos-1.5-rolling-202510251612-generic-amd64.iso"
-  }
-  
-  network_device {
-    bridge = "vmbr0"
-    model  = "virtio"
-  }
-
-  network_device {
-    bridge = "vmbr1"
-    model  = "virtio"
-  }
-  
-network_device {
-  bridge = "vmbr2"
-  model  = "virtio"
-}
-
   on_boot = true
   started = true
 }
 
+variable "ssh_public_key" {
+  description = "SSH public key"
+  type        = string
+}
+
 output "vm_id" {
-  value = proxmox_virtual_environment_vm.vyos_router.vm_id
+  value = proxmox_virtual_environment_vm.ubuntu_router.vm_id
 }
