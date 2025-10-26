@@ -1,3 +1,2 @@
 terraform/terraform.tfvars
-*.img
 noble-server-cloudimg-amd64.img
