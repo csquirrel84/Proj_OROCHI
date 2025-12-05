@@ -1,0 +1,43 @@
+# tasks/00_init_vars.yml
+---
+- name: Detect primary network interface
+  shell: |
+    ip -o -4 addr show | awk '$2 !~ /^lo|docker/ {print $2}' | head -1
+  register: detected_interface
+  changed_when: false
+  when: selected_interface == ""
+
+- name: Set network interface
+  set_fact:
+    monitor_interface: "{{ selected_interface if selected_interface != '' else detected_interface.stdout }}"
+
+- name: Get primary IP address
+  shell: |
+    ip -o -4 addr show {{ monitor_interface }} | awk '{print $4}' | cut -d'/' -f1
+  register: detected_ip
+  changed_when: false
+
+- name: Set host IP
+  set_fact:
+    host_ip: "{{ detected_ip.stdout }}"
+
+- name: Generate Arkime password secret
+  shell: openssl rand -base64 32
+  register: arkime_secret
+  changed_when: false
+
+- name: Set password variables
+  set_fact:
+    arkime_password_secret: "{{ arkime_secret.stdout }}"
+    # Use the same password for all services
+    kibana_password: "{{ elastic_password }}"
+    arkime_password: "{{ elastic_password }}"
+    velox_password: "{{ elastic_password }}"
+
+- name: Display configuration summary
+  debug:
+    msg:
+      - "Network Interface: {{ monitor_interface }}"
+      - "Host IP: {{ host_ip }}"
+      - "Elasticsearch Port: {{ es_port }}"
+      - "Kibana Port: {{ kibana_port }}"

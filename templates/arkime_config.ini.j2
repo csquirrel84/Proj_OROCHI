@@ -1,0 +1,11 @@
+# templates/arkime_config.ini.j2
+[default]
+elasticsearch=https://elastic:{{ arkime_password }}@{{ host_ip }}:{{ es_port }}
+interface={{ monitor_interface }}
+pcapDir=/data/pcap
+passwordSecret={{ arkime_password_secret }}
+pcapReadMethod=afpacketv3
+elasticsearchSSL=on
+elasticsearchSSLVerify=false
+logLevel=debug
+cronQueries=true

@@ -1,0 +1,13 @@
+---
+- name: Start TheHive containers
+  community.docker.docker_compose_v2:
+    project_src: "{{ project_root }}"
+    services:
+      - hive_elasticsearch
+      - thehive
+    state: present
+
+- name: Display TheHive status
+  debug:
+    msg: "TheHive is running at http://{{ host_ip }}:{{ thehive_port }}"
+

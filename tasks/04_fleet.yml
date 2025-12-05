@@ -1,0 +1,125 @@
+# tasks/04_fleet.yml
+---
+- name: Start Fleet Server container
+  community.docker.docker_compose_v2:
+    project_src: "{{ project_root }}"
+    services:
+      - fleet-server
+    state: present
+
+- name: Wait for Fleet Server to be ready
+  wait_for:
+    host: "{{ host_ip }}"
+    port: "{{ fleet_port }}"
+    delay: 10
+    timeout: 120
+
+- name: Check if Fleet is already initialized
+  uri:
+    url: "https://{{ host_ip }}:{{ kibana_port }}/api/fleet/agents/setup"
+    method: GET
+    user: elastic
+    password: "{{ elastic_password }}"
+    headers:
+      Content-Type: "application/json"
+    validate_certs: no
+    status_code: [200, 404]
+  register: fleet_status
+
+- name: Get Elasticsearch CA fingerprint
+  shell: |
+    docker compose -f {{ compose_file }} exec -w /usr/share/elasticsearch/config/certs/ca elasticsearch cat ca.crt | \
+    openssl x509 -noout -fingerprint -sha256 | cut -d "=" -f 2 | tr -d :
+  register: ca_fingerprint
+  changed_when: false
+  when: not (fleet_status.json.isInitialized | default(false))
+
+- name: Configure Fleet Server hosts
+  uri:
+    url: "https://{{ host_ip }}:{{ kibana_port }}/api/fleet/settings"
+    method: PUT
+    user: elastic
+    password: "{{ elastic_password }}"
+    headers:
+      kbn-xsrf: "true"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      fleet_server_hosts:
+        - "https://{{ host_ip }}:{{ fleet_port }}"
+    validate_certs: no
+    status_code: [200]
+  when: not (fleet_status.json.isInitialized | default(false))
+
+- name: Configure Fleet output hosts
+  uri:
+    url: "https://{{ host_ip }}:{{ kibana_port }}/api/fleet/outputs/fleet-default-output"
+    method: PUT
+    user: elastic
+    password: "{{ elastic_password }}"
+    headers:
+      kbn-xsrf: "true"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      hosts:
+        - "https://{{ host_ip }}:{{ es_port }}"
+    validate_certs: no
+    status_code: [200]
+  when: not (fleet_status.json.isInitialized | default(false))
+
+- name: Configure Fleet CA fingerprint
+  uri:
+    url: "https://{{ host_ip }}:{{ kibana_port }}/api/fleet/outputs/fleet-default-output"
+    method: PUT
+    user: elastic
+    password: "{{ elastic_password }}"
+    headers:
+      kbn-xsrf: "true"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      ca_trusted_fingerprint: "{{ ca_fingerprint.stdout }}"
+    validate_certs: no
+    status_code: [200]
+  when: not (fleet_status.json.isInitialized | default(false))
+
+- name: Create Fleet Agent Policy
+  uri:
+    url: "https://{{ host_ip }}:{{ kibana_port }}/api/fleet/agent_policies?sys_monitoring=true"
+    method: POST
+    user: elastic
+    password: "{{ elastic_password }}"
+    headers:
+      kbn-xsrf: "true"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "Endpoint Policy"
+      description: ""
+      namespace: "default"
+      monitoring_enabled:
+        - logs
+        - metrics
+      inactivity_timeout: 1209600
+    validate_certs: no
+    status_code: [200]
+  register: agent_policy
+  when: not (fleet_status.json.isInitialized | default(false))
+
+- name: Configure Fleet replica settings
+  uri:
+    url: "https://{{ host_ip }}:{{ es_port }}/_all/_settings"
+    method: PUT
+    user: elastic
+    password: "{{ elastic_password }}"
+    body_format: json
+    body:
+      index:
+        number_of_replicas: 0
+    validate_certs: no
+    status_code: [200]
+
+- name: Display Fleet status
+  debug:
+    msg: "Fleet Server is running at https://{{ host_ip }}:{{ fleet_port }}"

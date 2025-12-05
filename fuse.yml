@@ -1,136 +1,108 @@
 ---
-- name: Check and Install Docker
-  hosts: target_servers
-  become: true  # Need sudo for installation
-  gather_facts: true
+# main playbook: orochi.yml
+- name: Deploy orochi Security Stack
+  hosts: orochi_servers
+  become: yes
+  vars_prompt:
+    - name: "elastic_password"
+      prompt: "Enter password for Elastic services"
+      private: yes
+      confirm: yes
+    
+    - name: "velox_user"
+      prompt: "Enter Velociraptor username"
+      default: "admin"
+      private: no
+    
+    - name: "selected_interface"
+      prompt: "Enter network interface for monitoring (or press Enter to auto-detect)"
+      default: ""
+      private: no
 
+  vars:
+    stack_version: "9.2.2"
+    cluster_name: "OROCHI"
+    license_type: "basic"
+    mem_limit: "8g"
+    es_port: 9200
+    kibana_port: 5601
+    fleet_port: 8220
+    suricata_port: 8000
+    arkime_port: 8005
+    mattermost_port: 8065
+    velociraptor_port: 8889
+    thehive_port: 9000
+    cyberchef_port: 7000
+    velox_role: "administrator"
+    
   tasks:
-    # Check if Docker is installed
-    - name: Check if Docker is installed
-      ansible.builtin.command: docker --version
-      register: docker_installed
-      ignore_errors: true
-      changed_when: false
+    - name: Include variable initialization
+      import_tasks: tasks/00_init_vars.yml
+      tags: always
 
-    - name: Display current Docker status
-      ansible.builtin.debug:
-        msg: "{{ 'Docker already installed: ' + docker_installed.stdout if docker_installed.rc == 0 else 'Docker not found - will install' }}"
+    - name: Install prerequisites
+      import_tasks: tasks/01_prerequisites.yml
+      tags: [prerequisites, always]
 
-    # ============================================
-    # Install Docker on Debian/Ubuntu
-    # ============================================
-    - name: Install Docker on Debian/Ubuntu
-      when: 
-        - docker_installed.rc != 0
-        - ansible_os_family == "Debian"
-      block:
-        - name: Install required packages
-          ansible.builtin.apt:
-            name:
-              - apt-transport-https
-              - ca-certificates
-              - curl
-              - gnupg
-              - lsb-release
-            state: present
-            update_cache: true
+    - name: Configure environment
+      import_tasks: tasks/02_configure_env.yml
+      tags: [config, always]
 
-        - name: Create keyrings directory
-          ansible.builtin.file:
-            path: /etc/apt/keyrings
-            state: directory
-            mode: '0755'
+    - name: Deploy ELK Stack
+      import_tasks: tasks/03_elk.yml
+      tags: [elk, elastic]
+      when: "'elk' in deploy_components or 'all' in deploy_components"
 
-        - name: Add Docker GPG key
-          ansible.builtin.get_url:
-            url: https://download.docker.com/linux/{{ ansible_distribution | lower }}/gpg
-            dest: /etc/apt/keyrings/docker.asc
-            mode: '0644'
+    - name: Deploy Fleet Server
+      import_tasks: tasks/04_fleet.yml
+      tags: [fleet]
+      when: "'fleet' in deploy_components or 'all' in deploy_components"
 
-        - name: Add Docker repository
-          ansible.builtin.apt_repository:
-            repo: "deb [arch={{ ansible_architecture | replace('x86_64', 'amd64') }} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/{{ ansible_distribution | lower }} {{ ansible_distribution_release }} stable"
-            state: present
-            filename: docker
+    - name: Deploy Arkime
+      import_tasks: tasks/05_arkime.yml
+      tags: [arkime]
+      when: "'arkime' in deploy_components or 'all' in deploy_components"
 
-        - name: Install Docker packages
-          ansible.builtin.apt:
-            name:
-              - docker-ce
-              - docker-ce-cli
-              - containerd.io
-              - docker-buildx-plugin
-              - docker-compose-plugin
-            state: latest
-            update_cache: true
+    - name: Deploy TheHive
+      import_tasks: tasks/06_hive.yml
+      tags: [hive]
+      when: "'hive' in deploy_components or 'all' in deploy_components"
 
-    # ============================================
-    # Install Docker on RHEL/CentOS/Fedora
-    # ============================================
-    - name: Install Docker on RHEL/CentOS/Fedora
-      when: 
-        - docker_installed.rc != 0
-        - ansible_os_family == "RedHat"
-      block:
-        - name: Install required packages
-          ansible.builtin.yum:
-            name:
-              - yum-utils
-            state: present
+    - name: Deploy Velociraptor
+      import_tasks: tasks/07_velociraptor.yml
+      tags: [velociraptor]
+      when: "'velociraptor' in deploy_components or 'all' in deploy_components"
 
-        - name: Add Docker repository
-          ansible.builtin.yum_repository:
-            name: docker-ce
-            description: Docker CE Stable
-            baseurl: https://download.docker.com/linux/centos/$releasever/$basearch/stable
-            gpgcheck: true
-            gpgkey: https://download.docker.com/linux/centos/gpg
-            enabled: true
+    - name: Deploy Mattermost
+      import_tasks: tasks/08_mattermost.yml
+      tags: [mattermost]
+      when: "'mattermost' in deploy_components or 'all' in deploy_components"
 
-        - name: Install Docker packages
-          ansible.builtin.yum:
-            name:
-              - docker-ce
-              - docker-ce-cli
-              - containerd.io
-              - docker-buildx-plugin
-              - docker-compose-plugin
-            state: latest
+    - name: Deploy Suricata
+      import_tasks: tasks/09_suricata.yml
+      tags: [suricata]
+      when: "'suricata' in deploy_components or 'all' in deploy_components"
 
-    # ============================================
-    # Post-installation tasks
-    # ============================================
-    - name: Start and enable Docker service
-      ansible.builtin.systemd:
-        name: docker
-        state: started
-        enabled: true
-      when: docker_installed.rc != 0
+    - name: Deploy CyberChef
+      import_tasks: tasks/10_cyberchef.yml
+      tags: [cyberchef]
+      when: "'cyberchef' in deploy_components or 'all' in deploy_components"
 
-    - name: Add user to docker group
-      ansible.builtin.user:
-        name: "{{ ansible_user }}"
-        groups: docker
-        append: true
-      when: docker_installed.rc != 0
+    - name: Deploy Zeek
+      import_tasks: tasks/11_zeek.yml
+      tags: [zeek]
+      when: "'zeek' in deploy_components or 'all' in deploy_components"
 
-    # ============================================
-    # Verify installation
-    # ============================================
-    - name: Verify Docker installation
-      ansible.builtin.command: docker --version
-      register: docker_final_version
-      changed_when: false
+    - name: Deploy RITA
+      import_tasks: tasks/12_rita.yml
+      tags: [rita]
+      when: "'rita' in deploy_components or 'all' in deploy_components"
 
-    - name: Display final Docker status
-      ansible.builtin.debug:
-        msg: "Docker is ready: {{ docker_final_version.stdout }}"
+    - name: Build Dashboard Website
+      import_tasks: tasks/13_website.yml
+      tags: [website]
+      when: "'website' in deploy_components or 'all' in deploy_components"
 
-    - name: Get Docker info
-      ansible.builtin.command: "docker info --format '{% raw %}Server Version: {{.ServerVersion}}, Storage Driver: {{.Driver}}{% endraw %}'"
-      register: docker_info
-      changed_when: false
-
-    - name: Display Docker info
-      ansible.builtin.debug:
-        msg: "{{ docker_info.stdout }}"
+    - name: Display access information
+      import_tasks: tasks/14_display_info.yml
+      tags: always

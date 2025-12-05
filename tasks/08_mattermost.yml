@@ -1,0 +1,13 @@
+# tasks/08_mattermost.yml
+- name: Start Mattermost containers
+  community.docker.docker_compose_v2:
+    project_src: "{{ project_root }}"
+    services:
+      - postgres
+      - mattermost
+      - mongodb
+    state: present
+
+- name: Display Mattermost status
+  debug:
+    msg: "Mattermost is running at http://{{ host_ip }}:{{ mattermost_port }}"

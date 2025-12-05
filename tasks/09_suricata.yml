@@ -1,0 +1,19 @@
+---
+# tasks/09_suricata.yml
+- name: Start Suricata container
+  community.docker.docker_compose_v2:
+    project_src: "{{ project_root }}"
+    services:
+      - suricata
+    state: present
+
+- name: Update Suricata rules
+  shell: |
+    docker exec suricata suricata-update update-sources
+    docker exec suricata suricata-update
+  args:
+    chdir: "{{ project_root }}"
+
+- name: Display Suricata status
+  debug:
+    msg: "Suricata is running on interface {{ monitor_interface }}"

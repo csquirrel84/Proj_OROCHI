@@ -1,0 +1,46 @@
+# tasks/03_elk.yml
+---
+- name: Start ELK Stack containers
+  community.docker.docker_compose_v2:
+    project_src: "{{ project_root }}"
+    services:
+      - setup
+      - elasticsearch
+      - kibana
+      - logstash
+    state: present
+  environment:
+    PATH: "/usr/local/bin:{{ ansible_env.PATH }}"
+
+- name: Wait for Elasticsearch to be ready
+  uri:
+    url: "https://{{ host_ip }}:{{ es_port }}/_cluster/health"
+    method: GET
+    user: elastic
+    password: "{{ elastic_password }}"
+    validate_certs: no
+    status_code: [200]
+  register: es_health
+  until: es_health.json.status in ['green', 'yellow']
+  retries: 60
+  delay: 5
+
+- name: Configure Elasticsearch shard allocation (single-node)
+  uri:
+    url: "https://{{ host_ip }}:{{ es_port }}/_all/_settings"
+    method: PUT
+    user: elastic
+    password: "{{ elastic_password }}"
+    body_format: json
+    body:
+      index:
+        number_of_replicas: 0
+    validate_certs: no
+    status_code: [200]
+
+- name: Display ELK status
+  debug:
+    msg:
+      - "Elasticsearch is running at https://{{ host_ip }}:{{ es_port }}"
+      - "Kibana is running at https://{{ host_ip }}:{{ kibana_port }}"
+      - "Cluster health: {{ es_health.json.status }}"

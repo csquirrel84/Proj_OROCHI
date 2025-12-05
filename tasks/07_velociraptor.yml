@@ -1,0 +1,12 @@
+---
+# tasks/07_velociraptor.yml
+- name: Start Velociraptor container
+  community.docker.docker_compose_v2:
+    project_src: "{{ project_root }}"
+    services:
+      - velociraptor
+    state: present
+
+- name: Display Velociraptor status
+  debug:
+    msg: "Velociraptor is running at https://{{ host_ip }}:{{ velociraptor_port }}"

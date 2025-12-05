@@ -1,0 +1,70 @@
+# tasks/05_arkime.yml
+---
+- name: Create Arkime config directory
+  file:
+    path: "{{ arkime_config_dir }}"
+    state: directory
+    mode: '0755'
+
+- name: Generate Arkime config.ini
+  template:
+    src: templates/arkime_config.ini.j2
+    dest: "{{ arkime_config_dir }}/config.ini"
+    mode: '0644'
+
+- name: Start Arkime init container
+  community.docker.docker_compose_v2:
+    project_src: "{{ project_root }}"
+    services:
+      - init
+    state: present
+
+- name: Wait for Elasticsearch to be ready
+  uri:
+    url: "https://{{ host_ip }}:{{ es_port }}/_cluster/health"
+    method: GET
+    user: elastic
+    password: "{{ arkime_password }}"
+    validate_certs: no
+    status_code: [200]
+  register: es_health
+  until: es_health.json.status in ['green', 'yellow']
+  retries: 30
+  delay: 5
+
+- name: Start Arkime capture and viewer
+  community.docker.docker_compose_v2:
+    project_src: "{{ project_root }}"
+    services:
+      - capture
+      - viewer
+    state: present
+
+- name: Wait for arkime_users index
+  uri:
+    url: "https://{{ host_ip }}:{{ es_port }}/arkime_users*/"
+    method: GET
+    user: elastic
+    password: "{{ arkime_password }}"
+    validate_certs: no
+    status_code: [200]
+  register: arkime_index
+  until: "'arkime_users_v30' in arkime_index.json | string"
+  retries: 30
+  delay: 5
+
+- name: Add Arkime admin user
+  shell: |
+    docker exec capture /opt/arkime/bin/arkime_add_user.sh admin "Admin User" {{ arkime_password }} --admin --insecure
+  args:
+    chdir: "{{ project_root }}"
+  register: arkime_user
+  failed_when: false
+  changed_when: "'successfully' in arkime_user.stdout"
+
+- name: Display Arkime status
+  debug:
+    msg:
+      - "Arkime is running at http://{{ host_ip }}:{{ arkime_port }}"
+      - "Username: admin"
+      - "Interface: {{ monitor_interface }}"

@@ -1,0 +1,12 @@
+---
+# tasks/10_cyberchef.yml
+- name: Start CyberChef container
+  community.docker.docker_compose_v2:
+    project_src: "{{ project_root }}"
+    services:
+      - cyberchef
+    state: present
+
+- name: Display CyberChef status
+  debug:
+    msg: "CyberChef is running at http://{{ host_ip }}:{{ cyberchef_port }}"

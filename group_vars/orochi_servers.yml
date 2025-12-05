@@ -1,0 +1,25 @@
+# group_vars/orochi_servers.yml
+---
+# Deployment components (customize this list)
+deploy_components:
+  - all  # Options: all, elk, fleet, arkime, hive, velociraptor, mattermost, suricata, cyberchef, zeek, rita, website
+
+# Docker Compose command preference
+docker_compose_cmd: "docker compose"  # or "docker-compose"
+
+# Project directories
+project_root: "/opt/orochi"
+compose_file: "{{ project_root }}/docker-compose.yml"
+env_file: "{{ project_root }}/.env"
+arkime_config_dir: "{{ project_root }}/arkime/etc"
+website_dir: "{{ project_root }}/website"
+
+# RITA Configuration
+rita_version: "v5.0.8"
+
+# Zeek Configuration
+zeek_network: "192.168.0.0/24"  # Update with your network
+
+# Timeout settings
+default_timeout: 300
+elasticsearch_wait_timeout: 300

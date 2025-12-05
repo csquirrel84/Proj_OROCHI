@@ -1,0 +1,58 @@
+# tasks/14_display_info.yml
+---
+- name: Display deployment summary
+  debug:
+    msg:
+      - "=========================================="
+      - "     Orochi Deployment Complete!"
+      - "=========================================="
+      - ""
+      - "Access URLs:"
+      - "  Dashboard:      http://{{ host_ip }}"
+      - "  Kibana:         https://{{ host_ip }}:{{ kibana_port }}"
+      - "  Arkime:         http://{{ host_ip }}:{{ arkime_port }}"
+      - "  Velociraptor:   https://{{ host_ip }}:{{ velociraptor_port }}"
+      - "  TheHive:        http://{{ host_ip }}:{{ thehive_port }}"
+      - "  Mattermost:     http://{{ host_ip }}:{{ mattermost_port }}"
+      - "  CyberChef:      http://{{ host_ip }}:{{ cyberchef_port }}"
+      - ""
+      - "Credentials:"
+      - "  Username: elastic / admin"
+      - "  Password: (as configured)"
+      - ""
+      - "Monitoring Interface: {{ monitor_interface }}"
+      - "=========================================="
+
+- name: Create summary file
+  copy:
+    content: |
+      orochi Security Stack Deployment Summary
+      ==========================================
+      
+      Host IP: {{ host_ip }}
+      Monitoring Interface: {{ monitor_interface }}
+      
+      Service URLs:
+      - Dashboard:      http://{{ host_ip }}
+      - Kibana:         https://{{ host_ip }}:{{ kibana_port }}
+      - Elasticsearch:  https://{{ host_ip }}:{{ es_port }}
+      - Arkime:         http://{{ host_ip }}:{{ arkime_port }}
+      - Fleet Server:   https://{{ host_ip }}:{{ fleet_port }}
+      - Velociraptor:   https://{{ host_ip }}:{{ velociraptor_port }}
+      - TheHive:        http://{{ host_ip }}:{{ thehive_port }}
+      - Mattermost:     http://{{ host_ip }}:{{ mattermost_port }}
+      - CyberChef:      http://{{ host_ip }}:{{ cyberchef_port }}
+      
+      Default Credentials:
+      - Username: elastic (Elasticsearch/Kibana)
+      - Username: admin (Arkime/Velociraptor)
+      - Password: (as configured during deployment)
+      
+      Configuration Files:
+      - Environment: {{ env_file }}
+      - Docker Compose: {{ compose_file }}
+      - Arkime Config: {{ arkime_config_dir }}/config.ini
+      
+      Deployment Date: {{ ansible_date_time.iso8601 }}
+    dest: "{{ project_root }}/DEPLOYMENT_SUMMARY.txt"
+    mode: '0644'
