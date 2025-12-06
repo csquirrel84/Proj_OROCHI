@@ -1,108 +1,198 @@
+#!/usr/bin/env ansible-playbook
 ---
-# main playbook: orochi.yml
-- name: Deploy orochi Security Stack
+# setup.yml - Bootstrap playbook to prepare the control node and target hosts
+- name: Bootstrap Orochi Deployment Environment
   hosts: orochi_servers
+  gather_facts: yes
   become: yes
-  vars_prompt:
-    - name: "elastic_password"
-      prompt: "Enter password for Elastic services"
-      private: yes
-      confirm: yes
-    
-    - name: "velox_user"
-      prompt: "Enter Velociraptor username"
-      default: "admin"
-      private: no
-    
-    - name: "selected_interface"
-      prompt: "Enter network interface for monitoring (or press Enter to auto-detect)"
-      default: ""
-      private: no
 
-  vars:
-    stack_version: "9.2.2"
-    cluster_name: "OROCHI"
-    license_type: "basic"
-    mem_limit: "8g"
-    es_port: 9200
-    kibana_port: 5601
-    fleet_port: 8220
-    suricata_port: 8000
-    arkime_port: 8005
-    mattermost_port: 8065
-    velociraptor_port: 8889
-    thehive_port: 9000
-    cyberchef_port: 7000
-    velox_role: "administrator"
-    
   tasks:
-    - name: Include variable initialization
-      import_tasks: tasks/00_init_vars.yml
-      tags: always
+    - name: Display setup banner
+      debug:
+        msg:
+          - "=========================================="
+          - "  Orochi Ansible Setup"
+          - "=========================================="
+          - "This playbook will prepare your environment"
+          - "for deploying the Orochi security stack."
 
-    - name: Install prerequisites
-      import_tasks: tasks/01_prerequisites.yml
-      tags: [prerequisites, always]
+    - name: Check if running on supported OS
+      assert:
+        that:
+          - ansible_os_family == "Debian"
+        fail_msg: "This playbook requires Debian/Ubuntu"
+        success_msg: "OS check passed: {{ ansible_distribution }} {{ ansible_distribution_version }}"
 
-    - name: Configure environment
-      import_tasks: tasks/02_configure_env.yml
-      tags: [config, always]
+    - name: Install Ansible if not present
+      become: yes
+      apt:
+        name: ansible
+        state: present
+        update_cache: yes
+      when: ansible_version is not defined
 
-    - name: Deploy ELK Stack
-      import_tasks: tasks/03_elk.yml
-      tags: [elk, elastic]
-      when: "'elk' in deploy_components or 'all' in deploy_components"
+    - name: Install required system packages
+      become: yes
+      apt:
+        name:
+          - python3-pip
+          - git
+          - software-properties-common
+        state: present
 
-    - name: Deploy Fleet Server
-      import_tasks: tasks/04_fleet.yml
-      tags: [fleet]
-      when: "'fleet' in deploy_components or 'all' in deploy_components"
+    - name: Install Python Docker library
+      pip:
+        name:
+          - docker
+          - docker-compose
+        state: present
+        extra_args: --user
 
-    - name: Deploy Arkime
-      import_tasks: tasks/05_arkime.yml
-      tags: [arkime]
-      when: "'arkime' in deploy_components or 'all' in deploy_components"
+    - name: Check if Ansible collections are installed
+      shell: ansible-galaxy collection list | grep -E "community.docker|community.general"
+      register: collections_check
+      changed_when: false
+      failed_when: false
 
-    - name: Deploy TheHive
-      import_tasks: tasks/06_hive.yml
-      tags: [hive]
-      when: "'hive' in deploy_components or 'all' in deploy_components"
+    - name: Install Ansible collections from requirements.yml
+      shell: ansible-galaxy collection install -r requirements.yml
+      args:
+        chdir: "{{ playbook_dir }}"
+      when: collections_check.rc != 0
 
-    - name: Deploy Velociraptor
-      import_tasks: tasks/07_velociraptor.yml
-      tags: [velociraptor]
-      when: "'velociraptor' in deploy_components or 'all' in deploy_components"
+    - name: Verify inventory file exists
+      stat:
+        path: "{{ playbook_dir }}/inventory/hosts.ini"
+      register: inventory_file
 
-    - name: Deploy Mattermost
-      import_tasks: tasks/08_mattermost.yml
-      tags: [mattermost]
-      when: "'mattermost' in deploy_components or 'all' in deploy_components"
+    - name: Check if inventory is configured
+      assert:
+        that:
+          - inventory_file.stat.exists
+        fail_msg: "Inventory file not found at inventory/hosts.ini"
+        success_msg: "Inventory file found"
 
-    - name: Deploy Suricata
-      import_tasks: tasks/09_suricata.yml
-      tags: [suricata]
-      when: "'suricata' in deploy_components or 'all' in deploy_components"
+    - name: Verify group_vars exists
+      stat:
+        path: "{{ playbook_dir }}/group_vars/orochi_servers.yml"
+      register: groupvars_file
 
-    - name: Deploy CyberChef
-      import_tasks: tasks/10_cyberchef.yml
-      tags: [cyberchef]
-      when: "'cyberchef' in deploy_components or 'all' in deploy_components"
+    - name: Check if group_vars is configured
+      assert:
+        that:
+          - groupvars_file.stat.exists
+        fail_msg: "Group vars not found at group_vars/orochi_servers.yml"
+        success_msg: "Group vars file found"
 
-    - name: Deploy Zeek
-      import_tasks: tasks/11_zeek.yml
-      tags: [zeek]
-      when: "'zeek' in deploy_components or 'all' in deploy_components"
+    - name: Verify docker-compose.yml exists
+      stat:
+        path: "{{ playbook_dir }}/files/docker-compose.yml"
+      register: compose_file
 
-    - name: Deploy RITA
-      import_tasks: tasks/12_rita.yml
-      tags: [rita]
-      when: "'rita' in deploy_components or 'all' in deploy_components"
+    - name: Check critical docker-compose.yml file
+      assert:
+        that:
+          - compose_file.stat.exists
+        fail_msg: "CRITICAL: docker-compose.yml not found at files/docker-compose.yml"
+        success_msg: "Docker Compose file found"
 
-    - name: Build Dashboard Website
-      import_tasks: tasks/13_website.yml
-      tags: [website]
-      when: "'website' in deploy_components or 'all' in deploy_components"
+    - name: Count task files
+      find:
+        paths: "{{ playbook_dir }}/tasks"
+        patterns: "*.yml"
+      register: task_files
 
-    - name: Display access information
-      import_tasks: tasks/14_display_info.yml
-      tags: always
+    - name: Verify all task files exist
+      assert:
+        that:
+          - task_files.matched >= 15
+        fail_msg: "Missing task files. Expected at least 15, found {{ task_files.matched }}"
+        success_msg: "All {{ task_files.matched }} task files found"
+
+    - name: Count template files
+      find:
+        paths: "{{ playbook_dir }}/templates"
+        patterns: "*.j2"
+      register: template_files
+
+    - name: Verify all template files exist
+      assert:
+        that:
+          - template_files.matched >= 3
+        fail_msg: "Missing template files. Expected at least 3, found {{ template_files.matched }}"
+        success_msg: "All {{ template_files.matched }} template files found"
+
+    - name: Test connection to target hosts
+      delegate_to: "{{ item }}"
+      ping:
+      loop: "{{ groups['orochi_servers'] }}"
+      when: groups['orochi_servers'] is defined
+
+    - name: Display setup summary
+      debug:
+        msg:
+          - "=========================================="
+          - "  Setup Complete!"
+          - "=========================================="
+          - ""
+          - "Environment verified:"
+          - "  ✓ Ansible installed"
+          - "  ✓ Python libraries installed"
+          - "  ✓ Ansible collections installed"
+          - "  ✓ Inventory file exists"
+          - "  ✓ Group vars configured"
+          - "  ✓ Docker Compose file present"
+          - "  ✓ {{ task_files.matched }} task files found"
+          - "  ✓ {{ template_files.matched }} template files found"
+          - "  ✓ Target hosts reachable"
+          - ""
+          - "Ready to deploy!"
+          - "Run: ansible-playbook orochi.yml"
+          - "=========================================="
+
+- name: Prepare Target Hosts (if remote)
+  hosts: orochi_servers
+  gather_facts: yes
+  become: yes
+
+  tasks:
+    - name: Display target host info
+      debug:
+        msg: "Preparing host: {{ inventory_hostname }} ({{ ansible_host | default('localhost') }})"
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+      when: ansible_connection != 'local'
+
+    - name: Check available disk space
+      shell: df -h / | awk 'NR==2 {print $4}'
+      register: disk_space
+      changed_when: false
+
+    - name: Display disk space
+      debug:
+        msg: "Available disk space on {{ inventory_hostname }}: {{ disk_space.stdout }}"
+
+    - name: Check available memory
+      shell: free -h | awk 'NR==2 {print $7}'
+      register: memory_available
+      changed_when: false
+
+    - name: Display available memory
+      debug:
+        msg: "Available memory on {{ inventory_hostname }}: {{ memory_available.stdout }}"
+
+    - name: Verify minimum disk space (50GB)
+      shell: df / | awk 'NR==2 {print $4}'
+      register: disk_kb
+      changed_when: false
+      failed_when: disk_kb.stdout | int < 52428800  # 50GB in KB
+
+    - name: Display target readiness
+      debug:
+        msg:
+          - "Host {{ inventory_hostname }} is ready for deployment"
+          - "Disk space: {{ disk_space.stdout }}"
+          - "Memory available: {{ memory_available.stdout }}"
