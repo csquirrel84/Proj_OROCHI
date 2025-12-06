@@ -1,3 +1,4 @@
+#!/usr/bin/env ansible-playbook
 ---
 - name: Check and Install Docker
   hosts: target_servers
@@ -134,3 +135,398 @@
     - name: Display Docker info
       ansible.builtin.debug:
         msg: "{{ docker_info.stdout }}"
+
+    # ============================================
+    # Build .env File Configuration
+    # ============================================
+    - name: Prompt for Elastic Stack version
+      pause:
+        prompt: "Enter Elastic Stack version [9.2.2]"
+        echo: yes
+      register: stack_version_input
+
+    - name: Prompt for cluster name
+      pause:
+        prompt: "Enter cluster name [orochi]"
+        echo: yes
+      register: cluster_name_input
+
+    - name: Prompt for license type
+      pause:
+        prompt: "Enter license type [basic]"
+        echo: yes
+      register: license_input
+
+    - name: Prompt for memory limit
+      pause:
+        prompt: "Enter memory limit [4g]"
+        echo: yes
+      register: mem_limit_input
+
+    - name: Prompt for password (used for all services)
+      pause:
+        prompt: "Enter a password for all services"
+        echo: no
+      register: password_input
+
+    - name: Prompt for Velociraptor username
+      pause:
+        prompt: "Enter Velociraptor username [admin]"
+        echo: yes
+      register: velox_user_input
+
+    - name: Prompt for Velociraptor role
+      pause:
+        prompt: "Enter Velociraptor role [administrator]"
+        echo: yes
+      register: velox_role_input
+
+    - name: Prompt for Elasticsearch port
+      pause:
+        prompt: "Enter Elasticsearch port [9200]"
+        echo: yes
+      register: es_port_input
+
+    - name: Prompt for Kibana port
+      pause:
+        prompt: "Enter Kibana port [5601]"
+        echo: yes
+      register: kibana_port_input
+
+    - name: Prompt for Fleet Server port
+      pause:
+        prompt: "Enter Fleet Server port [8220]"
+        echo: yes
+      register: fleet_port_input
+
+    - name: Prompt for Suricata port
+      pause:
+        prompt: "Enter Suricata port [8000]"
+        echo: yes
+      register: suricata_port_input
+
+    - name: Get available network interfaces
+      shell: ip -o -4 addr show | awk '$2 !~ /^lo|docker/ {print NR". "$2" ("$4")"}' | cut -d'/' -f1
+      register: network_interfaces
+      changed_when: false
+
+    - name: Display available network interfaces
+      debug:
+        msg: "{{ network_interfaces.stdout_lines }}"
+
+    - name: Prompt for Suricata interface selection
+      pause:
+        prompt: "Select Suricata interface number or press Enter for [ens33]"
+        echo: yes
+      register: suricata_interface_input
+
+    - name: Parse Suricata interface selection
+      shell: |
+        if [[ "{{ suricata_interface_input.user_input }}" =~ ^[0-9]+$ ]]; then
+          ip -o -4 addr show | awk '$2 !~ /^lo|docker/ {print $2}' | sed -n '{{ suricata_interface_input.user_input }}p'
+        else
+          echo "{{ suricata_interface_input.user_input | default('ens33', true) }}"
+        fi
+      register: suricata_interface
+      changed_when: false
+
+    - name: Prompt for Arkime Elasticsearch IP
+      pause:
+        prompt: "Select Arkime Elasticsearch IP or enter manually [127.0.0.1]"
+        echo: yes
+      register: arkime_es_ip_input
+
+    - name: Parse Arkime Elasticsearch IP
+      shell: |
+        input="{{ arkime_es_ip_input.user_input }}"
+        if [[ "$input" =~ ^[0-9]+$ ]]; then
+          ip -o -4 addr show | awk '$2 !~ /^lo|docker/ {print $4}' | cut -d'/' -f1 | sed -n "${input}p"
+        else
+          echo "${input:-127.0.0.1}"
+        fi
+      register: arkime_es_ip
+      changed_when: false
+
+    - name: Prompt for Velociraptor server URL
+      pause:
+        prompt: "Enter Velociraptor server URL [https://0.0.0.0:8889/]"
+        echo: yes
+      register: velox_url_input
+
+    - name: Format Velociraptor server URL
+      set_fact:
+        velox_server_url: "{{ velox_url_input.user_input | default('https://0.0.0.0:8889/', true) | regex_replace('^(?!https?://)', 'https://') | regex_replace('(?<!:[0-9]{4})/?$', ':8889/') | regex_replace('(?<![/])$', '/') }}"
+
+    - name: Prompt for Velociraptor frontend hostname
+      pause:
+        prompt: "Select Velociraptor frontend hostname or enter IP"
+        echo: yes
+      register: velox_hostname_input
+
+    - name: Parse Velociraptor frontend hostname
+      shell: |
+        input="{{ velox_hostname_input.user_input }}"
+        if [[ "$input" =~ ^[0-9]+$ ]]; then
+          ip -o -4 addr show | awk '$2 !~ /^lo|docker/ {print $4}' | cut -d'/' -f1 | sed -n "${input}p"
+        else
+          echo "${input:-0.0.0.0}"
+        fi
+      register: velox_hostname
+      changed_when: false
+
+    - name: Prompt for Fleet Server host IP
+      pause:
+        prompt: "Select Fleet Server host IP or enter manually"
+        echo: yes
+      register: fleet_ip_input
+
+    - name: Parse Fleet Server IP
+      shell: |
+        input="{{ fleet_ip_input.user_input }}"
+        if [[ "$input" =~ ^[0-9]+$ ]]; then
+          ip -o -4 addr show | awk '$2 !~ /^lo|docker/ {print $4}' | cut -d'/' -f1 | sed -n "${input}p"
+        else
+          echo "${input:-127.0.0.1}"
+        fi
+      register: selected_ip
+      changed_when: false
+
+    - name: Prompt for local Kibana URL
+      pause:
+        prompt: "Enter local Kibana URL [https://0.0.0.0:5601]"
+        echo: yes
+      register: kibana_url_input
+
+    - name: Generate Arkime password secret
+      shell: openssl rand -base64 32
+      register: arkime_password_secret
+      changed_when: false
+
+    - name: Set fact variables with defaults
+      set_fact:
+        stack_version: "{{ stack_version_input.user_input | default('9.2.2', true) }}"
+        cluster_name: "{{ cluster_name_input.user_input | default('orochi', true) }}"
+        license: "{{ license_input.user_input | default('basic', true) }}"
+        mem_limit: "{{ mem_limit_input.user_input | default('4g', true) }}"
+        common_password: "{{ password_input.user_input }}"
+        velox_user: "{{ velox_user_input.user_input | default('admin', true) }}"
+        velox_role: "{{ velox_role_input.user_input | default('administrator', true) }}"
+        es_port: "{{ es_port_input.user_input | default('9200', true) }}"
+        kibana_port: "{{ kibana_port_input.user_input | default('5601', true) }}"
+        fleet_port: "{{ fleet_port_input.user_input | default('8220', true) }}"
+        suricata_port: "{{ suricata_port_input.user_input | default('8000', true) }}"
+        local_kbn_url: "{{ kibana_url_input.user_input | default('https://0.0.0.0:5601', true) }}"
+
+    - name: Create .env file
+      copy:
+        content: |
+          # Elastic Stack Configuration
+          STACK_VERSION={{ stack_version }}
+          CLUSTER_NAME={{ cluster_name }}
+          LICENSE={{ license }}
+          MEM_LIMIT={{ mem_limit }}
+
+          # Passwords (same for all services)
+          ELASTIC_PASSWORD={{ common_password }}
+          KIBANA_PASSWORD={{ common_password }}
+          ARKIME_PASSWORD={{ common_password }}
+          VELOX_PASSWORD={{ common_password }}
+
+          # Velociraptor Configuration
+          VELOX_USER={{ velox_user }}
+          VELOX_ROLE={{ velox_role }}
+          VELOX_SERVER_URL={{ velox_server_url }}
+          VELOX_FRONTEND_HOSTNAME={{ velox_hostname.stdout }}
+
+          # Network Configuration
+          ES_PORT={{ es_port }}
+          KIBANA_PORT={{ kibana_port }}
+          FLEET_PORT={{ fleet_port }}
+          SURICATA_PORT={{ suricata_port }}
+          SURICATA_INTERFACE={{ suricata_interface.stdout }}
+
+          # Arkime Configuration
+          ARKIME_ELASTICSEARCH_IP={{ arkime_es_ip.stdout }}
+          ARKIME_PASSWORD_SECRET={{ arkime_password_secret.stdout }}
+
+          # Fleet Configuration
+          FLEET_SERVER_HOST=127.0.0.1
+          selected_ip={{ selected_ip.stdout }}
+          LOCAL_KBN_URL={{ local_kbn_url }}
+
+          # Default Settings
+          DEFAULT_TIMEOUT=300
+        dest: .env
+        mode: '0600'
+
+    - name: Display .env file creation success
+      debug:
+        msg: ".env file created/updated successfully!"
+    # ============================================
+    # Pull Docker Images
+    # ============================================
+    - name: Define required Docker images
+      set_fact:
+        docker_images:
+          # Elastic Stack
+          - "docker.elastic.co/elasticsearch/elasticsearch:{{ stack_version }}"
+          - "docker.elastic.co/kibana/kibana:{{ stack_version }}"
+          - "docker.elastic.co/logstash/logstash:{{ stack_version }}"
+          - "docker.elastic.co/downloads/beats/elastic-agent:{{ stack_version }}"
+          # TheHive Stack
+          - "strangebee/thehive:4"
+          - "cassandra:4"
+          - "docker.elastic.co/elasticsearch/elasticsearch:7.17.9"  # TheHive ES
+          # Velociraptor
+          - "ghcr.io/velocidex/velociraptor:latest"
+          # Mattermost
+          - "mattermost/mattermost-team-edition:latest"
+          - "postgres:15-alpine"
+          - "mongo:4.4"
+          # Suricata
+          - "jasonish/suricata:latest"
+          # Arkime
+          - "mammo0/docker-arkime:latest"
+          # CyberChef
+          - "ghcr.io/gchq/cyberchef:latest"
+          # Website
+          - "nginx:alpine"
+
+    - name: Display images to be pulled
+      debug:
+        msg: "Pulling {{ docker_images | length }} Docker images..."
+
+    - name: Pull Docker images
+      community.docker.docker_image:
+        name: "{{ item }}"
+        source: pull
+      loop: "{{ docker_images }}"
+      register: pull_result
+      ignore_errors: true  # Continue if one fails
+
+    - name: Display pull summary
+      debug:
+        msg: "Docker image pull complete"
+
+    # ============================================
+    # Host Installations (Not Docker)
+    # ============================================
+    # Zeek - installed via apt
+    # RITA - installed via script
+
+    # ============================================
+    # Install Zeek (Host - not Docker)
+    # ============================================
+    - name: Install Zeek
+      when: "'all' in deploy_components or 'zeek' in deploy_components"
+      block:
+        - name: Install Zeek dependencies
+          ansible.builtin.apt:
+            name:
+              - curl
+              - git
+              - mlocate
+              - nodejs
+              - npm
+              - openssh-server
+              - libcommon-sense-perl
+              - libjson-perl
+              - libjson-xs-perl
+              - liblua5.4-0
+              - librdkafka1
+              - libtypes-serialiser-perl
+              - libyaml-dev
+              - libyara8
+              - net-tools
+            state: present
+            update_cache: true
+
+        - name: Add Zeek repository key
+          ansible.builtin.shell: |
+            curl -fsSL https://download.opensuse.org/repositories/security:zeek/xUbuntu_22.04/Release.key | gpg --dearmor | tee /etc/apt/trusted.gpg.d/security_zeek.gpg > /dev/null
+          args:
+            creates: /etc/apt/trusted.gpg.d/security_zeek.gpg
+
+        - name: Add Zeek repository
+          ansible.builtin.apt_repository:
+            repo: "deb http://download.opensuse.org/repositories/security:/zeek/xUbuntu_22.04/ /"
+            state: present
+            filename: zeek
+
+        - name: Install Zeek
+          ansible.builtin.apt:
+            name: zeek-lts
+            state: present
+            update_cache: true
+
+        - name: Configure Zeek network
+          ansible.builtin.lineinfile:
+            path: /opt/zeek/etc/networks.cfg
+            line: "{{ zeek_network }}"
+            create: true
+
+        - name: Configure Zeek interface
+          ansible.builtin.lineinfile:
+            path: /opt/zeek/etc/node.cfg
+            regexp: '^interface='
+            line: "interface={{ selected_interface }}"
+
+        - name: Enable JSON logging in Zeek
+          ansible.builtin.lineinfile:
+            path: /opt/zeek/share/zeek/site/local.zeek
+            line: "@load policy/tuning/json-logs.zeek"
+            create: true
+
+        - name: Deploy Zeek
+          ansible.builtin.shell: |
+            /opt/zeek/bin/zeekctl check
+            /opt/zeek/bin/zeekctl deploy
+          changed_when: true
+
+    # ============================================
+    # Install RITA (Host - not Docker)
+    # ============================================
+    - name: Install RITA
+      when: "'all' in deploy_components or 'rita' in deploy_components"
+      block:
+        - name: Set RITA version
+          set_fact:
+            rita_version: "{{ rita_version | default('v5.0.8') }}"
+
+        - name: Check if RITA is already installed
+          ansible.builtin.command: which rita
+          register: rita_check
+          ignore_errors: true
+          changed_when: false
+          failed_when: false
+
+        - name: Download RITA installer
+          ansible.builtin.get_url:
+            url: "https://github.com/activecm/rita/releases/download/{{ rita_version }}/rita-{{ rita_version }}.tar.gz"
+            dest: "/tmp/rita-{{ rita_version }}.tar.gz"
+            mode: '0644'
+          when: rita_check.rc != 0
+
+        - name: Extract RITA installer
+          ansible.builtin.unarchive:
+            src: "/tmp/rita-{{ rita_version }}.tar.gz"
+            dest: /tmp/
+            remote_src: true
+          when: rita_check.rc != 0
+
+        - name: Run RITA installer
+          ansible.builtin.shell: |
+            cd /tmp/rita-{{ rita_version }}-installer
+            ./install_rita.sh localhost
+          args:
+            creates: /usr/local/bin/rita
+          when: rita_check.rc != 0
+
+        - name: Verify RITA installation
+          ansible.builtin.command: rita help
+          register: rita_verify
+          changed_when: false
+
+        - name: Display RITA status
+          debug:
+            msg: "RITA installed successfully"

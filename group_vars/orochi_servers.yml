@@ -1,0 +1,9 @@
+# Zeek Configuration
+zeek_network: "192.168.0.0/24"
+
+# RITA Configuration
+rita_version: "5.0.8"
+
+deploy_components:
+  - all # Options: all, elk, fleet, arkime, hive, velociraptor, mattermost, suricata, zeek, rita, website
+  
