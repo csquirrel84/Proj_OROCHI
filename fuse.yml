@@ -552,7 +552,7 @@
         mode: '0755'
         owner: 1000
         group: 1000
-
+################################################################################
     - name: Start Elasticsearch container
       community.docker.docker_container:
         name: elasticsearch
@@ -717,7 +717,7 @@
           - "{{ fleet_port }}:8220"
         volumes:
           - /opt/orochi/certs:/certs:ro
-          - /opt/orochi/fleetserverdata:/usr/share/elastic-agent
+          - /opt/orochi/fleetserverdata:/usr/share/elastic-agent/state
           - /var/lib/docker/containers:/var/lib/docker/containers:ro
           - /var/run/docker.sock:/var/run/docker.sock:ro
           - /sys/fs/cgroup:/hostfs/sys/fs/cgroup:ro
