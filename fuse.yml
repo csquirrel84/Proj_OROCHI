@@ -1,7 +1,7 @@
 #!/usr/bin/env ansible-playbook
 ---
 - name: Check and Install Docker
-  hosts: target_servers
+  hosts: orochi_servers
   become: true  # Need sudo for installation
   gather_facts: true
 
@@ -135,90 +135,154 @@
     - name: Display Docker info
       ansible.builtin.debug:
         msg: "{{ docker_info.stdout }}"
-
-    # ============================================
+# ============================================
     # Build .env File Configuration
     # ============================================
+    - name: Check if .env file already exists
+      stat:
+        path: .env
+      register: env_file_exists
+
+    - name: Prompt to use existing .env file
+      pause:
+        prompt: ".env file already exists. Do you want to use it? (y/n) [y]"
+        echo: yes
+      register: use_existing_env
+      when: env_file_exists.stat.exists
+
+    - name: Load existing .env variables
+      shell: cat .env
+      register: existing_env
+      when: 
+        - env_file_exists.stat.exists
+        - use_existing_env.user_input | default('y', true) | lower in ['y', 'yes', '']
+
+    - name: Parse existing .env file
+      set_fact:
+        stack_version: "{{ existing_env.stdout | regex_search('STACK_VERSION=(.+)', '\\1') | first | default('9.2.2', true) }}"
+        cluster_name: "{{ existing_env.stdout | regex_search('CLUSTER_NAME=(.+)', '\\1') | first | default('orochi', true) }}"
+        license: "{{ existing_env.stdout | regex_search('LICENSE=(.+)', '\\1') | first | default('basic', true) }}"
+        mem_limit: "{{ existing_env.stdout | regex_search('MEM_LIMIT=(.+)', '\\1') | first | default('4g', true) }}"
+        common_password: "{{ existing_env.stdout | regex_search('ELASTIC_PASSWORD=(.+)', '\\1') | first }}"
+        velox_user: "{{ existing_env.stdout | regex_search('VELOX_USER=(.+)', '\\1') | first | default('admin', true) }}"
+        velox_role: "{{ existing_env.stdout | regex_search('VELOX_ROLE=(.+)', '\\1') | first | default('administrator', true) }}"
+        es_port: "{{ existing_env.stdout | regex_search('ES_PORT=(.+)', '\\1') | first | default('9200', true) }}"
+        kibana_port: "{{ existing_env.stdout | regex_search('KIBANA_PORT=(.+)', '\\1') | first | default('5601', true) }}"
+        fleet_port: "{{ existing_env.stdout | regex_search('FLEET_PORT=(.+)', '\\1') | first | default('8220', true) }}"
+        suricata_port: "{{ existing_env.stdout | regex_search('SURICATA_PORT=(.+)', '\\1') | first | default('8000', true) }}"
+        local_kbn_url: "{{ existing_env.stdout | regex_search('LOCAL_KBN_URL=(.+)', '\\1') | first | default('https://0.0.0.0:5601', true) }}"
+        suricata_interface: "{{ existing_env.stdout | regex_search('SURICATA_INTERFACE=(.+)', '\\1') | first | default('ens33', true) }}"
+        arkime_es_ip: "{{ existing_env.stdout | regex_search('ARKIME_ELASTICSEARCH_IP=(.+)', '\\1') | first | default('127.0.0.1', true) }}"
+        velox_server_url: "{{ existing_env.stdout | regex_search('VELOX_SERVER_URL=(.+)', '\\1') | first | default('https://0.0.0.0:8889/', true) }}"
+        velox_hostname: "{{ existing_env.stdout | regex_search('VELOX_FRONTEND_HOSTNAME=(.+)', '\\1') | first | default('0.0.0.0', true) }}"
+        selected_ip: "{{ existing_env.stdout | regex_search('selected_ip=(.+)', '\\1') | first | default('127.0.0.1', true) }}"
+        arkime_password_secret: "{{ existing_env.stdout | regex_search('ARKIME_PASSWORD_SECRET=(.+)', '\\1') | first }}"
+        skip_env_prompts: true
+      when: 
+        - env_file_exists.stat.exists
+        - use_existing_env.user_input | default('y', true) | lower in ['y', 'yes', '']
+
+    - name: Display using existing .env
+      debug:
+        msg: "Using existing .env file configuration"
+      when: 
+        - env_file_exists.stat.exists
+        - use_existing_env.user_input | default('y', true) | lower in ['y', 'yes', '']
+
     - name: Prompt for Elastic Stack version
       pause:
         prompt: "Enter Elastic Stack version [9.2.2]"
         echo: yes
       register: stack_version_input
+      when: not (skip_env_prompts | default(false))
 
     - name: Prompt for cluster name
       pause:
         prompt: "Enter cluster name [orochi]"
         echo: yes
       register: cluster_name_input
+      when: not (skip_env_prompts | default(false))
 
     - name: Prompt for license type
       pause:
         prompt: "Enter license type [basic]"
         echo: yes
       register: license_input
+      when: not (skip_env_prompts | default(false))
 
     - name: Prompt for memory limit
       pause:
         prompt: "Enter memory limit [4g]"
         echo: yes
       register: mem_limit_input
+      when: not (skip_env_prompts | default(false))
 
     - name: Prompt for password (used for all services)
       pause:
         prompt: "Enter a password for all services"
         echo: no
       register: password_input
+      when: not (skip_env_prompts | default(false))
 
     - name: Prompt for Velociraptor username
       pause:
         prompt: "Enter Velociraptor username [admin]"
         echo: yes
       register: velox_user_input
+      when: not (skip_env_prompts | default(false))
 
     - name: Prompt for Velociraptor role
       pause:
         prompt: "Enter Velociraptor role [administrator]"
         echo: yes
       register: velox_role_input
+      when: not (skip_env_prompts | default(false))
 
     - name: Prompt for Elasticsearch port
       pause:
         prompt: "Enter Elasticsearch port [9200]"
         echo: yes
       register: es_port_input
+      when: not (skip_env_prompts | default(false))
 
     - name: Prompt for Kibana port
       pause:
         prompt: "Enter Kibana port [5601]"
         echo: yes
       register: kibana_port_input
+      when: not (skip_env_prompts | default(false))
 
     - name: Prompt for Fleet Server port
       pause:
         prompt: "Enter Fleet Server port [8220]"
         echo: yes
       register: fleet_port_input
+      when: not (skip_env_prompts | default(false))
 
     - name: Prompt for Suricata port
       pause:
         prompt: "Enter Suricata port [8000]"
         echo: yes
       register: suricata_port_input
+      when: not (skip_env_prompts | default(false))
 
     - name: Get available network interfaces
       shell: ip -o -4 addr show | awk '$2 !~ /^lo|docker/ {print NR". "$2" ("$4")"}' | cut -d'/' -f1
       register: network_interfaces
       changed_when: false
+      when: not (skip_env_prompts | default(false))
 
     - name: Display available network interfaces
       debug:
         msg: "{{ network_interfaces.stdout_lines }}"
+      when: not (skip_env_prompts | default(false))
 
     - name: Prompt for Suricata interface selection
       pause:
         prompt: "Select Suricata interface number or press Enter for [ens33]"
         echo: yes
       register: suricata_interface_input
+      when: not (skip_env_prompts | default(false))
 
     - name: Parse Suricata interface selection
       shell: |
@@ -227,14 +291,16 @@
         else
           echo "{{ suricata_interface_input.user_input | default('ens33', true) }}"
         fi
-      register: suricata_interface
+      register: suricata_interface_parsed
       changed_when: false
+      when: not (skip_env_prompts | default(false))
 
     - name: Prompt for Arkime Elasticsearch IP
       pause:
         prompt: "Select Arkime Elasticsearch IP or enter manually [127.0.0.1]"
         echo: yes
       register: arkime_es_ip_input
+      when: not (skip_env_prompts | default(false))
 
     - name: Parse Arkime Elasticsearch IP
       shell: |
@@ -244,24 +310,28 @@
         else
           echo "${input:-127.0.0.1}"
         fi
-      register: arkime_es_ip
+      register: arkime_es_ip_parsed
       changed_when: false
+      when: not (skip_env_prompts | default(false))
 
     - name: Prompt for Velociraptor server URL
       pause:
         prompt: "Enter Velociraptor server URL [https://0.0.0.0:8889/]"
         echo: yes
       register: velox_url_input
+      when: not (skip_env_prompts | default(false))
 
     - name: Format Velociraptor server URL
       set_fact:
-        velox_server_url: "{{ velox_url_input.user_input | default('https://0.0.0.0:8889/', true) | regex_replace('^(?!https?://)', 'https://') | regex_replace('(?<!:[0-9]{4})/?$', ':8889/') | regex_replace('(?<![/])$', '/') }}"
+        velox_server_url_new: "{{ velox_url_input.user_input | default('https://0.0.0.0:8889/', true) | regex_replace('^(?!https?://)', 'https://') | regex_replace('(?<!:[0-9]{4})/?$', ':8889/') | regex_replace('(?<![/])$', '/') }}"
+      when: not (skip_env_prompts | default(false))
 
     - name: Prompt for Velociraptor frontend hostname
       pause:
         prompt: "Select Velociraptor frontend hostname or enter IP"
         echo: yes
       register: velox_hostname_input
+      when: not (skip_env_prompts | default(false))
 
     - name: Parse Velociraptor frontend hostname
       shell: |
@@ -271,14 +341,16 @@
         else
           echo "${input:-0.0.0.0}"
         fi
-      register: velox_hostname
+      register: velox_hostname_parsed
       changed_when: false
+      when: not (skip_env_prompts | default(false))
 
     - name: Prompt for Fleet Server host IP
       pause:
         prompt: "Select Fleet Server host IP or enter manually"
         echo: yes
       register: fleet_ip_input
+      when: not (skip_env_prompts | default(false))
 
     - name: Parse Fleet Server IP
       shell: |
@@ -288,21 +360,24 @@
         else
           echo "${input:-127.0.0.1}"
         fi
-      register: selected_ip
+      register: selected_ip_parsed
       changed_when: false
+      when: not (skip_env_prompts | default(false))
 
     - name: Prompt for local Kibana URL
       pause:
         prompt: "Enter local Kibana URL [https://0.0.0.0:5601]"
         echo: yes
       register: kibana_url_input
+      when: not (skip_env_prompts | default(false))
 
     - name: Generate Arkime password secret
       shell: openssl rand -base64 32
-      register: arkime_password_secret
+      register: arkime_password_secret_new
       changed_when: false
+      when: not (skip_env_prompts | default(false))
 
-    - name: Set fact variables with defaults
+    - name: Set fact variables with defaults (from prompts)
       set_fact:
         stack_version: "{{ stack_version_input.user_input | default('9.2.2', true) }}"
         cluster_name: "{{ cluster_name_input.user_input | default('orochi', true) }}"
@@ -316,6 +391,13 @@
         fleet_port: "{{ fleet_port_input.user_input | default('8220', true) }}"
         suricata_port: "{{ suricata_port_input.user_input | default('8000', true) }}"
         local_kbn_url: "{{ kibana_url_input.user_input | default('https://0.0.0.0:5601', true) }}"
+        suricata_interface: "{{ suricata_interface_parsed.stdout }}"
+        arkime_es_ip: "{{ arkime_es_ip_parsed.stdout }}"
+        velox_server_url: "{{ velox_server_url_new }}"
+        velox_hostname: "{{ velox_hostname_parsed.stdout }}"
+        selected_ip: "{{ selected_ip_parsed.stdout }}"
+        arkime_password_secret: "{{ arkime_password_secret_new.stdout }}"
+      when: not (skip_env_prompts | default(false))
 
     - name: Create .env file
       copy:
@@ -336,22 +418,22 @@
           VELOX_USER={{ velox_user }}
           VELOX_ROLE={{ velox_role }}
           VELOX_SERVER_URL={{ velox_server_url }}
-          VELOX_FRONTEND_HOSTNAME={{ velox_hostname.stdout }}
+          VELOX_FRONTEND_HOSTNAME={{ velox_hostname }}
 
           # Network Configuration
           ES_PORT={{ es_port }}
           KIBANA_PORT={{ kibana_port }}
           FLEET_PORT={{ fleet_port }}
           SURICATA_PORT={{ suricata_port }}
-          SURICATA_INTERFACE={{ suricata_interface.stdout }}
+          SURICATA_INTERFACE={{ suricata_interface }}
 
           # Arkime Configuration
-          ARKIME_ELASTICSEARCH_IP={{ arkime_es_ip.stdout }}
-          ARKIME_PASSWORD_SECRET={{ arkime_password_secret.stdout }}
+          ARKIME_ELASTICSEARCH_IP={{ arkime_es_ip }}
+          ARKIME_PASSWORD_SECRET={{ arkime_password_secret }}
 
           # Fleet Configuration
           FLEET_SERVER_HOST=127.0.0.1
-          selected_ip={{ selected_ip.stdout }}
+          selected_ip={{ selected_ip }}
           LOCAL_KBN_URL={{ local_kbn_url }}
 
           # Default Settings
@@ -372,13 +454,12 @@
           - "docker.elastic.co/elasticsearch/elasticsearch:{{ stack_version }}"
           - "docker.elastic.co/kibana/kibana:{{ stack_version }}"
           - "docker.elastic.co/logstash/logstash:{{ stack_version }}"
-          - "docker.elastic.co/downloads/beats/elastic-agent:{{ stack_version }}"
+          # - "docker.elastic.co/downloads/beats/elastic-agent/elastic-agent:{{ stack_version }}"
           # TheHive Stack
-          - "strangebee/thehive:4"
-          - "cassandra:4"
+          - "thehiveproject/thehive4:latest"
           - "docker.elastic.co/elasticsearch/elasticsearch:7.17.9"  # TheHive ES
           # Velociraptor
-          - "ghcr.io/velocidex/velociraptor:latest"
+          - "wlambert/velociraptor:latest"
           # Mattermost
           - "mattermost/mattermost-team-edition:latest"
           - "postgres:15-alpine"
@@ -408,125 +489,338 @@
       debug:
         msg: "Docker image pull complete"
 
+    - name: Display individual image pull results
+      debug:
+        msg: "Image {{ item.item }}: {{ 'Pulled' if item.changed else 'Already up to date' }}"
+      loop: "{{ pull_result.results }}"
+
+    - name: Create Elasticsearch directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - /opt/orochi/data
+        - /opt/orochi/logs
+
+
+# ============================================
+    # Install and Configure Elasticsearch
     # ============================================
-    # Host Installations (Not Docker)
+    - name: Create Elasticsearch directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0777'
+        owner: 1000
+        group: 1000
+      loop:
+        - /opt/orochi/certs
+        - /opt/orochi/esdata
+
+    - name: Check if Elasticsearch certificates exist
+      stat:
+        path: /opt/orochi/certs/ca/ca.crt
+      register: certs_exist
+
+    - name: Generate Elasticsearch certificates
+      shell: |
+        docker run --rm --user root \
+          -v /opt/orochi/certs:/usr/share/elasticsearch/config/certs \
+          docker.elastic.co/elasticsearch/elasticsearch:{{ stack_version }} \
+          bash -c '
+            cd /usr/share/elasticsearch
+            bin/elasticsearch-certutil ca --silent --pem -out config/certs/ca.zip
+            cd config/certs && unzip -o ca.zip
+            cd /usr/share/elasticsearch
+            bin/elasticsearch-certutil cert --silent --pem \
+              -out config/certs/certs.zip \
+              --ca-cert config/certs/ca/ca.crt \
+              --ca-key config/certs/ca/ca.key \
+              --name elasticsearch \
+              --dns elasticsearch --dns localhost --ip 127.0.0.1
+            cd config/certs && unzip -o certs.zip
+            chmod -R 755 /usr/share/elasticsearch/config/certs
+          '
+      when: not certs_exist.stat.exists
+
+    - name: Fix certificate permissions
+      file:
+        path: /opt/orochi/certs
+        state: directory
+        recurse: yes
+        mode: '0755'
+        owner: 1000
+        group: 1000
+
+    - name: Start Elasticsearch container
+      community.docker.docker_container:
+        name: elasticsearch
+        image: "docker.elastic.co/elasticsearch/elasticsearch:{{ stack_version }}"
+        state: started
+        restart_policy: unless-stopped
+        ports:
+          - "{{ es_port }}:9200"
+        volumes:
+          - /opt/orochi/certs:/usr/share/elasticsearch/config/certs:ro
+          - /opt/orochi/esdata:/usr/share/elasticsearch/data
+        env:
+          node.name: elasticsearch
+          cluster.name: "{{ cluster_name }}"
+          discovery.type: single-node
+          ELASTIC_PASSWORD: "{{ common_password }}"
+          bootstrap.memory_lock: "true"
+          xpack.security.enabled: "true"
+          xpack.security.http.ssl.enabled: "true"
+          xpack.security.http.ssl.key: certs/elasticsearch/elasticsearch.key
+          xpack.security.http.ssl.certificate: certs/elasticsearch/elasticsearch.crt
+          xpack.security.http.ssl.certificate_authorities: certs/ca/ca.crt
+          xpack.security.transport.ssl.enabled: "true"
+          xpack.security.transport.ssl.key: certs/elasticsearch/elasticsearch.key
+          xpack.security.transport.ssl.certificate: certs/elasticsearch/elasticsearch.crt
+          xpack.security.transport.ssl.certificate_authorities: certs/ca/ca.crt
+          xpack.security.transport.ssl.verification_mode: certificate
+          xpack.license.self_generated.type: "{{ license }}"
+        ulimits:
+          - memlock:-1:-1
+        memory: "{{ mem_limit }}"
+
+    - name: Wait for Elasticsearch to be ready
+      uri:
+        url: "https://localhost:{{ es_port }}/_cluster/health"
+        method: GET
+        user: elastic
+        password: "{{ common_password }}"
+        validate_certs: no
+        status_code: 200
+      register: es_health
+      until: es_health.status == 200
+      retries: 30
+      delay: 10
+
+    - name: Set default index template for single-node (no replicas)
+      uri:
+        url: "https://localhost:{{ es_port }}/_index_template/default_template"
+        method: PUT
+        user: elastic
+        password: "{{ common_password }}"
+        body_format: json
+        body:
+          index_patterns: ["*"]
+          priority: 1
+          template:
+            settings:
+              number_of_replicas: 0
+        validate_certs: no
+        status_code: 200
+      ignore_errors: yes
+
+    - name: Display Elasticsearch status
+      debug:
+        msg: 
+          - "Elasticsearch is running at https://localhost:{{ es_port }}"
+          - "Cluster: {{ cluster_name }}"
+          - "Version: {{ stack_version }}"
+    
+# ============================================
+    # Install and Configure Kibana
     # ============================================
-    # Zeek - installed via apt
-    # RITA - installed via script
+    - name: Create Kibana data directory
+      file:
+        path: /opt/orochi/kibanadata
+        state: directory
+        mode: '0777'
+        owner: 1000
+        group: 1000
 
+    - name: Set kibana_system user password
+      uri:
+        url: "https://localhost:{{ es_port }}/_security/user/kibana_system/_password"
+        method: POST
+        user: elastic
+        password: "{{ common_password }}"
+        body_format: json
+        body:
+          password: "{{ common_password }}"
+        validate_certs: no
+        status_code: 200
+
+    - name: Start Kibana container
+      community.docker.docker_container:
+        name: kibana
+        image: "docker.elastic.co/kibana/kibana:{{ stack_version }}"
+        state: started
+        restart_policy: unless-stopped
+        ports:
+          - "{{ kibana_port }}:5601"
+        volumes:
+          - /opt/orochi/certs:/usr/share/kibana/config/certs:ro
+          - /opt/orochi/kibanadata:/usr/share/kibana/data
+        env:
+          SERVERNAME: kibana
+          ELASTICSEARCH_HOSTS: "https://elasticsearch:9200"
+          ELASTICSEARCH_USERNAME: kibana_system
+          ELASTICSEARCH_PASSWORD: "{{ common_password }}"
+          ELASTICSEARCH_SSL_CERTIFICATEAUTHORITIES: config/certs/ca/ca.crt
+          SERVER_SSL_ENABLED: "true"
+          SERVER_SSL_CERTIFICATE: config/certs/elasticsearch/elasticsearch.crt
+          SERVER_SSL_KEY: config/certs/elasticsearch/elasticsearch.key
+          XPACK_SECURITY_ENCRYPTIONKEY: "fhjskloppd678ehkdfdlliverpoolfcr"
+          XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY: "fhjskloppd678ehkdfdlliverpoolfcr"
+        links:
+          - elasticsearch
+        memory: "{{ mem_limit }}"
+
+    - name: Wait for Kibana to be ready
+      uri:
+        url: "https://localhost:{{ kibana_port }}/api/status"
+        method: GET
+        validate_certs: no
+        status_code: 200
+      register: kibana_status
+      until: kibana_status.status == 200
+      retries: 60
+      delay: 10
+
+    - name: Display Kibana status
+      debug:
+        msg:
+          - "Kibana is running at https://localhost:{{ kibana_port }}"
+          - "Username: elastic"
+          - "Password: (as configured)"
+
+# ============================================
+    # Install and Configure Fleet Server
     # ============================================
-    # Install Zeek (Host - not Docker)
-    # ============================================
-    - name: Install Zeek
-      when: "'all' in deploy_components or 'zeek' in deploy_components"
-      block:
-        - name: Install Zeek dependencies
-          ansible.builtin.apt:
-            name:
-              - curl
-              - git
-              - mlocate
-              - nodejs
-              - npm
-              - openssh-server
-              - libcommon-sense-perl
-              - libjson-perl
-              - libjson-xs-perl
-              - liblua5.4-0
-              - librdkafka1
-              - libtypes-serialiser-perl
-              - libyaml-dev
-              - libyara8
-              - net-tools
-            state: present
-            update_cache: true
+    - name: Create Fleet Server data directory
+      file:
+        path: /opt/orochi/fleetserverdata
+        state: directory
+        mode: '0777'
+        owner: 1000
+        group: 1000
 
-        - name: Add Zeek repository key
-          ansible.builtin.shell: |
-            curl -fsSL https://download.opensuse.org/repositories/security:zeek/xUbuntu_22.04/Release.key | gpg --dearmor | tee /etc/apt/trusted.gpg.d/security_zeek.gpg > /dev/null
-          args:
-            creates: /etc/apt/trusted.gpg.d/security_zeek.gpg
+    - name: Get Elasticsearch CA fingerprint
+      shell: |
+        openssl x509 -fingerprint -sha256 -noout -in /opt/orochi/certs/ca/ca.crt | cut -d= -f2 | tr -d :
+      register: ca_fingerprint
+      changed_when: false
 
-        - name: Add Zeek repository
-          ansible.builtin.apt_repository:
-            repo: "deb http://download.opensuse.org/repositories/security:/zeek/xUbuntu_22.04/ /"
-            state: present
-            filename: zeek
+    - name: Start Fleet Server container
+      community.docker.docker_container:
+        name: fleet-server
+        image: "docker.elastic.co/elastic-agent/elastic-agent:{{ stack_version }}"
+        state: started
+        restart_policy: unless-stopped
+        user: root
+        ports:
+          - "{{ fleet_port }}:8220"
+        volumes:
+          - /opt/orochi/certs:/certs:ro
+          - /opt/orochi/fleetserverdata:/usr/share/elastic-agent
+          - /var/lib/docker/containers:/var/lib/docker/containers:ro
+          - /var/run/docker.sock:/var/run/docker.sock:ro
+          - /sys/fs/cgroup:/hostfs/sys/fs/cgroup:ro
+          - /proc:/hostfs/proc:ro
+          - /:/hostfs:ro
+        links:
+          - elasticsearch
+          - kibana
+        env:
+          SSL_CERTIFICATE_AUTHORITIES: /certs/ca/ca.crt
+          CERTIFICATE_AUTHORITIES: /certs/ca/ca.crt
+          FLEET_CA: /certs/ca/ca.crt
+          FLEET_ENROLL: "1"
+          FLEET_INSECURE: "true"
+          FLEET_SERVER_ELASTICSEARCH_CA: /certs/ca/ca.crt
+          FLEET_SERVER_ELASTICSEARCH_HOST: "https://elasticsearch:9200"
+          FLEET_SERVER_ELASTICSEARCH_INSECURE: "true"
+          FLEET_SERVER_ENABLE: "1"
+          FLEET_SERVER_CERT: /certs/elasticsearch/elasticsearch.crt
+          FLEET_SERVER_CERT_KEY: /certs/elasticsearch/elasticsearch.key
+          FLEET_SERVER_INSECURE_HTTP: "true"
+          FLEET_SERVER_POLICY_ID: fleet-server-policy
+          FLEET_URL: "https://fleet-server:8220"
+          KIBANA_FLEET_CA: /certs/ca/ca.crt
+          KIBANA_FLEET_SETUP: "1"
+          KIBANA_FLEET_USERNAME: elastic
+          KIBANA_FLEET_PASSWORD: "{{ common_password }}"
+          KIBANA_HOST: "https://kibana:5601"
 
-        - name: Install Zeek
-          ansible.builtin.apt:
-            name: zeek-lts
-            state: present
-            update_cache: true
+    - name: Wait for Fleet Server to be ready
+      wait_for:
+        host: localhost
+        port: "{{ fleet_port }}"
+        delay: 10
+        timeout: 120
 
-        - name: Configure Zeek network
-          ansible.builtin.lineinfile:
-            path: /opt/zeek/etc/networks.cfg
-            line: "{{ zeek_network }}"
-            create: true
+    - name: Check if Fleet is already initialized
+      uri:
+        url: "https://localhost:{{ kibana_port }}/api/fleet/agents/setup"
+        method: GET
+        user: elastic
+        password: "{{ common_password }}"
+        headers:
+          Content-Type: "application/json"
+          kbn-xsrf: "true"
+        validate_certs: no
+        status_code: [200, 404]
+      register: fleet_status
+      ignore_errors: yes
 
-        - name: Configure Zeek interface
-          ansible.builtin.lineinfile:
-            path: /opt/zeek/etc/node.cfg
-            regexp: '^interface='
-            line: "interface={{ selected_interface }}"
+    - name: Configure Fleet Server hosts in Kibana
+      uri:
+        url: "https://localhost:{{ kibana_port }}/api/fleet/settings"
+        method: PUT
+        user: elastic
+        password: "{{ common_password }}"
+        headers:
+          kbn-xsrf: "true"
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          fleet_server_hosts:
+            - "https://{{ selected_ip }}:{{ fleet_port }}"
+        validate_certs: no
+        status_code: 200
+      when: fleet_status.json.isInitialized is not defined or not fleet_status.json.isInitialized
 
-        - name: Enable JSON logging in Zeek
-          ansible.builtin.lineinfile:
-            path: /opt/zeek/share/zeek/site/local.zeek
-            line: "@load policy/tuning/json-logs.zeek"
-            create: true
+    - name: Configure Fleet output hosts in Kibana
+      uri:
+        url: "https://localhost:{{ kibana_port }}/api/fleet/outputs/fleet-default-output"
+        method: PUT
+        user: elastic
+        password: "{{ common_password }}"
+        headers:
+          kbn-xsrf: "true"
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          hosts:
+            - "https://{{ selected_ip }}:{{ es_port }}"
+        validate_certs: no
+        status_code: 200
+      when: fleet_status.json.isInitialized is not defined or not fleet_status.json.isInitialized
 
-        - name: Deploy Zeek
-          ansible.builtin.shell: |
-            /opt/zeek/bin/zeekctl check
-            /opt/zeek/bin/zeekctl deploy
-          changed_when: true
+    - name: Configure Fleet CA fingerprint in Kibana
+      uri:
+        url: "https://localhost:{{ kibana_port }}/api/fleet/outputs/fleet-default-output"
+        method: PUT
+        user: elastic
+        password: "{{ common_password }}"
+        headers:
+          kbn-xsrf: "true"
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          ca_trusted_fingerprint: "{{ ca_fingerprint.stdout }}"
+        validate_certs: no
+        status_code: 200
+      when: fleet_status.json.isInitialized is not defined or not fleet_status.json.isInitialized
 
-    # ============================================
-    # Install RITA (Host - not Docker)
-    # ============================================
-    - name: Install RITA
-      when: "'all' in deploy_components or 'rita' in deploy_components"
-      block:
-        - name: Set RITA version
-          set_fact:
-            rita_version: "{{ rita_version | default('v5.0.8') }}"
-
-        - name: Check if RITA is already installed
-          ansible.builtin.command: which rita
-          register: rita_check
-          ignore_errors: true
-          changed_when: false
-          failed_when: false
-
-        - name: Download RITA installer
-          ansible.builtin.get_url:
-            url: "https://github.com/activecm/rita/releases/download/{{ rita_version }}/rita-{{ rita_version }}.tar.gz"
-            dest: "/tmp/rita-{{ rita_version }}.tar.gz"
-            mode: '0644'
-          when: rita_check.rc != 0
-
-        - name: Extract RITA installer
-          ansible.builtin.unarchive:
-            src: "/tmp/rita-{{ rita_version }}.tar.gz"
-            dest: /tmp/
-            remote_src: true
-          when: rita_check.rc != 0
-
-        - name: Run RITA installer
-          ansible.builtin.shell: |
-            cd /tmp/rita-{{ rita_version }}-installer
-            ./install_rita.sh localhost
-          args:
-            creates: /usr/local/bin/rita
-          when: rita_check.rc != 0
-
-        - name: Verify RITA installation
-          ansible.builtin.command: rita help
-          register: rita_verify
-          changed_when: false
-
-        - name: Display RITA status
-          debug:
-            msg: "RITA installed successfully"
+    - name: Display Fleet Server status
+      debug:
+        msg:
+          - "Fleet Server is running at https://localhost:{{ fleet_port }}"
+          - "Fleet configured in Kibana"
+          - "CA Fingerprint: {{ ca_fingerprint.stdout }}"
