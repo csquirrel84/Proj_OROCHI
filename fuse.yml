@@ -753,44 +753,124 @@
         port: "{{ fleet_port }}"
         delay: 10
         timeout: 120
-
+        
     - name: Check if Fleet is already initialized
       uri:
         url: "https://localhost:{{ kibana_port }}/api/fleet/agents/setup"
         method: GET
         user: elastic
         password: "{{ common_password }}"
+        force_basic_auth: yes
         headers:
-          Content-Type: "application/json"
           kbn-xsrf: "true"
+          Content-Type: "application/json"
         validate_certs: no
         status_code: [200, 404]
       register: fleet_status
       ignore_errors: yes
 
-    - name: Configure Fleet Server hosts in Kibana
+    - name: Get existing Fleet Server hosts
       uri:
-        url: "https://localhost:{{ kibana_port }}/api/fleet/settings"
-        method: PUT
+        url: "https://localhost:{{ kibana_port }}/api/fleet/fleet_server_hosts"
+        method: GET
         user: elastic
         password: "{{ common_password }}"
+        force_basic_auth: yes
+        headers:
+          kbn-xsrf: "true"
+        validate_certs: no
+        status_code: [200]
+      register: fleet_server_hosts
+      ignore_errors: yes
+
+    - name: Debug Fleet Server hosts response
+      debug:
+        var: fleet_server_hosts.json
+      when: fleet_server_hosts is succeeded
+
+    - name: Create Fleet Server host configuration
+      uri:
+        url: "https://localhost:{{ kibana_port }}/api/fleet/fleet_server_hosts"
+        method: POST
+        user: elastic
+        password: "{{ common_password }}"
+        force_basic_auth: yes
         headers:
           kbn-xsrf: "true"
           Content-Type: "application/json"
         body_format: json
         body:
-          fleet_server_hosts:
+          name: "Default Fleet Server"
+          host_urls:
             - "https://{{ selected_ip }}:{{ fleet_port }}"
+          is_default: true
         validate_certs: no
-        status_code: 200
-      when: fleet_status.json.isInitialized is not defined or not fleet_status.json.isInitialized
+        status_code: [200, 201]
+      when: >
+        fleet_server_hosts is failed or
+        fleet_server_hosts.json.total is not defined or
+        fleet_server_hosts.json.total == 0
+      register: create_result
+      ignore_errors: yes
 
-    - name: Configure Fleet output hosts in Kibana
+    - name: Get first Fleet Server host ID
+      set_fact:
+        fleet_server_host_id: "{{ fleet_server_hosts.json['items'][0].id }}"
+      when: >
+        fleet_server_hosts is succeeded and
+        fleet_server_hosts.json.total is defined and
+        fleet_server_hosts.json.total > 0
+
+    - name: Update existing Fleet Server host
       uri:
-        url: "https://localhost:{{ kibana_port }}/api/fleet/outputs/fleet-default-output"
+        url: "https://localhost:{{ kibana_port }}/api/fleet/fleet_server_hosts/{{ fleet_server_host_id }}"
         method: PUT
         user: elastic
         password: "{{ common_password }}"
+        force_basic_auth: yes
+        headers:
+          kbn-xsrf: "true"
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          host_urls:
+            - "https://{{ selected_ip }}:{{ fleet_port }}"
+        validate_certs: no
+        status_code: [200]
+      when: fleet_server_host_id is defined
+      ignore_errors: yes
+
+    - name: Get existing outputs
+      uri:
+        url: "https://localhost:{{ kibana_port }}/api/fleet/outputs"
+        method: GET
+        user: elastic
+        password: "{{ common_password }}"
+        force_basic_auth: yes
+        headers:
+          kbn-xsrf: "true"
+        validate_certs: no
+        status_code: [200]
+      register: fleet_outputs
+
+    - name: Debug outputs response
+      debug:
+        var: fleet_outputs.json
+
+    - name: Get default output ID
+      set_fact:
+        default_output_id: "{{ fleet_outputs.json['items'][0].id }}"
+      when: >
+        fleet_outputs.json.total is defined and
+        fleet_outputs.json.total > 0
+
+    - name: Update Fleet default output
+      uri:
+        url: "https://localhost:{{ kibana_port }}/api/fleet/outputs/{{ default_output_id }}"
+        method: PUT
+        user: elastic
+        password: "{{ common_password }}"
+        force_basic_auth: yes
         headers:
           kbn-xsrf: "true"
           Content-Type: "application/json"
@@ -798,25 +878,11 @@
         body:
           hosts:
             - "https://{{ selected_ip }}:{{ es_port }}"
-        validate_certs: no
-        status_code: 200
-      when: fleet_status.json.isInitialized is not defined or not fleet_status.json.isInitialized
-
-    - name: Configure Fleet CA fingerprint in Kibana
-      uri:
-        url: "https://localhost:{{ kibana_port }}/api/fleet/outputs/fleet-default-output"
-        method: PUT
-        user: elastic
-        password: "{{ common_password }}"
-        headers:
-          kbn-xsrf: "true"
-          Content-Type: "application/json"
-        body_format: json
-        body:
           ca_trusted_fingerprint: "{{ ca_fingerprint.stdout }}"
         validate_certs: no
-        status_code: 200
-      when: fleet_status.json.isInitialized is not defined or not fleet_status.json.isInitialized
+        status_code: [200]
+      when: default_output_id is defined
+      ignore_errors: yes
 
     - name: Display Fleet Server status
       debug:
