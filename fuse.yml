@@ -135,7 +135,11 @@
     - name: Display Docker info
       ansible.builtin.debug:
         msg: "{{ docker_info.stdout }}"
-# ============================================
+# ===========================================
+# Build .env file configuration
+# ===========================================
+
+    # ============================================
     # Build .env File Configuration
     # ============================================
     - name: Check if .env file already exists
@@ -266,9 +270,46 @@
       register: suricata_port_input
       when: not (skip_env_prompts | default(false))
 
-    - name: Get available network interfaces
-      shell: ip -o -4 addr show | awk '$2 !~ /^lo|docker/ {print NR". "$2" ("$4")"}' | cut -d'/' -f1
+    - name: Build network interfaces list
+      shell: |
+        counter=1
+        ip -o -4 addr show | while read line; do
+          iface=$(echo "$line" | awk '{print $2}')
+          ip=$(echo "$line" | awk '{print $4}' | cut -d'/' -f1)
+          case "$iface" in
+            lo|docker*|br-*|veth*) continue ;;
+          esac
+          echo "${counter}. ${iface} (${ip})"
+          counter=$((counter + 1))
+        done
       register: network_interfaces
+      changed_when: false
+      when: not (skip_env_prompts | default(false))
+
+    - name: Build IP lookup table
+      shell: |
+        ip -o -4 addr show | while read line; do
+          iface=$(echo "$line" | awk '{print $2}')
+          ip=$(echo "$line" | awk '{print $4}' | cut -d'/' -f1)
+          case "$iface" in
+            lo|docker*|br-*|veth*) continue ;;
+          esac
+          echo "$ip"
+        done
+      register: ip_lookup_table
+      changed_when: false
+      when: not (skip_env_prompts | default(false))
+
+    - name: Build interface lookup table
+      shell: |
+        ip -o -4 addr show | while read line; do
+          iface=$(echo "$line" | awk '{print $2}')
+          case "$iface" in
+            lo|docker*|br-*|veth*) continue ;;
+          esac
+          echo "$iface"
+        done
+      register: iface_lookup_table
       changed_when: false
       when: not (skip_env_prompts | default(false))
 
@@ -285,33 +326,20 @@
       when: not (skip_env_prompts | default(false))
 
     - name: Parse Suricata interface selection
-      shell: |
-        if [[ "{{ suricata_interface_input.user_input }}" =~ ^[0-9]+$ ]]; then
-          ip -o -4 addr show | awk '$2 !~ /^lo|docker/ {print $2}' | sed -n '{{ suricata_interface_input.user_input }}p'
-        else
-          echo "{{ suricata_interface_input.user_input | default('ens33', true) }}"
-        fi
-      register: suricata_interface_parsed
-      changed_when: false
+      set_fact:
+        suricata_interface_parsed_value: "{{ iface_lookup_table.stdout_lines[suricata_interface_input.user_input | int - 1] if suricata_interface_input.user_input | default('') | regex_search('^[0-9]+$') else suricata_interface_input.user_input | default('ens33', true) }}"
       when: not (skip_env_prompts | default(false))
 
     - name: Prompt for Arkime Elasticsearch IP
       pause:
-        prompt: "Select Arkime Elasticsearch IP or enter manually [127.0.0.1]"
+        prompt: "Select Arkime Elasticsearch IP number or enter IP manually [127.0.0.1]"
         echo: yes
       register: arkime_es_ip_input
       when: not (skip_env_prompts | default(false))
 
     - name: Parse Arkime Elasticsearch IP
-      shell: |
-        input="{{ arkime_es_ip_input.user_input }}"
-        if [[ "$input" =~ ^[0-9]+$ ]]; then
-          ip -o -4 addr show | awk '$2 !~ /^lo|docker/ {print $4}' | cut -d'/' -f1 | sed -n "${input}p"
-        else
-          echo "${input:-127.0.0.1}"
-        fi
-      register: arkime_es_ip_parsed
-      changed_when: false
+      set_fact:
+        arkime_es_ip_parsed_value: "{{ ip_lookup_table.stdout_lines[arkime_es_ip_input.user_input | int - 1] if arkime_es_ip_input.user_input | default('') | regex_search('^[0-9]+$') else arkime_es_ip_input.user_input | default('127.0.0.1', true) }}"
       when: not (skip_env_prompts | default(false))
 
     - name: Prompt for Velociraptor server URL
@@ -328,40 +356,26 @@
 
     - name: Prompt for Velociraptor frontend hostname
       pause:
-        prompt: "Select Velociraptor frontend hostname or enter IP"
+        prompt: "Select Velociraptor frontend hostname number or enter IP"
         echo: yes
       register: velox_hostname_input
       when: not (skip_env_prompts | default(false))
 
     - name: Parse Velociraptor frontend hostname
-      shell: |
-        input="{{ velox_hostname_input.user_input }}"
-        if [[ "$input" =~ ^[0-9]+$ ]]; then
-          ip -o -4 addr show | awk '$2 !~ /^lo|docker/ {print $4}' | cut -d'/' -f1 | sed -n "${input}p"
-        else
-          echo "${input:-0.0.0.0}"
-        fi
-      register: velox_hostname_parsed
-      changed_when: false
+      set_fact:
+        velox_hostname_parsed_value: "{{ ip_lookup_table.stdout_lines[velox_hostname_input.user_input | int - 1] if velox_hostname_input.user_input | default('') | regex_search('^[0-9]+$') else velox_hostname_input.user_input | default('0.0.0.0', true) }}"
       when: not (skip_env_prompts | default(false))
 
     - name: Prompt for Fleet Server host IP
       pause:
-        prompt: "Select Fleet Server host IP or enter manually"
+        prompt: "Select Fleet Server host IP number or enter IP manually"
         echo: yes
       register: fleet_ip_input
       when: not (skip_env_prompts | default(false))
 
     - name: Parse Fleet Server IP
-      shell: |
-        input="{{ fleet_ip_input.user_input }}"
-        if [[ "$input" =~ ^[0-9]+$ ]]; then
-          ip -o -4 addr show | awk '$2 !~ /^lo|docker/ {print $4}' | cut -d'/' -f1 | sed -n "${input}p"
-        else
-          echo "${input:-127.0.0.1}"
-        fi
-      register: selected_ip_parsed
-      changed_when: false
+      set_fact:
+        selected_ip_parsed_value: "{{ ip_lookup_table.stdout_lines[fleet_ip_input.user_input | int - 1] if fleet_ip_input.user_input | default('') | regex_search('^[0-9]+$') else fleet_ip_input.user_input | default('127.0.0.1', true) }}"
       when: not (skip_env_prompts | default(false))
 
     - name: Prompt for local Kibana URL
@@ -391,12 +405,21 @@
         fleet_port: "{{ fleet_port_input.user_input | default('8220', true) }}"
         suricata_port: "{{ suricata_port_input.user_input | default('8000', true) }}"
         local_kbn_url: "{{ kibana_url_input.user_input | default('https://0.0.0.0:5601', true) }}"
-        suricata_interface: "{{ suricata_interface_parsed.stdout }}"
-        arkime_es_ip: "{{ arkime_es_ip_parsed.stdout }}"
+        suricata_interface: "{{ suricata_interface_parsed_value }}"
+        arkime_es_ip: "{{ arkime_es_ip_parsed_value }}"
         velox_server_url: "{{ velox_server_url_new }}"
-        velox_hostname: "{{ velox_hostname_parsed.stdout }}"
-        selected_ip: "{{ selected_ip_parsed.stdout }}"
+        velox_hostname: "{{ velox_hostname_parsed_value }}"
+        selected_ip: "{{ selected_ip_parsed_value }}"
         arkime_password_secret: "{{ arkime_password_secret_new.stdout }}"
+      when: not (skip_env_prompts | default(false))
+
+    - name: Debug - Show parsed IPs
+      debug:
+        msg:
+          - "Selected IP: {{ selected_ip }}"
+          - "Arkime ES IP: {{ arkime_es_ip }}"
+          - "Velox Hostname: {{ velox_hostname }}"
+          - "Suricata Interface: {{ suricata_interface }}"
       when: not (skip_env_prompts | default(false))
 
     - name: Create .env file
@@ -432,9 +455,9 @@
           ARKIME_PASSWORD_SECRET={{ arkime_password_secret }}
 
           # Fleet Configuration
-          FLEET_SERVER_HOST=127.0.0.1
+          FLEET_SERVER_HOST={{ selected_ip }}
           selected_ip={{ selected_ip }}
-          LOCAL_KBN_URL={{ local_kbn_url }}
+          LOCAL_KBN_URL=https://{{ selected_ip }}:{{ kibana_port }}
 
           # Default Settings
           DEFAULT_TIMEOUT=300
@@ -444,6 +467,7 @@
     - name: Display .env file creation success
       debug:
         msg: ".env file created/updated successfully!"
+
     # ============================================
     # Pull Docker Images
     # ============================================
@@ -454,12 +478,12 @@
           - "docker.elastic.co/elasticsearch/elasticsearch:{{ stack_version }}"
           - "docker.elastic.co/kibana/kibana:{{ stack_version }}"
           - "docker.elastic.co/logstash/logstash:{{ stack_version }}"
-          # - "docker.elastic.co/downloads/beats/elastic-agent/elastic-agent:{{ stack_version }}"
           # TheHive Stack
           - "thehiveproject/thehive4:latest"
           - "docker.elastic.co/elasticsearch/elasticsearch:7.17.9"  # TheHive ES
+          - "cassandra:4.0"
           # Velociraptor
-          - "wlambert/velociraptor:latest"
+          # - "wlambert/velociraptor:latest"
           # Mattermost
           - "mattermost/mattermost-team-edition:latest"
           - "postgres:15-alpine"
@@ -538,7 +562,8 @@
               --ca-cert config/certs/ca/ca.crt \
               --ca-key config/certs/ca/ca.key \
               --name elasticsearch \
-              --dns elasticsearch --dns kibana --dns fleet-server --dns localhost --ip 127.0.0.1
+              --dns elasticsearch --dns kibana --dns fleet-server --dns localhost \
+              --ip 127.0.0.1 --ip {{ selected_ip }} 
             cd config/certs && unzip -o certs.zip
             chmod -R 755 /usr/share/elasticsearch/config/certs
           '
@@ -553,12 +578,20 @@
         owner: 1000
         group: 1000
 ################################################################################
+    - name: Create Docker network
+      community.docker.docker_network:
+        name: orochi-network
+        state: present
+    
     - name: Start Elasticsearch container
       community.docker.docker_container:
         name: elasticsearch
         image: "docker.elastic.co/elasticsearch/elasticsearch:{{ stack_version }}"
         state: started
         restart_policy: unless-stopped
+        hostname: elasticsearch
+        networks:
+          - name: orochi-network
         ports:
           - "{{ es_port }}:9200"
         volumes:
@@ -651,6 +684,8 @@
         image: "docker.elastic.co/kibana/kibana:{{ stack_version }}"
         state: started
         restart_policy: unless-stopped
+        networks:
+          - name: orochi-network
         ports:
           - "{{ kibana_port }}:5601"
         volumes:
@@ -667,9 +702,8 @@
           SERVER_SSL_KEY: config/certs/elasticsearch/elasticsearch.key
           XPACK_SECURITY_ENCRYPTIONKEY: "fhjskloppd678ehkdfdlliverpoolfcr"
           XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY: "fhjskloppd678ehkdfdlliverpoolfcr"
-        links:
-          - elasticsearch
-        memory: "{{ mem_limit }}"
+          hostname: kibana
+          memory: "{{ mem_limit }}"
 
     - name: Wait for Kibana to be ready
       uri:
@@ -705,7 +739,6 @@
         openssl x509 -fingerprint -sha256 -noout -in /opt/orochi/certs/ca/ca.crt | cut -d= -f2 | tr -d :
       register: ca_fingerprint
       changed_when: false
-
     - name: Start Fleet Server container
       community.docker.docker_container:
         name: fleet-server
@@ -713,6 +746,8 @@
         state: started
         restart_policy: unless-stopped
         user: root
+        networks:
+          - name: orochi-network
         ports:
           - "{{ fleet_port }}:8220"
         volumes:
@@ -723,22 +758,18 @@
           - /sys/fs/cgroup:/hostfs/sys/fs/cgroup:ro
           - /proc:/hostfs/proc:ro
           - /:/hostfs:ro
-        links:
-          - elasticsearch
-          - kibana
+        hostname: fleet-server
         env:
-          SSL_CERTIFICATE_AUTHORITIES: /certs/ca/ca.crt
           CERTIFICATE_AUTHORITIES: /certs/ca/ca.crt
           FLEET_CA: /certs/ca/ca.crt
           FLEET_ENROLL: "1"
-          FLEET_INSECURE: "true"
           FLEET_SERVER_ELASTICSEARCH_CA: /certs/ca/ca.crt
           FLEET_SERVER_ELASTICSEARCH_HOST: "https://elasticsearch:9200"
-          FLEET_SERVER_ELASTICSEARCH_INSECURE: "true"
+          FLEET_SERVER_ELASTICSEARCH_USERNAME: "elastic"
+          FLEET_SERVER_ELASTICSEARCH_PASSWORD: "{{ common_password }}"
           FLEET_SERVER_ENABLE: "1"
           FLEET_SERVER_CERT: /certs/elasticsearch/elasticsearch.crt
           FLEET_SERVER_CERT_KEY: /certs/elasticsearch/elasticsearch.key
-          FLEET_SERVER_INSECURE_HTTP: "true"
           FLEET_SERVER_POLICY_ID: fleet-server-policy
           FLEET_URL: "https://fleet-server:8220"
           KIBANA_FLEET_CA: /certs/ca/ca.crt
@@ -747,14 +778,14 @@
           KIBANA_FLEET_PASSWORD: "{{ common_password }}"
           KIBANA_HOST: "https://kibana:5601"
 
-    - name: Wait for Fleet Server to be ready
+    - name: Wait for Fleet Server port to be available
       wait_for:
         host: localhost
         port: "{{ fleet_port }}"
         delay: 10
         timeout: 120
-        
-    - name: Check if Fleet is already initialized
+
+    - name: Wait for Kibana Fleet API to be ready
       uri:
         url: "https://localhost:{{ kibana_port }}/api/fleet/agents/setup"
         method: GET
@@ -763,12 +794,153 @@
         force_basic_auth: yes
         headers:
           kbn-xsrf: "true"
-          Content-Type: "application/json"
+        validate_certs: no
+        status_code: [200]
+      register: fleet_api_ready
+      until: fleet_api_ready.status == 200
+      retries: 30
+      delay: 10
+
+    # ============================================
+    # Create Fleet Server Policy
+    # ============================================
+    - name: Check if fleet-server-policy exists
+      uri:
+        url: "https://localhost:{{ kibana_port }}/api/fleet/agent_policies/fleet-server-policy"
+        method: GET
+        user: elastic
+        password: "{{ common_password }}"
+        force_basic_auth: yes
+        headers:
+          kbn-xsrf: "true"
         validate_certs: no
         status_code: [200, 404]
-      register: fleet_status
-      ignore_errors: yes
+      register: fleet_policy_check
 
+    - name: Create Fleet Server policy
+      uri:
+        url: "https://localhost:{{ kibana_port }}/api/fleet/agent_policies"
+        method: POST
+        user: elastic
+        password: "{{ common_password }}"
+        force_basic_auth: yes
+        headers:
+          kbn-xsrf: "true"
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          id: "fleet-server-policy"
+          name: "Fleet Server Policy"
+          namespace: "default"
+          monitoring_enabled:
+            - logs
+            - metrics
+          has_fleet_server: true
+        validate_certs: no
+        status_code: [200, 201]
+      when: fleet_policy_check.status == 404
+      register: fleet_policy_created
+
+    # ============================================
+    # Get Fleet Server package version and add integration
+    # ============================================
+    - name: Get fleet_server package info
+      uri:
+        url: "https://localhost:{{ kibana_port }}/api/fleet/epm/packages/fleet_server"
+        method: GET
+        user: elastic
+        password: "{{ common_password }}"
+        force_basic_auth: yes
+        headers:
+          kbn-xsrf: "true"
+        validate_certs: no
+        status_code: [200]
+      register: fleet_server_package
+
+    - name: Set fleet_server package version
+      set_fact:
+        fleet_server_version: "{{ fleet_server_package.json.item.version }}"
+
+    - name: Debug fleet_server package version
+      debug:
+        msg: "Fleet Server package version: {{ fleet_server_version }}"
+
+    - name: Get all package policies
+      uri:
+        url: "https://localhost:{{ kibana_port }}/api/fleet/package_policies"
+        method: GET
+        user: elastic
+        password: "{{ common_password }}"
+        force_basic_auth: yes
+        headers:
+          kbn-xsrf: "true"
+        validate_certs: no
+        status_code: [200]
+      register: all_package_policies
+
+    - name: Extract package policies list
+      set_fact:
+        package_policies_list: "{{ all_package_policies.json['items'] | default([]) }}"
+
+    - name: Check if Fleet Server integration exists
+      set_fact:
+        fleet_server_integration_exists: false
+
+    - name: Set integration exists if found
+      set_fact:
+        fleet_server_integration_exists: true
+      loop: "{{ package_policies_list }}"
+      loop_control:
+        loop_var: policy_item
+      when: 
+        - policy_item.policy_id is defined
+        - policy_item.policy_id == 'fleet-server-policy'
+        - policy_item.package is defined
+        - policy_item.package.name is defined
+        - policy_item.package.name == 'fleet_server'
+
+    - name: Debug integration check result
+      debug:
+        msg: "Fleet Server integration exists: {{ fleet_server_integration_exists }}"
+
+    - name: Add Fleet Server integration to policy
+      uri:
+        url: "https://localhost:{{ kibana_port }}/api/fleet/package_policies"
+        method: POST
+        user: elastic
+        password: "{{ common_password }}"
+        force_basic_auth: yes
+        headers:
+          kbn-xsrf: "true"
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          name: "fleet-server-integration"
+          namespace: "default"
+          policy_id: "fleet-server-policy"
+          enabled: true
+          inputs:
+            - type: "fleet-server"
+              enabled: true
+              streams: []
+              vars:
+                host:
+                  value: "0.0.0.0"
+                  type: "text"
+                port:
+                  value: 8220
+                  type: "integer"
+          package:
+            name: "fleet_server"
+            version: "{{ fleet_server_version }}"
+        validate_certs: no
+        status_code: [200, 201]
+      when: not fleet_server_integration_exists
+      register: fleet_integration_added
+
+    # ============================================
+    # Configure Fleet Server hosts and outputs
+    # ============================================
     - name: Get existing Fleet Server hosts
       uri:
         url: "https://localhost:{{ kibana_port }}/api/fleet/fleet_server_hosts"
@@ -781,12 +953,6 @@
         validate_certs: no
         status_code: [200]
       register: fleet_server_hosts
-      ignore_errors: yes
-
-    - name: Debug Fleet Server hosts response
-      debug:
-        var: fleet_server_hosts.json
-      when: fleet_server_hosts is succeeded
 
     - name: Create Fleet Server host configuration
       uri:
@@ -806,20 +972,13 @@
           is_default: true
         validate_certs: no
         status_code: [200, 201]
-      when: >
-        fleet_server_hosts is failed or
-        fleet_server_hosts.json.total is not defined or
-        fleet_server_hosts.json.total == 0
-      register: create_result
-      ignore_errors: yes
+      when: fleet_server_hosts.json.total == 0
+      register: create_fleet_host
 
     - name: Get first Fleet Server host ID
       set_fact:
         fleet_server_host_id: "{{ fleet_server_hosts.json['items'][0].id }}"
-      when: >
-        fleet_server_hosts is succeeded and
-        fleet_server_hosts.json.total is defined and
-        fleet_server_hosts.json.total > 0
+      when: fleet_server_hosts.json.total > 0
 
     - name: Update existing Fleet Server host
       uri:
@@ -838,7 +997,6 @@
         validate_certs: no
         status_code: [200]
       when: fleet_server_host_id is defined
-      ignore_errors: yes
 
     - name: Get existing outputs
       uri:
@@ -853,16 +1011,10 @@
         status_code: [200]
       register: fleet_outputs
 
-    - name: Debug outputs response
-      debug:
-        var: fleet_outputs.json
-
     - name: Get default output ID
       set_fact:
         default_output_id: "{{ fleet_outputs.json['items'][0].id }}"
-      when: >
-        fleet_outputs.json.total is defined and
-        fleet_outputs.json.total > 0
+      when: fleet_outputs.json.total > 0
 
     - name: Update Fleet default output
       uri:
@@ -882,11 +1034,373 @@
         validate_certs: no
         status_code: [200]
       when: default_output_id is defined
+    - name: Read CA certificate content
+      slurp:
+        src: /opt/orochi/certs/ca/ca.crt
+      register: ca_cert_content
+
+    - name: Update Fleet output with CA certificate
+      uri:
+        url: "https://localhost:{{ kibana_port }}/api/fleet/outputs/{{ default_output_id }}"
+        method: PUT
+        user: elastic
+        password: "{{ common_password }}"
+        force_basic_auth: yes
+        headers:
+          kbn-xsrf: "true"
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          hosts:
+            - "https://{{ selected_ip }}:{{ es_port }}"
+          ca_trusted_fingerprint: "{{ ca_fingerprint.stdout }}"
+          ssl:
+            certificate_authorities:
+              - "{{ ca_cert_content.content | b64decode }}"
+        validate_certs: no
+        status_code: [200]
+      when: default_output_id is defined
+
+    # ============================================
+    # Wait for Fleet Server to become healthy
+    # ============================================
+    - name: Clear Fleet Server state for fresh enrollment
+      shell: |
+        docker stop fleet-server
+        rm -rf /opt/orochi/fleetserverdata/*
+        docker start fleet-server
+      when: fleet_integration_added is changed
+
+    - name: Wait for Fleet Server to restart
+      wait_for:
+        host: localhost
+        port: "{{ fleet_port }}"
+        delay: 10
+        timeout: 120
+      when: fleet_integration_added is changed
+
+    - name: Wait for Fleet Server to become healthy
+      uri:
+        url: "https://localhost:{{ fleet_port }}/api/status"
+        method: GET
+        validate_certs: no
+        status_code: [200]
+      register: fleet_server_status
+      #until: fleet_server_status.json.status == "HEALTHY"
+      until: 
+        - fleet_server_status.status is defined
+        - fleet_server_status.status == 200
+        - fleet_server_status.json is defined
+        - fleet_server_status.json.status is defined
+        - fleet_server_status.json.status == "HEALTHY"      
+      retries: 30
+      delay: 10
       ignore_errors: yes
 
-    - name: Display Fleet Server status
+    - name: Get Fleet agents
+      uri:
+        url: "https://localhost:{{ kibana_port }}/api/fleet/agents"
+        method: GET
+        user: elastic
+        password: "{{ common_password }}"
+        force_basic_auth: yes
+        headers:
+          kbn-xsrf: "true"
+        validate_certs: no
+        status_code: [200]
+      register: fleet_agents
+      retries: 6
+      delay: 10
+      until: fleet_agents.json.total > 0
+      ignore_errors: yes
+
+    # ============================================
+    # Display summary
+    # ============================================
+    - name: Display Fleet Server configuration summary
       debug:
         msg:
-          - "Fleet Server is running at https://localhost:{{ fleet_port }}"
-          - "Fleet configured in Kibana"
+          - "=========================================="
+          - "Fleet Server Status"
+          - "=========================================="
+          - "Fleet Server URL: https://{{ selected_ip }}:{{ fleet_port }}"
+          - "Fleet Server Package Version: {{ fleet_server_version }}"
+          - "Fleet Server Status: {{ fleet_server_status.json.status | default('Check logs') }}"
+          - "Fleet Agents Enrolled: {{ fleet_agents.json.total | default('0') }}"
+          - "Elasticsearch Output: https://{{ selected_ip }}:{{ es_port }}"
           - "CA Fingerprint: {{ ca_fingerprint.stdout }}"
+          - "=========================================="
+          - "Access Kibana Fleet UI:"
+          - "https://{{ selected_ip }}:{{ kibana_port }}/app/fleet"
+          - "=========================================="
+
+    # ============================================
+    # THEHIVE 4 STACK (Refactored from Project Tiamat)
+    # ============================================
+
+    # 1. Create Data Directories
+    - name: Create TheHive directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+        owner: 1000
+        group: 1000
+      loop:
+        - /opt/orochi/hive_data
+        - /opt/orochi/hive_es_data
+        - /opt/orochi/cassandra_data
+        - /opt/orochi/hive_conf
+
+    # 2. Elasticsearch 7 (Required for TheHive 4)
+    # Tiamat used ES 7.9.2, we are using 7.17.9 (More stable)
+    - name: Start Elasticsearch 7
+      community.docker.docker_container:
+        name: elasticsearch-hive
+        image: "docker.elastic.co/elasticsearch/elasticsearch:7.17.9"
+        state: started
+        restart_policy: unless-stopped
+        networks:
+          - name: orochi-network
+        env:
+          discovery.type: "single-node"
+          xpack.security.enabled: "false"
+          cluster.name: "hive"
+          "ES_JAVA_OPTS": "-Xms512m -Xmx512m"
+        volumes:
+          - /opt/orochi/hive_es_data:/usr/share/elasticsearch/data
+        memory: "1g"
+
+    # --- 2. Cassandra (The Data Store) ---
+    - name: Start Cassandra
+      community.docker.docker_container:
+        name: cassandra
+        image: "cassandra:4.0"
+        state: started
+        restart_policy: unless-stopped
+        networks:
+          - name: orochi-network
+        volumes:
+          - /opt/orochi/cassandra_data:/var/lib/cassandra
+        env:
+          CASSANDRA_CLUSTER_NAME: "TheHive"
+          # TAME THE BEAST: Force Java to use less RAM
+          MAX_HEAP_SIZE: "1024M" 
+          HEAP_NEWSIZE: "256M"
+        # Increase container limit slightly to allow for overhead + Heap
+        memory: "2g" 
+        healthcheck:
+          test: ["CMD-SHELL", "[ $$(nodetool statusgossip) = running ] || exit 1"]
+          interval: 30s
+          timeout: 10s
+          retries: 5
+
+    # 4. Generate TheHive Config (Replaces Tiamat's application.conf injection)
+    - name: Generate Hive Secret
+      shell: cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 64 | head -n 1
+      register: hive_secret
+      changed_when: false
+
+    - name: Create TheHive application.conf
+      copy:
+        dest: /opt/orochi/hive_conf/application.conf
+        content: |
+          play.http.secret.key="{{ hive_secret.stdout }}"
+          
+          # Database (Cassandra)
+          db.janusgraph {
+            storage {
+              backend: cql
+              hostname: ["cassandra"]
+              cql {
+                cluster-name: TheHive
+                keyspace: thehive
+              }
+            }
+            index {
+              search {
+                backend: elasticsearch
+                hostname: ["elasticsearch-hive"]
+                index-name: thehive
+              }
+            }
+          }
+          
+          # Storage (Local files)
+          storage {
+            provider: localfs
+            localfs.directory: /opt/thp/thehive/files
+          }
+        mode: '0644'
+
+    # 5. Wait for Cassandra (It's slower than Mongo)
+    - name: Wait for Cassandra to initialize
+      pause:
+        seconds: 45
+
+    # 6. TheHive 4 Container
+    - name: Start TheHive 4
+      community.docker.docker_container:
+        name: thehive
+        image: "thehiveproject/thehive4:4.1.19"
+        state: started
+        restart_policy: unless-stopped
+        networks:
+          - name: orochi-network
+        ports:
+          - "9000:9000"
+        volumes:
+          - /opt/orochi/hive_conf/application.conf:/etc/thehive/application.conf
+          - /opt/orochi/hive_data:/opt/thp/thehive/files
+        memory: "2g"
+
+    - name: Display TheHive Status
+      debug:
+        msg: "TheHive is running at http://{{ selected_ip }}:9000 (User: admin / Pass: admin)"
+
+    # ============================================
+    # VELOCIRAPTOR (Digital Forensics & IR)
+    # ============================================
+
+    - name: Create Velociraptor build directory
+      file:
+        path: /opt/orochi/velociraptor-build
+        state: directory
+        mode: '0755'
+
+    - name: Create Velociraptor Dockerfile
+      copy:
+        dest: /opt/orochi/velociraptor-build/Dockerfile
+        content: |
+          FROM debian:bookworm-slim
+
+          # Install curl to query GitHub
+          RUN apt-get update && apt-get install -y \
+              curl \
+              ca-certificates \
+              && rm -rf /var/lib/apt/lists/*
+          RUN URL=$(curl -s https://api.github.com/repos/Velocidex/velociraptor/releases/latest \
+                | grep "browser_download_url.*linux-amd64\"" \
+                | grep -v "musl" \
+                | grep -v "sig" \
+                | tail -n 1 \
+                | cut -d '"' -f 4) \
+              && echo "Downloading: $URL" \
+              && curl -L -o /usr/local/bin/velociraptor "$URL" \
+              && chmod +x /usr/local/bin/velociraptor
+
+          RUN mkdir -p /data
+          WORKDIR /data
+          EXPOSE 8000 8001 8889
+
+          ENTRYPOINT ["/usr/local/bin/velociraptor"]
+        mode: '0644'
+
+    - name: Build Velociraptor image
+      community.docker.docker_image:
+        name: orochi/velociraptor
+        tag: latest
+        source: build
+        build:
+          path: /opt/orochi/velociraptor-build
+        state: present
+        force_source: yes
+    
+    - name: Create Velociraptor data directory
+      file:
+        path: /opt/orochi/velociraptor
+        state: directory
+        mode: '0755'
+
+    - name: Check if Velociraptor config exists
+      stat:
+        path: /opt/orochi/velociraptor/server.config.yaml
+      register: velox_config
+
+    # 3. Generate Configs (The Reliable Merge Method)
+    - name: Generate Velociraptor Configuration
+      when: not velox_config.stat.exists
+      block:
+        - name: Create Velociraptor Merge Config
+          copy:
+            dest: /opt/orochi/velociraptor/merge.json
+            content: |
+              {
+                "Client": {
+                  "server_urls": ["https://{{ selected_ip }}:8000/"],
+                  "use_self_signed_ssl": true
+                },
+                "API": {
+                  "bind_address": "0.0.0.0",
+                  "bind_port": 8001
+                },
+                "GUI": {
+                  "bind_address": "0.0.0.0",
+                  "bind_port": 8889,
+                  "public_url": "https://{{ selected_ip }}:8889/app/index.html"
+                },
+                "Frontend": {
+                  "bind_address": "0.0.0.0",
+                  "bind_port": 8000
+                }
+              }
+
+        - name: Generate Server Config
+          shell: |
+            docker run --rm \
+              -v /opt/orochi/velociraptor:/data \
+              orochi/velociraptor:latest \
+              config generate --merge_file /data/merge.json \
+              > /opt/orochi/velociraptor/server.config.yaml
+
+        # 3. Generate Client Config
+        - name: Generate Client Config
+          shell: |
+            docker run --rm \
+              -v /opt/orochi/velociraptor:/data \
+              orochi/velociraptor:latest \
+              config client -c /data/server.config.yaml \
+              > /opt/orochi/velociraptor/client.config.yaml
+
+        # 4. Clean up the temporary merge file
+        - name: Remove merge file
+          file:
+            path: /opt/orochi/velociraptor/merge.json
+            state: absent
+
+    - name: Start Velociraptor
+      community.docker.docker_container:
+        name: velociraptor
+        image: "orochi/velociraptor:latest"
+        state: started
+        restart_policy: unless-stopped
+        networks:
+          - name: orochi-network
+        ports:
+          - "8889:8889"
+          - "8000:8000"
+          - "8001:8001"
+        volumes:
+          - /opt/orochi/velociraptor:/data
+        command:
+          - "frontend"
+          - "-v"
+          - "--config"
+          - "/data/server.config.yaml"
+
+    - name: Wait for Velociraptor to start
+      pause:
+        seconds: 10
+
+    - name: Create/Update Velociraptor Admin User
+      shell: |
+        docker exec velociraptor \
+          velociraptor --config /data/server.config.yaml \
+          user add --role administrator '{{ velox_user }}' '{{ common_password }}'
+      changed_when: false
+      retries: 3
+      delay: 5
+
+    - name: Display Velociraptor Info
+      debug:
+        msg: "Velociraptor GUI: https://{{ selected_ip }}:8889 (User: {{ velox_user }} / Pass: {{ common_password }})"
