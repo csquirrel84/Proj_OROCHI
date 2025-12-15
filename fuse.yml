@@ -538,7 +538,7 @@
               --ca-cert config/certs/ca/ca.crt \
               --ca-key config/certs/ca/ca.key \
               --name elasticsearch \
-              --dns elasticsearch --dns localhost --ip 127.0.0.1
+              --dns elasticsearch --dns kibana --dns fleet-server --dns localhost --ip 127.0.0.1
             cd config/certs && unzip -o certs.zip
             chmod -R 755 /usr/share/elasticsearch/config/certs
           '
