@@ -1,12 +1,14 @@
 #!/usr/bin/env ansible-playbook
 ---
-- name: Check and Install Docker
+- name: Deploy Orochi Security Stack
   hosts: orochi_servers
-  become: true  # Need sudo for installation
+  become: true
   gather_facts: true
 
   tasks:
-    # Check if Docker is installed
+    # ============================================
+    # Docker Installation
+    # ============================================
     - name: Check if Docker is installed
       ansible.builtin.command: docker --version
       register: docker_installed
@@ -17,9 +19,6 @@
       ansible.builtin.debug:
         msg: "{{ 'Docker already installed: ' + docker_installed.stdout if docker_installed.rc == 0 else 'Docker not found - will install' }}"
 
-    # ============================================
-    # Install Docker on Debian/Ubuntu
-    # ============================================
     - name: Install Docker on Debian/Ubuntu
       when: 
         - docker_installed.rc != 0
@@ -65,9 +64,6 @@
             state: latest
             update_cache: true
 
-    # ============================================
-    # Install Docker on RHEL/CentOS/Fedora
-    # ============================================
     - name: Install Docker on RHEL/CentOS/Fedora
       when: 
         - docker_installed.rc != 0
@@ -98,9 +94,6 @@
               - docker-compose-plugin
             state: latest
 
-    # ============================================
-    # Post-installation tasks
-    # ============================================
     - name: Start and enable Docker service
       ansible.builtin.systemd:
         name: docker
@@ -115,9 +108,6 @@
         append: true
       when: docker_installed.rc != 0
 
-    # ============================================
-    # Verify installation
-    # ============================================
     - name: Verify Docker installation
       ansible.builtin.command: docker --version
       register: docker_final_version
@@ -127,20 +117,8 @@
       ansible.builtin.debug:
         msg: "Docker is ready: {{ docker_final_version.stdout }}"
 
-    - name: Get Docker info
-      ansible.builtin.command: "docker info --format '{% raw %}Server Version: {{.ServerVersion}}, Storage Driver: {{.Driver}}{% endraw %}'"
-      register: docker_info
-      changed_when: false
-
-    - name: Display Docker info
-      ansible.builtin.debug:
-        msg: "{{ docker_info.stdout }}"
-# ===========================================
-# Build .env file configuration
-# ===========================================
-
     # ============================================
-    # Build .env File Configuration
+    # Environment Configuration
     # ============================================
     - name: Check if .env file already exists
       stat:
@@ -413,15 +391,6 @@
         arkime_password_secret: "{{ arkime_password_secret_new.stdout }}"
       when: not (skip_env_prompts | default(false))
 
-    - name: Debug - Show parsed IPs
-      debug:
-        msg:
-          - "Selected IP: {{ selected_ip }}"
-          - "Arkime ES IP: {{ arkime_es_ip }}"
-          - "Velox Hostname: {{ velox_hostname }}"
-          - "Suricata Interface: {{ suricata_interface }}"
-      when: not (skip_env_prompts | default(false))
-
     - name: Create .env file
       copy:
         content: |
@@ -474,32 +443,19 @@
     - name: Define required Docker images
       set_fact:
         docker_images:
-          # Elastic Stack
           - "docker.elastic.co/elasticsearch/elasticsearch:{{ stack_version }}"
           - "docker.elastic.co/kibana/kibana:{{ stack_version }}"
           - "docker.elastic.co/logstash/logstash:{{ stack_version }}"
-          # TheHive Stack
-          - "thehiveproject/thehive4:latest"
-          - "docker.elastic.co/elasticsearch/elasticsearch:7.17.9"  # TheHive ES
+          - "thehiveproject/thehive4:4.1.19"
+          - "docker.elastic.co/elasticsearch/elasticsearch:7.17.9"
           - "cassandra:4.0"
-          # Velociraptor
-          # - "wlambert/velociraptor:latest"
-          # Mattermost
           - "mattermost/mattermost-team-edition:latest"
           - "postgres:15-alpine"
           - "mongo:4.4"
-          # Suricata
           - "jasonish/suricata:latest"
-          # Arkime
           - "mammo0/docker-arkime:latest"
-          # CyberChef
           - "ghcr.io/gchq/cyberchef:latest"
-          # Website
           - "nginx:alpine"
-
-    - name: Display images to be pulled
-      debug:
-        msg: "Pulling {{ docker_images | length }} Docker images..."
 
     - name: Pull Docker images
       community.docker.docker_image:
@@ -507,29 +463,14 @@
         source: pull
       loop: "{{ docker_images }}"
       register: pull_result
-      ignore_errors: true  # Continue if one fails
+      ignore_errors: true
 
     - name: Display pull summary
       debug:
         msg: "Docker image pull complete"
 
-    - name: Display individual image pull results
-      debug:
-        msg: "Image {{ item.item }}: {{ 'Pulled' if item.changed else 'Already up to date' }}"
-      loop: "{{ pull_result.results }}"
-
-    - name: Create Elasticsearch directories
-      file:
-        path: "{{ item }}"
-        state: directory
-        mode: '0755'
-      loop:
-        - /opt/orochi/data
-        - /opt/orochi/logs
-
-
-# ============================================
-    # Install and Configure Elasticsearch
+    # ============================================
+    # Elasticsearch Setup
     # ============================================
     - name: Create Elasticsearch directories
       file:
@@ -541,6 +482,8 @@
       loop:
         - /opt/orochi/certs
         - /opt/orochi/esdata
+        - /opt/orochi/data
+        - /opt/orochi/logs
 
     - name: Check if Elasticsearch certificates exist
       stat:
@@ -563,7 +506,7 @@
               --ca-key config/certs/ca/ca.key \
               --name elasticsearch \
               --dns elasticsearch --dns kibana --dns fleet-server --dns localhost \
-              --ip 127.0.0.1 --ip {{ selected_ip }} 
+              --ip 127.0.0.1 --ip {{ selected_ip }}
             cd config/certs && unzip -o certs.zip
             chmod -R 755 /usr/share/elasticsearch/config/certs
           '
@@ -577,7 +520,7 @@
         mode: '0755'
         owner: 1000
         group: 1000
-################################################################################
+
     - name: Create Docker network
       community.docker.docker_network:
         name: orochi-network
@@ -631,21 +574,20 @@
       retries: 30
       delay: 10
 
-    - name: Set default index template for single-node (no replicas)
+    # FIXED: Proper cluster configuration without breaking data streams
+    - name: Configure cluster settings for single-node
       uri:
-        url: "https://localhost:{{ es_port }}/_index_template/default_template"
+        url: "https://localhost:{{ es_port }}/_cluster/settings"
         method: PUT
         user: elastic
         password: "{{ common_password }}"
         body_format: json
         body:
-          index_patterns: ["*"]
-          priority: 1
-          template:
-            settings:
-              number_of_replicas: 0
+          persistent:
+            action:
+              auto_create_index: "true"
         validate_certs: no
-        status_code: 200
+        status_code: [200]
       ignore_errors: yes
 
     - name: Display Elasticsearch status
@@ -654,9 +596,10 @@
           - "Elasticsearch is running at https://localhost:{{ es_port }}"
           - "Cluster: {{ cluster_name }}"
           - "Version: {{ stack_version }}"
-    
-# ============================================
-    # Install and Configure Kibana
+          - "Single-node configuration applied"
+
+    # ============================================
+    # Kibana Setup
     # ============================================
     - name: Create Kibana data directory
       file:
@@ -703,7 +646,7 @@
           XPACK_SECURITY_ENCRYPTIONKEY: "fhjskloppd678ehkdfdlliverpoolfcr"
           XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY: "fhjskloppd678ehkdfdlliverpoolfcr"
           hostname: kibana
-          memory: "{{ mem_limit }}"
+        memory: "{{ mem_limit }}"
 
     - name: Wait for Kibana to be ready
       uri:
@@ -722,6 +665,7 @@
           - "Kibana is running at https://localhost:{{ kibana_port }}"
           - "Username: elastic"
           - "Password: (as configured)"
+
 
 # ============================================
     # Install and Configure Fleet Server
