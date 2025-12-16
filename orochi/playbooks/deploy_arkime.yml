@@ -1,0 +1,252 @@
+---
+- name: Deploy Arkime for Proj_OROCHI
+  hosts: orochi-node
+  become: false
+  
+  vars_files:
+    - ../vars/secrets.yml
+  
+  vars:
+    # Network configuration - CHANGE THIS TO YOUR INTERFACE
+    arkime_interface: "tailscale0"  # Your capture interface
+    
+    # OpenSearch/Elasticsearch connection
+    # Adjust if you have OpenSearch deployed elsewhere in OROCHI stack
+    arkime_opensearch_host: "localhost"
+    arkime_opensearch_port: 9200
+    arkime_opensearch_url: "http://{{ arkime_opensearch_host }}:{{ arkime_opensearch_port }}"
+    arkime_opensearch_insecure: true
+    
+    # Viewer settings
+    arkime_viewer_port: 8005
+    
+    # Cont3xt threat intelligence (optional)
+    arkime_enable_cont3xt: false
+    arkime_cont3xt_port: 3218
+    
+    # Security settings from secrets file
+    arkime_password_secret: "{{ vault_arkime_password_secret }}"
+    arkime_admin_password: "{{ vault_arkime_admin_password }}"
+    arkime_admin_user: "admin"
+    
+    # Capture settings
+    arkime_max_file_size_g: 12
+    arkime_max_file_time_m: 30
+    arkime_free_space_g: 100
+    arkime_packet_threads: 2
+    
+    # Performance tuning
+    arkime_pcap_write_method: "thread-zstd"  # Compressed writing
+    arkime_rotate_index: "daily"
+    
+    # BPF filter to exclude noise (adjust as needed)
+    # Exclude OpenSearch, SSH, and Tailscale management traffic
+    arkime_bpf: "not port 9200 and not port 9300 and not port 22"
+    
+    # Storage locations
+    arkime_base_dir: "/opt/arkime"
+    arkime_pcap_dir: "{{ arkime_base_dir }}/raw"
+    arkime_config_dir: "{{ arkime_base_dir }}/etc"
+    arkime_logs_dir: "{{ arkime_base_dir }}/logs"
+
+  pre_tasks:
+    - name: Display deployment information
+      debug:
+        msg:
+          - "================================================"
+          - "Deploying Arkime for Proj_OROCHI"
+          - "================================================"
+          - "Target Host: {{ ansible_host }}"
+          - "Capture Interface: {{ arkime_interface }}"
+          - "OpenSearch URL: {{ arkime_opensearch_url }}"
+          - "Viewer Port: {{ arkime_viewer_port }}"
+          - "================================================"
+
+    - name: Check if Docker is installed
+      command: docker --version
+      register: docker_check
+      changed_when: false
+      failed_when: false
+
+    - name: Fail if Docker is not installed
+      fail:
+        msg: "Docker is not installed. Please install Docker first."
+      when: docker_check.rc != 0
+
+    - name: Ensure Docker service is running
+      systemd:
+        name: docker
+        state: started
+        enabled: true
+      become: true
+
+    - name: Install required Python Docker library
+      pip:
+        name: docker
+        state: present
+      become: true
+      ignore_errors: true
+
+    - name: Detect available network interfaces
+      shell: ip -o link show | awk -F': ' '{print $2}' | grep -v lo
+      register: available_interfaces
+      changed_when: false
+
+    - name: Display available interfaces
+      debug:
+        msg:
+          - "Available network interfaces:"
+          - "{{ available_interfaces.stdout_lines }}"
+          - ""
+          - "Current configured interface: {{ arkime_interface }}"
+          - ""
+          - "WARNING: If {{ arkime_interface }} is not in the list above,"
+          - "         please update the 'arkime_interface' variable!"
+
+    - name: Verify capture interface exists
+      shell: ip link show {{ arkime_interface }}
+      register: interface_check
+      changed_when: false
+      failed_when: interface_check.rc != 0
+      ignore_errors: true
+
+    - name: Warn if interface not found
+      debug:
+        msg:
+          - "========================================"
+          - "WARNING: Interface {{ arkime_interface }} not found!"
+          - "Arkime will fail to capture traffic."
+          - "Please update arkime_interface variable."
+          - "========================================"
+      when: interface_check is failed
+
+  roles:
+    - role: arkime
+
+  post_tasks:
+    - name: Wait for Arkime services to stabilize
+      pause:
+        seconds: 10
+
+    - name: Check Arkime Capture status
+      command: docker ps --filter "name=arkime-capture" --format "{{.Status}}"
+      register: capture_status
+      become: true
+      changed_when: false
+      failed_when: false
+
+    - name: Check Arkime Viewer status
+      command: docker ps --filter "name=arkime-viewer" --format "{{.Status}}"
+      register: viewer_status
+      become: true
+      changed_when: false
+      failed_when: false
+
+    - name: Display container status
+      debug:
+        msg:
+          - "Arkime Capture: {{ capture_status.stdout | default('Not Running') }}"
+          - "Arkime Viewer: {{ viewer_status.stdout | default('Not Running') }}"
+
+    - name: Check Arkime Capture logs for errors
+      command: docker logs --tail 50 arkime-capture
+      register: capture_logs
+      become: true
+      changed_when: false
+      failed_when: false
+
+    - name: Check Arkime Viewer logs for errors
+      command: docker logs --tail 50 arkime-viewer
+      register: viewer_logs
+      become: true
+      changed_when: false
+      failed_when: false
+
+    - name: Display log summary
+      debug:
+        msg:
+          - "=== Recent Capture Logs ==="
+          - "{{ capture_logs.stdout_lines[-10:] | default(['No logs available']) }}"
+          - ""
+          - "=== Recent Viewer Logs ==="
+          - "{{ viewer_logs.stdout_lines[-10:] | default(['No logs available']) }}"
+
+    - name: Create quick reference file
+      copy:
+        content: |
+          # Proj_OROCHI - Arkime Quick Reference
+          # Generated: {{ ansible_date_time.iso8601 }}
+          
+          ## Access URLs
+          - Arkime Viewer: http://{{ ansible_host }}:{{ arkime_viewer_port }}
+          - Velociraptor: http://{{ ansible_host }}:8889
+          {% if arkime_enable_cont3xt %}
+          - Cont3xt: http://{{ ansible_host }}:{{ arkime_cont3xt_port }}
+          {% endif %}
+          
+          ## Credentials
+          Username: {{ arkime_admin_user }}
+          Password: [See vars/secrets.yml]
+          
+          ## Useful Commands
+          
+          ### Check Status
+          docker ps | grep arkime
+          
+          ### View Logs
+          docker logs -f arkime-capture
+          docker logs -f arkime-viewer
+          
+          ### Restart Services
+          docker restart arkime-capture
+          docker restart arkime-viewer
+          
+          ### Check Disk Space
+          df -h {{ arkime_pcap_dir }}
+          
+          ### Check Capture Stats
+          docker exec arkime-capture tail -f /opt/arkime/logs/capture.log
+          
+          ### Import Existing PCAP
+          docker cp /path/to/file.pcap arkime-capture:/opt/arkime/raw/
+          docker exec arkime-capture /opt/arkime/bin/capture \
+            --config /opt/arkime/etc/config.ini \
+            --readfile /opt/arkime/raw/file.pcap
+          
+          ## Configuration Files
+          - Config: {{ arkime_config_dir }}/config.ini
+          - PCAPs: {{ arkime_pcap_dir }}
+          - Logs: {{ arkime_logs_dir }}
+          
+          ## Network Interface
+          Capturing on: {{ arkime_interface }}
+          
+          ## OpenSearch
+          URL: {{ arkime_opensearch_url }}
+          
+        dest: "/home/{{ ansible_user }}/arkime-quickref.txt"
+        mode: '0644'
+
+    - name: Final deployment summary
+      debug:
+        msg:
+          - "================================================"
+          - "Proj_OROCHI Arkime Deployment Complete!"
+          - "================================================"
+          - ""
+          - "📊 Access Arkime Viewer: http://{{ ansible_host }}:{{ arkime_viewer_port }}"
+          - "👤 Username: {{ arkime_admin_user }}"
+          - "🔑 Password: Check vars/secrets.yml"
+          - ""
+          - "📁 PCAP Storage: {{ arkime_pcap_dir }}"
+          - "🌐 Capture Interface: {{ arkime_interface }}"
+          - ""
+          - "📖 Quick Reference: ~/arkime-quickref.txt"
+          - ""
+          - "⚠️  Remember to:"
+          - "   1. Verify capture interface is correct"
+          - "   2. Check OpenSearch connectivity"
+          - "   3. Monitor disk space for PCAPs"
+          - "   4. Configure firewall rules if needed"
+          - ""
+          - "================================================"

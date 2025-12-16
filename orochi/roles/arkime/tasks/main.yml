@@ -1,72 +1,198 @@
 ---
-# ==============================================
-# ARKIME ROLE - Full Packet Capture
-# ==============================================
-
 - name: Create Arkime directories
-  ansible.builtin.file:
+  file:
     path: "{{ item }}"
     state: directory
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
     mode: '0755'
   loop:
-    - "{{ directories.arkime }}"
-    - "{{ directories.arkime }}/pcap"
-    - "{{ directories.arkime }}/logs"
-    - "{{ directories.arkime }}/config"
-  tags: arkime
+    - "{{ arkime_base_dir }}"
+    - "{{ arkime_pcap_dir }}"
+    - "{{ arkime_config_dir }}"
+    - "{{ arkime_logs_dir }}"
+  become: true
 
-- name: Generate Arkime password secret
-  ansible.builtin.shell: openssl rand -base64 32
-  register: arkime_secret
-  changed_when: false
-  no_log: true
-  when: vault_arkime_secret is not defined or vault_arkime_secret == ""
-  tags: arkime
+- name: Create Arkime config.ini from template
+  template:
+    src: config.ini.j2
+    dest: "{{ arkime_config_dir }}/config.ini"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0644'
+  become: true
+  notify: restart arkime
 
-- name: Set Arkime password secret
-  ansible.builtin.set_fact:
-    arkime_password_secret: "{{ vault_arkime_secret | default(arkime_secret.stdout) }}"
-  no_log: true
-  tags: arkime
-
-- name: Pull Arkime image
+- name: Pull Arkime Docker image
   community.docker.docker_image:
-    name: "mammo0/docker-arkime:{{ arkime_version }}"
+    name: "{{ arkime_docker_image }}"
+    tag: "{{ arkime_docker_tag }}"
     source: pull
-  tags: arkime
+    state: present
+  become: true
 
-- name: Start Arkime container
+- name: Check if OpenSearch is running
+  wait_for:
+    host: "{{ arkime_opensearch_host }}"
+    port: "{{ arkime_opensearch_port }}"
+    timeout: 10
+    state: started
+  ignore_errors: true
+  register: opensearch_check
+
+- name: Display OpenSearch status
+  debug:
+    msg: "OpenSearch is {{ 'available' if opensearch_check is succeeded else 'NOT available - Arkime may fail to initialize' }}"
+
+- name: Initialize Arkime Elasticsearch indices (first run only)
   community.docker.docker_container:
-    name: arkime
-    image: "mammo0/docker-arkime:{{ arkime_version }}"
+    name: arkime-init
+    image: "{{ arkime_docker_image }}:{{ arkime_docker_tag }}"
+    command: >
+      /opt/arkime/db/db.pl
+      {{ '--insecure' if arkime_opensearch_insecure else '' }}
+      {{ arkime_opensearch_url }}
+      init
+    network_mode: "{{ arkime_network_mode }}"
+    detach: false
+    cleanup: true
+    auto_remove: true
+  become: true
+  register: arkime_init
+  failed_when: 
+    - arkime_init.rc != 0
+    - "'already exists' not in arkime_init.stderr | default('')"
+  when: opensearch_check is succeeded
+
+- name: Deploy Arkime Capture container
+  community.docker.docker_container:
+    name: arkime-capture
+    image: "{{ arkime_docker_image }}:{{ arkime_docker_tag }}"
+    command: "/opt/arkime/bin/docker.sh capture"
     state: started
     restart_policy: unless-stopped
-    hostname: arkime
-    network_mode: host
+    network_mode: "{{ arkime_network_mode }}"
     capabilities:
       - NET_ADMIN
       - NET_RAW
-    volumes:
-      - "{{ directories.arkime }}/pcap:/data/pcap"
-      - "{{ directories.arkime }}/logs:/data/logs"
-      - "{{ directories.arkime }}/config:/data/config"
+      - IPC_LOCK
     env:
-      ES_HOST: "{{ orochi_server_ip }}"
-      ES_PORT: "{{ ports.elasticsearch | string }}"
-      ES_USER: "elastic"
-      ES_PASSWORD: "{{ elasticsearch_password }}"
-      ARKIME_PASSWORD: "{{ arkime_password }}"
-      ARKIME_ADMIN_PASSWORD: "{{ arkime_password }}"
-      CAPTURE_INTERFACE: "{{ suricata.interface }}"
-      VIEWER_PORT: "{{ ports.arkime | string }}"
-    memory: "{{ resources.arkime.memory }}"
-  tags: arkime
+      ARKIME_INTERFACE: "{{ arkime_interface }}"
+      ARKIME_ELASTICSEARCH: "{{ arkime_opensearch_url }}"
+      ARKIME_PASSWORD_SECRET: "{{ arkime_password_secret }}"
+      ARKIME_PCAP_DIR: "/opt/arkime/raw"
+      ARKIME_BPF: "{{ arkime_bpf | default('') }}"
+    volumes:
+      - "{{ arkime_pcap_dir }}:/opt/arkime/raw"
+      - "{{ arkime_config_dir }}/config.ini:/opt/arkime/etc/config.ini:ro"
+      - "{{ arkime_logs_dir }}:/opt/arkime/logs"
+    log_driver: "{{ arkime_log_driver }}"
+    log_options:
+      max-size: "{{ arkime_log_max_size }}"
+      max-file: "{{ arkime_log_max_file }}"
+  become: true
+  when: 
+    - arkime_enable_capture | default(true)
+    - opensearch_check is succeeded
 
-- name: Display Arkime status
-  ansible.builtin.debug:
+- name: Deploy Arkime Viewer container
+  community.docker.docker_container:
+    name: arkime-viewer
+    image: "{{ arkime_docker_image }}:{{ arkime_docker_tag }}"
+    command: "/opt/arkime/bin/docker.sh viewer"
+    state: started
+    restart_policy: unless-stopped
+    network_mode: "{{ arkime_network_mode }}"
+    env:
+      ARKIME_ELASTICSEARCH: "{{ arkime_opensearch_url }}"
+      ARKIME_PASSWORD_SECRET: "{{ arkime_password_secret }}"
+      ARKIME_VIEWER_PORT: "{{ arkime_viewer_port }}"
+      ARKIME_CERT_FILE: "{{ arkime_cert_file | default('') }}"
+      ARKIME_KEY_FILE: "{{ arkime_key_file | default('') }}"
+    ports:
+      - "{{ arkime_viewer_port }}:{{ arkime_viewer_port }}"
+    volumes:
+      - "{{ arkime_pcap_dir }}:/opt/arkime/raw"
+      - "{{ arkime_config_dir }}/config.ini:/opt/arkime/etc/config.ini:ro"
+      - "{{ arkime_logs_dir }}:/opt/arkime/logs"
+    log_driver: "{{ arkime_log_driver }}"
+    log_options:
+      max-size: "{{ arkime_log_max_size }}"
+      max-file: "{{ arkime_log_max_file }}"
+  become: true
+  when: 
+    - arkime_enable_viewer | default(true)
+    - opensearch_check is succeeded
+
+- name: Wait for Arkime Viewer to be ready
+  wait_for:
+    host: "{{ ansible_host }}"
+    port: "{{ arkime_viewer_port }}"
+    delay: 5
+    timeout: 60
+    state: started
+  when: 
+    - arkime_enable_viewer | default(true)
+    - opensearch_check is succeeded
+
+- name: Create Arkime admin user
+  community.docker.docker_container_exec:
+    container: arkime-viewer
+    command: >
+      /opt/arkime/bin/arkime_add_user.sh
+      {{ arkime_admin_user }}
+      "{{ arkime_admin_fullname }}"
+      {{ arkime_admin_password }}
+      --admin
+  become: true
+  register: arkime_user_create
+  failed_when:
+    - arkime_user_create.rc != 0
+    - "'already exists' not in arkime_user_create.stderr | default('')"
+  no_log: true
+  when: 
+    - arkime_enable_viewer | default(true)
+    - opensearch_check is succeeded
+
+- name: Deploy Arkime Cont3xt container (optional)
+  community.docker.docker_container:
+    name: arkime-cont3xt
+    image: "{{ arkime_docker_image }}:{{ arkime_docker_tag }}"
+    command: "/opt/arkime/bin/docker.sh cont3xt"
+    state: started
+    restart_policy: unless-stopped
+    network_mode: "{{ arkime_network_mode }}"
+    env:
+      ARKIME_CONT3XT_PORT: "{{ arkime_cont3xt_port }}"
+      ARKIME_ELASTICSEARCH: "{{ arkime_opensearch_url }}"
+    ports:
+      - "{{ arkime_cont3xt_port }}:{{ arkime_cont3xt_port }}"
+    volumes:
+      - "{{ arkime_config_dir }}/cont3xt.ini:/opt/arkime/etc/cont3xt.ini:ro"
+    log_driver: "{{ arkime_log_driver }}"
+    log_options:
+      max-size: "{{ arkime_log_max_size }}"
+      max-file: "{{ arkime_log_max_file }}"
+  become: true
+  when: 
+    - arkime_enable_cont3xt | default(false)
+    - opensearch_check is succeeded
+
+- name: Display Arkime connection information
+  debug:
     msg:
-      - "Arkime is running!"
-      - "Viewer: http://{{ orochi_server_ip }}:{{ ports.arkime }}"
-      - "PCAP Storage: {{ directories.arkime }}/pcap"
-      - "Capture interface: {{ suricata.interface }}"
-  tags: arkime
+      - "============================================"
+      - "Arkime Deployment Complete - Proj_OROCHI"
+      - "============================================"
+      - "Viewer URL: {{ 'https' if arkime_cert_file else 'http' }}://{{ ansible_host }}:{{ arkime_viewer_port }}"
+      - "Username: {{ arkime_admin_user }}"
+      - "Password: [Check vars/secrets.yml]"
+      - "Capture Interface: {{ arkime_interface }}"
+      - "PCAP Directory: {{ arkime_pcap_dir }}"
+      - "OpenSearch Status: {{ 'Connected' if opensearch_check is succeeded else 'NOT AVAILABLE' }}"
+      - "{{ 'Cont3xt URL: http://' + ansible_host + ':' + arkime_cont3xt_port | string if arkime_enable_cont3xt | default(false) else '' }}"
+      - "============================================"
+      - "Integration with Proj_OROCHI stack:"
+      - "  - Velociraptor: http://{{ ansible_host }}:8889"
+      - "  - Arkime: http://{{ ansible_host }}:{{ arkime_viewer_port }}"
+      - "============================================"
