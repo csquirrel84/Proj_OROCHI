@@ -3,17 +3,15 @@
 # ==============================================
 # OROCHI SECURITY STACK - INTERACTIVE DEPLOYER
 # ==============================================
-# Usage: 
-#   ./site.yml                    # Interactive menu
-#   ./site.yml -e "menu_choice=1" # Deploy all non-interactively
-#
-# Based on Project Tiamat by csquirrel84
-# ==============================================
 
 - name: Orochi Security Stack Deployer
   hosts: orochi_servers
+  become: true
   gather_facts: true
   
+  vars_files:
+    - vars/secrets.yml
+
   vars:
     menu_options:
       "1": "Deploy Complete Stack (All Services)"
@@ -48,8 +46,7 @@
           ╚═══════════════════════════════════════════════════════════════╝
           
           Target Host: {{ inventory_hostname }}
-          Server IP: {{ orochi_server_ip }}
-          Base Path: {{ orochi_base_path }}
+          Server IP: {{ ansible_default_ipv4.address | default('N/A') }}
           
       tags: always
 
@@ -102,6 +99,8 @@
         - ansible.builtin.include_role:
             name: common
         - ansible.builtin.include_role:
+            name: environment
+        - ansible.builtin.include_role:
             name: certificates
         - ansible.builtin.include_role:
             name: elasticsearch
@@ -129,6 +128,8 @@
         - ansible.builtin.include_role:
             name: common
         - ansible.builtin.include_role:
+            name: environment
+        - ansible.builtin.include_role:
             name: certificates
         - ansible.builtin.include_role:
             name: elasticsearch
@@ -144,6 +145,8 @@
         - ansible.builtin.include_role:
             name: common
         - ansible.builtin.include_role:
+            name: environment
+        - ansible.builtin.include_role:
             name: thehive
 
     # Option 4: Velociraptor
@@ -152,6 +155,8 @@
       block:
         - ansible.builtin.include_role:
             name: common
+        - ansible.builtin.include_role:
+            name: environment
         - ansible.builtin.include_role:
             name: velociraptor
 
@@ -162,6 +167,8 @@
         - ansible.builtin.include_role:
             name: common
         - ansible.builtin.include_role:
+            name: environment
+        - ansible.builtin.include_role:
             name: suricata
 
     # Option 6: Arkime
@@ -170,6 +177,8 @@
       block:
         - ansible.builtin.include_role:
             name: common
+        - ansible.builtin.include_role:
+            name: environment
         - ansible.builtin.include_role:
             name: certificates
         - ansible.builtin.include_role:
@@ -193,6 +202,8 @@
         - ansible.builtin.include_role:
             name: common
         - ansible.builtin.include_role:
+            name: environment
+        - ansible.builtin.include_role:
             name: mattermost
 
     # Option 9: Nginx
@@ -201,6 +212,8 @@
       block:
         - ansible.builtin.include_role:
             name: common
+        - ansible.builtin.include_role:
+            name: environment
         - ansible.builtin.include_role:
             name: certificates
         - ansible.builtin.include_role:
@@ -211,7 +224,7 @@
       when: menu_choice == "10"
       block:
         - name: Get running containers
-          ansible.builtin.command: docker ps --format "table {{ '{{' }}.Names{{ '}}' }}\t{{ '{{' }}.Status{{ '}}' }}\t{{ '{{' }}.Ports{{ '}}' }}"
+          ansible.builtin.command: docker ps --format "table {% raw %}{{.Names}}\t{{.Status}}\t{{.Ports}}{% endraw %}"
           register: container_status
           changed_when: false
 
@@ -228,9 +241,33 @@
             prompt: "WARNING: This will remove all Orochi containers and data. Type 'YES' to confirm"
           register: confirm_teardown
 
-        - name: Execute teardown
+        - name: Stop all Orochi containers
+          community.docker.docker_container:
+            name: "{{ item }}"
+            state: absent
+          loop:
+            - nginx-proxy
+            - mattermost
+            - postgres-mattermost
+            - cyberchef
+            - arkime
+            - suricata
+            - velociraptor
+            - thehive
+            - cassandra
+            - elasticsearch-hive
+            - fleet-server
+            - kibana
+            - elasticsearch
+          ignore_errors: true
           when: confirm_teardown.user_input == "YES"
-          ansible.builtin.include_tasks: playbooks/teardown.yml
+
+        - name: Remove Docker network
+          community.docker.docker_network:
+            name: "{{ orochi_network_name | default('orochi-network') }}"
+            state: absent
+          ignore_errors: true
+          when: confirm_teardown.user_input == "YES"
 
   post_tasks:
     - name: Display Access Information
@@ -240,19 +277,14 @@
           ╔═══════════════════════════════════════════════════════════════╗
           ║                    DEPLOYMENT COMPLETE                        ║
           ╠═══════════════════════════════════════════════════════════════╣
-          ║  Service URLs (if deployed):                                  ║
+          ║  Check {{ orochi_base_path | default('/opt/orochi') }}/.env for credentials            ║
           ║                                                               ║
-          ║  • Elasticsearch: https://{{ orochi_server_ip }}:{{ ports.elasticsearch }}              ║
-          ║  • Kibana:        https://{{ orochi_server_ip }}:{{ ports.kibana }}                     ║
-          ║  • Fleet Server:  https://{{ orochi_server_ip }}:{{ ports.fleet }}                      ║
-          ║  • TheHive:       http://{{ orochi_server_ip }}:{{ ports.thehive }}                     ║
-          ║  • Velociraptor:  https://{{ orochi_server_ip }}:{{ ports.velociraptor_gui }}           ║
-          ║  • Suricata:      http://{{ orochi_server_ip }}:{{ ports.suricata }}                    ║
-          ║  • Arkime:        http://{{ orochi_server_ip }}:{{ ports.arkime }}                      ║
-          ║  • CyberChef:     http://{{ orochi_server_ip }}:{{ ports.cyberchef }}                   ║
-          ║  • Mattermost:    http://{{ orochi_server_ip }}:{{ ports.mattermost }}                  ║
-          ║                                                               ║
-          ║  Default Credentials: {{ orochi_admin_user }} / [configured password]   ║
+          ║  Common Services:                                             ║
+          ║  • Elasticsearch: https://<IP>:9200                           ║
+          ║  • Kibana:        https://<IP>:5601                           ║
+          ║  • Fleet Server:  https://<IP>:8220                           ║
+          ║  • TheHive:       http://<IP>:9000                            ║
+          ║  • Velociraptor:  https://<IP>:8889                           ║
           ╚═══════════════════════════════════════════════════════════════╝
           
       when: menu_choice not in ["0", "10", "11"]

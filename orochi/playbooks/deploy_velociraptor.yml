@@ -5,6 +5,8 @@
   hosts: orochi_servers
   become: true
   gather_facts: true
+  vars_files:
+    - ../vars/secrets.yml
   
   roles:
     - common

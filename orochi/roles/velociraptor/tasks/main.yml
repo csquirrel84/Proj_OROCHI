@@ -1,38 +1,48 @@
 ---
 # ==============================================
-# VELOCIRAPTOR ROLE
+# 1. PREPARATION & DOWNLOAD
 # ==============================================
 
-- name: Create Velociraptor directories
+- name: Create Velociraptor build directories
   ansible.builtin.file:
-    path: "{{ item }}"
+    path: /opt/orochi/velociraptor-build
     state: directory
     mode: '0755'
-  loop:
-    - "{{ directories.velociraptor }}"
-    - "{{ directories.velociraptor }}/build"
-  tags: velociraptor
+
+- name: Get latest Velociraptor release info from GitHub
+  ansible.builtin.uri:
+    url: https://api.github.com/repos/Velocidex/velociraptor/releases/latest
+    return_content: true
+  register: velox_release_info
+  check_mode: false
+
+- name: Parse download URL for Linux AMD64
+  ansible.builtin.set_fact:
+    velox_url: >-
+      {{ 
+        velox_release_info.json.assets 
+        | selectattr('name', 'search', 'linux-amd64') 
+        | rejectattr('name', 'search', 'sig') 
+        | rejectattr('name', 'search', 'musl') 
+        | map(attribute='browser_download_url') 
+        | first 
+      }}
+
+- name: Download Velociraptor binary
+  ansible.builtin.get_url:
+    url: "{{ velox_url }}"
+    dest: /opt/orochi/velociraptor-build/velociraptor
+    mode: '0755'
+    force: true  # Checks timestamp/size to ensure we always have the latest
 
 - name: Create Velociraptor Dockerfile
   ansible.builtin.copy:
-    dest: "{{ directories.velociraptor }}/build/Dockerfile"
+    dest: /opt/orochi/velociraptor-build/Dockerfile
     content: |
       FROM debian:bookworm-slim
       
-      RUN apt-get update && apt-get install -y \
-          curl \
-          ca-certificates \
-          && rm -rf /var/lib/apt/lists/*
-      
-      RUN URL=$(curl -s https://api.github.com/repos/Velocidex/velociraptor/releases/latest \
-            | grep "browser_download_url.*linux-amd64\"" \
-            | grep -v "musl" \
-            | grep -v "sig" \
-            | tail -n 1 \
-            | cut -d '"' -f 4) \
-          && echo "Downloading: $URL" \
-          && curl -L -o /usr/local/bin/velociraptor "$URL" \
-          && chmod +x /usr/local/bin/velociraptor
+      # Copy the binary downloaded by Ansible
+      COPY velociraptor /usr/local/bin/velociraptor
       
       RUN mkdir -p /data
       WORKDIR /data
@@ -40,7 +50,6 @@
       
       ENTRYPOINT ["/usr/local/bin/velociraptor"]
     mode: '0644'
-  tags: velociraptor
 
 - name: Build Velociraptor image
   community.docker.docker_image:
@@ -48,116 +57,117 @@
     tag: latest
     source: build
     build:
-      path: "{{ directories.velociraptor }}/build"
+      path: /opt/orochi/velociraptor-build
     state: present
     force_source: true
-  tags: velociraptor
+
+# ==============================================
+# 2. CONFIGURATION
+# ==============================================
+
+- name: Create Velociraptor data directory
+  ansible.builtin.file:
+    path: /opt/orochi/velociraptor
+    state: directory
+    mode: '0755'
 
 - name: Check if Velociraptor config exists
   ansible.builtin.stat:
-    path: "{{ directories.velociraptor }}/server.config.yaml"
+    path: /opt/orochi/velociraptor/server.config.yaml
   register: velox_config
-  tags: velociraptor
 
-- name: Generate Velociraptor configuration
+- name: Generate Velociraptor Configuration
   when: not velox_config.stat.exists
-  tags: velociraptor
   block:
-    - name: Create Velociraptor merge config
+    - name: Create Velociraptor Merge Config
       ansible.builtin.copy:
-        dest: "{{ directories.velociraptor }}/merge.json"
+        dest: /opt/orochi/velociraptor/merge.json
         content: |
           {
             "Client": {
-              "server_urls": ["https://{{ orochi_server_ip }}:{{ ports.velociraptor_frontend }}/"],
+              "server_urls": ["https://{{ selected_ip }}:8000/"],
               "use_self_signed_ssl": true
             },
             "API": {
               "bind_address": "0.0.0.0",
-              "bind_port": {{ ports.velociraptor_api }}
+              "bind_port": 8001
             },
             "GUI": {
               "bind_address": "0.0.0.0",
-              "bind_port": {{ ports.velociraptor_gui }},
-              "public_url": "https://{{ orochi_server_ip }}:{{ ports.velociraptor_gui }}/app/index.html"
+              "bind_port": 8889,
+              "public_url": "https://{{ selected_ip }}:8889/app/index.html"
             },
             "Frontend": {
               "bind_address": "0.0.0.0",
-              "bind_port": {{ ports.velociraptor_frontend }}
+              "bind_port": 8000
             }
           }
-        mode: '0644'
 
-    - name: Generate server config
+    - name: Generate Server Config
       ansible.builtin.shell: |
         docker run --rm \
-          -v {{ directories.velociraptor }}:/data \
+          -v /opt/orochi/velociraptor:/data \
           orochi/velociraptor:latest \
           config generate --merge_file /data/merge.json \
-          > {{ directories.velociraptor }}/server.config.yaml
-      args:
-        creates: "{{ directories.velociraptor }}/server.config.yaml"
+          > /opt/orochi/velociraptor/server.config.yaml
 
-    - name: Generate client config
+    - name: Generate Client Config
       ansible.builtin.shell: |
         docker run --rm \
-          -v {{ directories.velociraptor }}:/data \
+          -v /opt/orochi/velociraptor:/data \
           orochi/velociraptor:latest \
           config client -c /data/server.config.yaml \
-          > {{ directories.velociraptor }}/client.config.yaml
-      args:
-        creates: "{{ directories.velociraptor }}/client.config.yaml"
+          > /opt/orochi/velociraptor/client.config.yaml
 
     - name: Remove merge file
       ansible.builtin.file:
-        path: "{{ directories.velociraptor }}/merge.json"
+        path: /opt/orochi/velociraptor/merge.json
         state: absent
 
-- name: Start Velociraptor
+# ==============================================
+# 3. RUNTIME & USER CREATION
+# ==============================================
+
+- name: Start Velociraptor container
   community.docker.docker_container:
     name: velociraptor
-    image: orochi/velociraptor:latest
+    image: "orochi/velociraptor:latest"
     state: started
     restart_policy: unless-stopped
-    hostname: velociraptor
+    recreate: true        # Forces container to update if image changed
+    pull: never           # Uses local build
     networks:
-      - name: "{{ orochi_network_name }}"
+      - name: orochi-network
     ports:
-      - "{{ ports.velociraptor_gui }}:{{ ports.velociraptor_gui }}"
-      - "{{ ports.velociraptor_frontend }}:{{ ports.velociraptor_frontend }}"
-      - "{{ ports.velociraptor_api }}:{{ ports.velociraptor_api }}"
+      - "8889:8889"
+      - "8000:8000"
+      - "8001:8001"
     volumes:
-      - "{{ directories.velociraptor }}:/data"
+      - /opt/orochi/velociraptor:/data
     command:
       - "frontend"
       - "-v"
       - "--config"
       - "/data/server.config.yaml"
-    memory: "{{ resources.velociraptor.memory }}"
-  tags: velociraptor
 
-- name: Wait for Velociraptor to start
+- name: Wait for Velociraptor to initialize
   ansible.builtin.pause:
-    seconds: 15
-  tags: velociraptor
+    seconds: 10
 
-- name: Create Velociraptor admin user
+- name: Create/Update Velociraptor Admin User
   ansible.builtin.shell: |
     docker exec velociraptor \
       velociraptor --config /data/server.config.yaml \
-      user add --role administrator '{{ velociraptor_user }}' '{{ velociraptor_password }}'
-  changed_when: false
-  ignore_errors: true
-  no_log: true
-  tags: velociraptor
+      user add --role administrator '{{ velox_user }}' '{{ common_password }}'
+  register: velox_user_create
+  changed_when: "'Created user' in velox_user_create.stdout"
+  failed_when: 
+    - velox_user_create.rc != 0
+    - "'already exists' not in velox_user_create.stderr"
 
-- name: Display Velociraptor status
+- name: Display Velociraptor Connection Info
   ansible.builtin.debug:
-    msg:
-      - "Velociraptor is running!"
-      - "GUI: https://{{ orochi_server_ip }}:{{ ports.velociraptor_gui }}"
-      - "Frontend (agents): https://{{ orochi_server_ip }}:{{ ports.velociraptor_frontend }}"
-      - "API: https://{{ orochi_server_ip }}:{{ ports.velociraptor_api }}"
-      - "Username: {{ velociraptor_user }}"
-      - "Client config: {{ directories.velociraptor }}/client.config.yaml"
-  tags: velociraptor
+    msg: 
+      - "Velociraptor GUI: https://{{ selected_ip }}:8889"
+      - "Username: {{ velox_user }}"
+      - "Password: {{ common_password }}"

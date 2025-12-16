@@ -14,7 +14,7 @@ orochi_server_ip: "{{ ansible_default_ipv4.address | default('127.0.0.1') }}"
 # ==============================================
 # VERSION PINNING
 # ==============================================
-elastic_stack_version: "9.0.2"
+elastic_stack_version: "9.2.2"
 elasticsearch_hive_version: "7.17.9"
 thehive_version: "4.1.19"
 cassandra_version: "4.0"
@@ -75,16 +75,16 @@ resources:
 # ==============================================
 # Default credentials - CHANGE THESE!
 orochi_admin_user: "admin"
-orochi_admin_password: "{{ vault_orochi_password | default('ChangeMe123!') }}"
+orochi_admin_password: "{{ common_password }}"
 
 # Service-specific (inherit from main by default)
-elasticsearch_password: "{{ orochi_admin_password }}"
-kibana_password: "{{ orochi_admin_password }}"
-thehive_password: "{{ orochi_admin_password }}"
-velociraptor_user: "{{ orochi_admin_user }}"
-velociraptor_password: "{{ orochi_admin_password }}"
-mattermost_password: "{{ orochi_admin_password }}"
-arkime_password: "{{ orochi_admin_password }}"
+elasticsearch_password: "{{ common_password }}"
+kibana_password: "{{ common_password }}"
+thehive_password: "{{ common_password }}"
+velox_user: "{{ orochi_admin_user }}"
+velociraptor_password: "{{ common_password }}"
+mattermost_password: "{{ common_password }}"
+arkime_password: "{{ common_password }}"
 
 # ==============================================
 # ELASTICSEARCH CONFIGURATION

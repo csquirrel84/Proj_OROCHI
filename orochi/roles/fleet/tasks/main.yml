@@ -105,7 +105,8 @@
 
 - name: Check if Fleet Server integration exists
   ansible.builtin.set_fact:
-    fleet_server_integration_exists: "{{ all_package_policies.json.items | selectattr('policy_id', 'equalto', 'fleet-server-policy') | selectattr('package.name', 'equalto', 'fleet_server') | list | length > 0 }}"
+    # FIXED: Use ['items'] instead of .items to avoid conflict with python dict method
+    fleet_server_integration_exists: "{{ all_package_policies.json['items'] | selectattr('policy_id', 'equalto', 'fleet-server-policy') | selectattr('package.name', 'equalto', 'fleet_server') | list | length > 0 }}"
   tags: fleet
 
 - name: Add Fleet Server integration to policy
@@ -196,7 +197,8 @@
 
 - name: Update Fleet default output
   ansible.builtin.uri:
-    url: "https://localhost:{{ ports.kibana }}/api/fleet/outputs/{{ fleet_outputs.json.items[0].id }}"
+    # FIXED: Use ['items'] instead of .items
+    url: "https://localhost:{{ ports.kibana }}/api/fleet/outputs/{{ fleet_outputs.json['items'][0].id }}"
     method: PUT
     user: elastic
     password: "{{ elasticsearch_password }}"
