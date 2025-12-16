@@ -1,0 +1,30 @@
+---
+# ==============================================
+# CYBERCHEF ROLE - Data Analysis Tool
+# ==============================================
+
+- name: Pull CyberChef image
+  community.docker.docker_image:
+    name: "ghcr.io/gchq/cyberchef:{{ cyberchef_version }}"
+    source: pull
+  tags: cyberchef
+
+- name: Start CyberChef container
+  community.docker.docker_container:
+    name: cyberchef
+    image: "ghcr.io/gchq/cyberchef:{{ cyberchef_version }}"
+    state: started
+    restart_policy: unless-stopped
+    hostname: cyberchef
+    networks:
+      - name: "{{ orochi_network_name }}"
+    ports:
+      - "{{ ports.cyberchef }}:80"
+  tags: cyberchef
+
+- name: Display CyberChef status
+  ansible.builtin.debug:
+    msg:
+      - "CyberChef is running!"
+      - "URL: http://{{ orochi_server_ip }}:{{ ports.cyberchef }}"
+  tags: cyberchef

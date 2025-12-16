@@ -1,0 +1,97 @@
+---
+# ==============================================
+# MATTERMOST ROLE - Team Communication
+# ==============================================
+
+- name: Create Mattermost directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - "{{ directories.mattermost }}/config"
+    - "{{ directories.mattermost }}/data"
+    - "{{ directories.mattermost }}/logs"
+    - "{{ directories.mattermost }}/plugins"
+    - "{{ directories.mattermost }}/client-plugins"
+    - "{{ directories.postgres }}"
+  tags: mattermost
+
+# PostgreSQL for Mattermost
+- name: Pull PostgreSQL image
+  community.docker.docker_image:
+    name: "postgres:{{ postgres_version }}"
+    source: pull
+  tags: mattermost
+
+- name: Start PostgreSQL for Mattermost
+  community.docker.docker_container:
+    name: postgres-mattermost
+    image: "postgres:{{ postgres_version }}"
+    state: started
+    restart_policy: unless-stopped
+    hostname: postgres-mattermost
+    networks:
+      - name: "{{ orochi_network_name }}"
+    volumes:
+      - "{{ directories.postgres }}:/var/lib/postgresql/data"
+    env:
+      POSTGRES_USER: "mattermost"
+      POSTGRES_PASSWORD: "{{ mattermost_password }}"
+      POSTGRES_DB: "mattermost"
+  tags: mattermost
+
+- name: Wait for PostgreSQL
+  ansible.builtin.pause:
+    seconds: 15
+  tags: mattermost
+
+# Mattermost
+- name: Pull Mattermost image
+  community.docker.docker_image:
+    name: "mattermost/mattermost-team-edition:{{ mattermost_version }}"
+    source: pull
+  tags: mattermost
+
+- name: Start Mattermost
+  community.docker.docker_container:
+    name: mattermost
+    image: "mattermost/mattermost-team-edition:{{ mattermost_version }}"
+    state: started
+    restart_policy: unless-stopped
+    hostname: mattermost
+    networks:
+      - name: "{{ orochi_network_name }}"
+    ports:
+      - "{{ ports.mattermost }}:8065"
+    volumes:
+      - "{{ directories.mattermost }}/config:/mattermost/config"
+      - "{{ directories.mattermost }}/data:/mattermost/data"
+      - "{{ directories.mattermost }}/logs:/mattermost/logs"
+      - "{{ directories.mattermost }}/plugins:/mattermost/plugins"
+      - "{{ directories.mattermost }}/client-plugins:/mattermost/client/plugins"
+    env:
+      MM_SQLSETTINGS_DRIVERNAME: "postgres"
+      MM_SQLSETTINGS_DATASOURCE: "postgres://mattermost:{{ mattermost_password }}@postgres-mattermost:5432/mattermost?sslmode=disable"
+      MM_SERVICESETTINGS_SITEURL: "http://{{ orochi_server_ip }}:{{ ports.mattermost }}"
+    memory: "{{ resources.mattermost.memory }}"
+  tags: mattermost
+
+- name: Wait for Mattermost to be ready
+  ansible.builtin.uri:
+    url: "http://localhost:{{ ports.mattermost }}/api/v4/system/ping"
+    method: GET
+    status_code: [200]
+  register: mattermost_status
+  until: mattermost_status.status == 200
+  retries: 30
+  delay: 10
+  tags: mattermost
+
+- name: Display Mattermost status
+  ansible.builtin.debug:
+    msg:
+      - "Mattermost is running!"
+      - "URL: http://{{ orochi_server_ip }}:{{ ports.mattermost }}"
+      - "Complete the setup wizard in the browser"
+  tags: mattermost

@@ -1,0 +1,295 @@
+---
+# ==============================================
+# FLEET SERVER ROLE
+# ==============================================
+
+- name: Create Fleet Server directories
+  ansible.builtin.file:
+    path: "{{ directories.fleet }}"
+    state: directory
+    mode: '0777'
+    owner: 1000
+    group: 1000
+  tags: fleet
+
+- name: Wait for Kibana Fleet API
+  ansible.builtin.uri:
+    url: "https://localhost:{{ ports.kibana }}/api/fleet/agents/setup"
+    method: GET
+    user: elastic
+    password: "{{ elasticsearch_password }}"
+    force_basic_auth: true
+    headers:
+      kbn-xsrf: "true"
+    validate_certs: false
+    status_code: [200]
+  register: fleet_api_ready
+  until: fleet_api_ready.status == 200
+  retries: 30
+  delay: 10
+  tags: fleet
+
+# Create Fleet Server Policy
+- name: Check if fleet-server-policy exists
+  ansible.builtin.uri:
+    url: "https://localhost:{{ ports.kibana }}/api/fleet/agent_policies/fleet-server-policy"
+    method: GET
+    user: elastic
+    password: "{{ elasticsearch_password }}"
+    force_basic_auth: true
+    headers:
+      kbn-xsrf: "true"
+    validate_certs: false
+    status_code: [200, 404]
+  register: fleet_policy_check
+  tags: fleet
+
+- name: Create Fleet Server policy
+  ansible.builtin.uri:
+    url: "https://localhost:{{ ports.kibana }}/api/fleet/agent_policies"
+    method: POST
+    user: elastic
+    password: "{{ elasticsearch_password }}"
+    force_basic_auth: true
+    headers:
+      kbn-xsrf: "true"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      id: "fleet-server-policy"
+      name: "Fleet Server Policy"
+      namespace: "default"
+      monitoring_enabled:
+        - logs
+        - metrics
+      has_fleet_server: true
+    validate_certs: false
+    status_code: [200, 201]
+  when: fleet_policy_check.status == 404
+  tags: fleet
+
+# Get fleet_server package version
+- name: Get fleet_server package info
+  ansible.builtin.uri:
+    url: "https://localhost:{{ ports.kibana }}/api/fleet/epm/packages/fleet_server"
+    method: GET
+    user: elastic
+    password: "{{ elasticsearch_password }}"
+    force_basic_auth: true
+    headers:
+      kbn-xsrf: "true"
+    validate_certs: false
+    status_code: [200]
+  register: fleet_server_package
+  tags: fleet
+
+- name: Set fleet_server package version
+  ansible.builtin.set_fact:
+    fleet_server_version: "{{ fleet_server_package.json.item.version }}"
+  tags: fleet
+
+# Check if Fleet Server integration exists
+- name: Get all package policies
+  ansible.builtin.uri:
+    url: "https://localhost:{{ ports.kibana }}/api/fleet/package_policies"
+    method: GET
+    user: elastic
+    password: "{{ elasticsearch_password }}"
+    force_basic_auth: true
+    headers:
+      kbn-xsrf: "true"
+    validate_certs: false
+    status_code: [200]
+  register: all_package_policies
+  tags: fleet
+
+- name: Check if Fleet Server integration exists
+  ansible.builtin.set_fact:
+    fleet_server_integration_exists: "{{ all_package_policies.json.items | selectattr('policy_id', 'equalto', 'fleet-server-policy') | selectattr('package.name', 'equalto', 'fleet_server') | list | length > 0 }}"
+  tags: fleet
+
+- name: Add Fleet Server integration to policy
+  ansible.builtin.uri:
+    url: "https://localhost:{{ ports.kibana }}/api/fleet/package_policies"
+    method: POST
+    user: elastic
+    password: "{{ elasticsearch_password }}"
+    force_basic_auth: true
+    headers:
+      kbn-xsrf: "true"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "fleet-server-integration"
+      namespace: "default"
+      policy_id: "fleet-server-policy"
+      enabled: true
+      inputs:
+        - type: "fleet-server"
+          enabled: true
+          streams: []
+          vars:
+            host:
+              value: "0.0.0.0"
+              type: "text"
+            port:
+              value: 8220
+              type: "integer"
+      package:
+        name: "fleet_server"
+        version: "{{ fleet_server_version }}"
+    validate_certs: false
+    status_code: [200, 201]
+  when: not fleet_server_integration_exists
+  tags: fleet
+
+# Configure Fleet Server hosts
+- name: Get existing Fleet Server hosts
+  ansible.builtin.uri:
+    url: "https://localhost:{{ ports.kibana }}/api/fleet/fleet_server_hosts"
+    method: GET
+    user: elastic
+    password: "{{ elasticsearch_password }}"
+    force_basic_auth: true
+    headers:
+      kbn-xsrf: "true"
+    validate_certs: false
+    status_code: [200]
+  register: fleet_server_hosts
+  tags: fleet
+
+- name: Create Fleet Server host configuration
+  ansible.builtin.uri:
+    url: "https://localhost:{{ ports.kibana }}/api/fleet/fleet_server_hosts"
+    method: POST
+    user: elastic
+    password: "{{ elasticsearch_password }}"
+    force_basic_auth: true
+    headers:
+      kbn-xsrf: "true"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "Default Fleet Server"
+      host_urls:
+        - "https://{{ orochi_server_ip }}:{{ ports.fleet }}"
+      is_default: true
+    validate_certs: false
+    status_code: [200, 201]
+  when: fleet_server_hosts.json.total == 0
+  tags: fleet
+
+# Configure Fleet output
+- name: Get existing outputs
+  ansible.builtin.uri:
+    url: "https://localhost:{{ ports.kibana }}/api/fleet/outputs"
+    method: GET
+    user: elastic
+    password: "{{ elasticsearch_password }}"
+    force_basic_auth: true
+    headers:
+      kbn-xsrf: "true"
+    validate_certs: false
+    status_code: [200]
+  register: fleet_outputs
+  tags: fleet
+
+- name: Update Fleet default output
+  ansible.builtin.uri:
+    url: "https://localhost:{{ ports.kibana }}/api/fleet/outputs/{{ fleet_outputs.json.items[0].id }}"
+    method: PUT
+    user: elastic
+    password: "{{ elasticsearch_password }}"
+    force_basic_auth: true
+    headers:
+      kbn-xsrf: "true"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      hosts:
+        - "https://{{ orochi_server_ip }}:{{ ports.elasticsearch }}"
+      ca_trusted_fingerprint: "{{ ca_fingerprint }}"
+      ssl:
+        certificate_authorities:
+          - "{{ ca_certificate }}"
+    validate_certs: false
+    status_code: [200]
+  when: fleet_outputs.json.total > 0
+  tags: fleet
+
+# Start Fleet Server Container
+- name: Pull Elastic Agent image
+  community.docker.docker_image:
+    name: "docker.elastic.co/elastic-agent/elastic-agent:{{ elastic_stack_version }}"
+    source: pull
+  tags: fleet
+
+- name: Start Fleet Server container
+  community.docker.docker_container:
+    name: fleet-server
+    image: "docker.elastic.co/elastic-agent/elastic-agent:{{ elastic_stack_version }}"
+    state: started
+    restart_policy: unless-stopped
+    user: root
+    hostname: fleet-server
+    networks:
+      - name: "{{ orochi_network_name }}"
+    ports:
+      - "{{ ports.fleet }}:8220"
+    volumes:
+      - "{{ directories.certs }}:/certs:ro"
+      - "{{ directories.fleet }}:/usr/share/elastic-agent/state"
+      - "/var/lib/docker/containers:/var/lib/docker/containers:ro"
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "/sys/fs/cgroup:/hostfs/sys/fs/cgroup:ro"
+      - "/proc:/hostfs/proc:ro"
+      - "/:/hostfs:ro"
+    env:
+      FLEET_SERVER_ENABLE: "1"
+      FLEET_SERVER_POLICY_ID: "fleet-server-policy"
+      FLEET_SERVER_ELASTICSEARCH_HOST: "https://elasticsearch:9200"
+      FLEET_SERVER_ELASTICSEARCH_USERNAME: "elastic"
+      FLEET_SERVER_ELASTICSEARCH_PASSWORD: "{{ elasticsearch_password }}"
+      FLEET_SERVER_ELASTICSEARCH_CA: "/certs/ca/ca.crt"
+      FLEET_SERVER_CERT: "/certs/fleet-server/fleet-server.crt"
+      FLEET_SERVER_CERT_KEY: "/certs/fleet-server/fleet-server.key"
+      FLEET_URL: "https://fleet-server:8220"
+      FLEET_CA: "/certs/ca/ca.crt"
+      KIBANA_HOST: "https://kibana:5601"
+      KIBANA_FLEET_SETUP: "1"
+      KIBANA_FLEET_USERNAME: "elastic"
+      KIBANA_FLEET_PASSWORD: "{{ elasticsearch_password }}"
+      KIBANA_FLEET_CA: "/certs/ca/ca.crt"
+  tags: fleet
+
+- name: Wait for Fleet Server to be available
+  ansible.builtin.wait_for:
+    host: localhost
+    port: "{{ ports.fleet }}"
+    delay: 10
+    timeout: 120
+  tags: fleet
+
+- name: Wait for Fleet Server to be healthy
+  ansible.builtin.uri:
+    url: "https://localhost:{{ ports.fleet }}/api/status"
+    method: GET
+    validate_certs: false
+    status_code: [200]
+  register: fleet_server_status
+  until:
+    - fleet_server_status.status == 200
+    - fleet_server_status.json.status == "HEALTHY"
+  retries: 30
+  delay: 10
+  ignore_errors: true
+  tags: fleet
+
+- name: Display Fleet Server status
+  ansible.builtin.debug:
+    msg:
+      - "Fleet Server is running!"
+      - "URL: https://{{ orochi_server_ip }}:{{ ports.fleet }}"
+      - "Kibana Fleet: https://{{ orochi_server_ip }}:{{ ports.kibana }}/app/fleet"
+      - "Status: {{ fleet_server_status.json.status | default('Starting...') }}"
+  tags: fleet

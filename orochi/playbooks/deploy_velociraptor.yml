@@ -1,0 +1,11 @@
+#!/usr/bin/env ansible-playbook
+---
+# Deploy Velociraptor
+- name: Deploy Velociraptor
+  hosts: orochi_servers
+  become: true
+  gather_facts: true
+  
+  roles:
+    - common
+    - velociraptor

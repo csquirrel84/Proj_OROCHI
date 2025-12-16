@@ -1,0 +1,134 @@
+---
+# ==============================================
+# OROCHI SECURITY STACK - MAIN CONFIGURATION
+# ==============================================
+
+# Base Configuration
+orochi_base_path: /opt/orochi
+orochi_project_name: orochi
+
+# Network Configuration
+orochi_network_name: orochi-network
+orochi_server_ip: "{{ ansible_default_ipv4.address | default('127.0.0.1') }}"
+
+# ==============================================
+# VERSION PINNING
+# ==============================================
+elastic_stack_version: "9.0.2"
+elasticsearch_hive_version: "7.17.9"
+thehive_version: "4.1.19"
+cassandra_version: "4.0"
+mattermost_version: "latest"
+postgres_version: "15-alpine"
+suricata_version: "latest"
+arkime_version: "latest"
+cyberchef_version: "latest"
+nginx_version: "alpine"
+
+# ==============================================
+# PORT CONFIGURATION
+# ==============================================
+ports:
+  elasticsearch: 9200
+  kibana: 5601
+  fleet: 8220
+  thehive: 9000
+  velociraptor_gui: 8889
+  velociraptor_frontend: 8000
+  velociraptor_api: 8001
+  suricata: 8888
+  arkime: 8005
+  cyberchef: 8080
+  mattermost: 8065
+  nginx_http: 80
+  nginx_https: 443
+
+# ==============================================
+# RESOURCE LIMITS
+# ==============================================
+resources:
+  elasticsearch:
+    memory: "4g"
+    heap: "2g"
+  kibana:
+    memory: "2g"
+  thehive:
+    memory: "2g"
+  cassandra:
+    memory: "2g"
+    heap: "1024M"
+    heap_new: "256M"
+  elasticsearch_hive:
+    memory: "1g"
+    heap: "512m"
+  velociraptor:
+    memory: "2g"
+  suricata:
+    memory: "2g"
+  arkime:
+    memory: "2g"
+  mattermost:
+    memory: "1g"
+
+# ==============================================
+# AUTHENTICATION (Override in vault.yml)
+# ==============================================
+# Default credentials - CHANGE THESE!
+orochi_admin_user: "admin"
+orochi_admin_password: "{{ vault_orochi_password | default('ChangeMe123!') }}"
+
+# Service-specific (inherit from main by default)
+elasticsearch_password: "{{ orochi_admin_password }}"
+kibana_password: "{{ orochi_admin_password }}"
+thehive_password: "{{ orochi_admin_password }}"
+velociraptor_user: "{{ orochi_admin_user }}"
+velociraptor_password: "{{ orochi_admin_password }}"
+mattermost_password: "{{ orochi_admin_password }}"
+arkime_password: "{{ orochi_admin_password }}"
+
+# ==============================================
+# ELASTICSEARCH CONFIGURATION
+# ==============================================
+elasticsearch:
+  cluster_name: "orochi"
+  license: "basic"  # basic, trial, gold, platinum
+  
+# ==============================================
+# SURICATA CONFIGURATION
+# ==============================================
+suricata:
+  interface: "{{ ansible_default_ipv4.interface | default('eth0') }}"
+  home_net: "[192.168.0.0/16,10.0.0.0/8,172.16.0.0/12]"
+
+# ==============================================
+# VELOCIRAPTOR CONFIGURATION  
+# ==============================================
+velociraptor:
+  org_name: "Orochi Security"
+  
+# ==============================================
+# FEATURE FLAGS
+# ==============================================
+features:
+  ssl_enabled: true
+  nginx_proxy: false
+  monitoring: true
+
+# ==============================================
+# DATA DIRECTORIES
+# ==============================================
+directories:
+  certs: "{{ orochi_base_path }}/certs"
+  elasticsearch: "{{ orochi_base_path }}/elasticsearch"
+  kibana: "{{ orochi_base_path }}/kibana"
+  fleet: "{{ orochi_base_path }}/fleet"
+  thehive: "{{ orochi_base_path }}/thehive"
+  thehive_es: "{{ orochi_base_path }}/thehive-es"
+  cassandra: "{{ orochi_base_path }}/cassandra"
+  velociraptor: "{{ orochi_base_path }}/velociraptor"
+  suricata: "{{ orochi_base_path }}/suricata"
+  arkime: "{{ orochi_base_path }}/arkime"
+  mattermost: "{{ orochi_base_path }}/mattermost"
+  postgres: "{{ orochi_base_path }}/postgres"
+  nginx: "{{ orochi_base_path }}/nginx"
+  logs: "{{ orochi_base_path }}/logs"

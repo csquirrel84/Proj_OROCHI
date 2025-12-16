@@ -1,0 +1,14 @@
+#!/usr/bin/env ansible-playbook
+---
+# Deploy Elastic Stack (Elasticsearch + Kibana + Fleet)
+- name: Deploy Elastic Stack
+  hosts: orochi_servers
+  become: true
+  gather_facts: true
+  
+  roles:
+    - common
+    - certificates
+    - elasticsearch
+    - kibana
+    - fleet

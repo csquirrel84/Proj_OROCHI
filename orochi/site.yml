@@ -1,0 +1,259 @@
+#!/usr/bin/env ansible-playbook
+---
+# ==============================================
+# OROCHI SECURITY STACK - INTERACTIVE DEPLOYER
+# ==============================================
+# Usage: 
+#   ./site.yml                    # Interactive menu
+#   ./site.yml -e "menu_choice=1" # Deploy all non-interactively
+#
+# Based on Project Tiamat by csquirrel84
+# ==============================================
+
+- name: Orochi Security Stack Deployer
+  hosts: orochi_servers
+  gather_facts: true
+  
+  vars:
+    menu_options:
+      "1": "Deploy Complete Stack (All Services)"
+      "2": "Deploy Elastic Stack (Elasticsearch + Kibana + Fleet)"
+      "3": "Deploy TheHive 4 (Incident Response)"
+      "4": "Deploy Velociraptor (DFIR & Endpoint Visibility)"
+      "5": "Deploy Suricata (Network IDS)"
+      "6": "Deploy Arkime (Full Packet Capture)"
+      "7": "Deploy CyberChef (Data Analysis)"
+      "8": "Deploy Mattermost (Team Communication)"
+      "9": "Deploy Nginx Reverse Proxy"
+      "10": "Show Current Status"
+      "11": "Teardown (Remove All)"
+      "0": "Exit"
+
+  pre_tasks:
+    - name: Display Orochi Banner
+      ansible.builtin.debug:
+        msg: |
+          
+          ╔═══════════════════════════════════════════════════════════════╗
+          ║                                                               ║
+          ║     ██████  ██████   ██████   ██████ ██   ██ ██               ║
+          ║    ██    ██ ██   ██ ██    ██ ██      ██   ██ ██               ║
+          ║    ██    ██ ██████  ██    ██ ██      ███████ ██               ║
+          ║    ██    ██ ██   ██ ██    ██ ██      ██   ██ ██               ║
+          ║     ██████  ██   ██  ██████   ██████ ██   ██ ██               ║
+          ║                                                               ║
+          ║              SECURITY STACK DEPLOYER v1.0                     ║
+          ║         Based on Project Tiamat by csquirrel84                ║
+          ║                                                               ║
+          ╚═══════════════════════════════════════════════════════════════╝
+          
+          Target Host: {{ inventory_hostname }}
+          Server IP: {{ orochi_server_ip }}
+          Base Path: {{ orochi_base_path }}
+          
+      tags: always
+
+    - name: Display Menu
+      ansible.builtin.debug:
+        msg: |
+          
+          ┌─────────────────────────────────────────┐
+          │           DEPLOYMENT OPTIONS            │
+          ├─────────────────────────────────────────┤
+          │  1. Deploy Complete Stack               │
+          │  2. Deploy Elastic Stack                │
+          │  3. Deploy TheHive 4                    │
+          │  4. Deploy Velociraptor                 │
+          │  5. Deploy Suricata IDS                 │
+          │  6. Deploy Arkime                       │
+          │  7. Deploy CyberChef                    │
+          │  8. Deploy Mattermost                   │
+          │  9. Deploy Nginx Proxy                  │
+          │ 10. Show Status                         │
+          │ 11. Teardown All                        │
+          │  0. Exit                                │
+          └─────────────────────────────────────────┘
+          
+      when: menu_choice is not defined
+      tags: always
+
+    - name: Prompt for selection
+      ansible.builtin.pause:
+        prompt: "Enter your choice [1-11, 0 to exit]"
+      register: user_input
+      when: menu_choice is not defined
+      tags: always
+
+    - name: Set menu choice
+      ansible.builtin.set_fact:
+        menu_choice: "{{ user_input.user_input | default(menu_choice) }}"
+      tags: always
+
+  tasks:
+    # Exit
+    - name: Exit if selected
+      ansible.builtin.meta: end_play
+      when: menu_choice == "0"
+
+    # Option 1: Deploy All
+    - name: Deploy Complete Stack
+      when: menu_choice == "1"
+      block:
+        - ansible.builtin.include_role:
+            name: common
+        - ansible.builtin.include_role:
+            name: certificates
+        - ansible.builtin.include_role:
+            name: elasticsearch
+        - ansible.builtin.include_role:
+            name: kibana
+        - ansible.builtin.include_role:
+            name: fleet
+        - ansible.builtin.include_role:
+            name: thehive
+        - ansible.builtin.include_role:
+            name: velociraptor
+        - ansible.builtin.include_role:
+            name: suricata
+        - ansible.builtin.include_role:
+            name: arkime
+        - ansible.builtin.include_role:
+            name: cyberchef
+        - ansible.builtin.include_role:
+            name: mattermost
+
+    # Option 2: Elastic Stack
+    - name: Deploy Elastic Stack
+      when: menu_choice == "2"
+      block:
+        - ansible.builtin.include_role:
+            name: common
+        - ansible.builtin.include_role:
+            name: certificates
+        - ansible.builtin.include_role:
+            name: elasticsearch
+        - ansible.builtin.include_role:
+            name: kibana
+        - ansible.builtin.include_role:
+            name: fleet
+
+    # Option 3: TheHive
+    - name: Deploy TheHive
+      when: menu_choice == "3"
+      block:
+        - ansible.builtin.include_role:
+            name: common
+        - ansible.builtin.include_role:
+            name: thehive
+
+    # Option 4: Velociraptor
+    - name: Deploy Velociraptor
+      when: menu_choice == "4"
+      block:
+        - ansible.builtin.include_role:
+            name: common
+        - ansible.builtin.include_role:
+            name: velociraptor
+
+    # Option 5: Suricata
+    - name: Deploy Suricata
+      when: menu_choice == "5"
+      block:
+        - ansible.builtin.include_role:
+            name: common
+        - ansible.builtin.include_role:
+            name: suricata
+
+    # Option 6: Arkime
+    - name: Deploy Arkime
+      when: menu_choice == "6"
+      block:
+        - ansible.builtin.include_role:
+            name: common
+        - ansible.builtin.include_role:
+            name: certificates
+        - ansible.builtin.include_role:
+            name: elasticsearch
+        - ansible.builtin.include_role:
+            name: arkime
+
+    # Option 7: CyberChef
+    - name: Deploy CyberChef
+      when: menu_choice == "7"
+      block:
+        - ansible.builtin.include_role:
+            name: common
+        - ansible.builtin.include_role:
+            name: cyberchef
+
+    # Option 8: Mattermost
+    - name: Deploy Mattermost
+      when: menu_choice == "8"
+      block:
+        - ansible.builtin.include_role:
+            name: common
+        - ansible.builtin.include_role:
+            name: mattermost
+
+    # Option 9: Nginx
+    - name: Deploy Nginx Proxy
+      when: menu_choice == "9"
+      block:
+        - ansible.builtin.include_role:
+            name: common
+        - ansible.builtin.include_role:
+            name: certificates
+        - ansible.builtin.include_role:
+            name: nginx_proxy
+
+    # Option 10: Status
+    - name: Show Status
+      when: menu_choice == "10"
+      block:
+        - name: Get running containers
+          ansible.builtin.command: docker ps --format "table {{ '{{' }}.Names{{ '}}' }}\t{{ '{{' }}.Status{{ '}}' }}\t{{ '{{' }}.Ports{{ '}}' }}"
+          register: container_status
+          changed_when: false
+
+        - name: Display container status
+          ansible.builtin.debug:
+            msg: "{{ container_status.stdout_lines }}"
+
+    # Option 11: Teardown
+    - name: Teardown All
+      when: menu_choice == "11"
+      block:
+        - name: Confirm teardown
+          ansible.builtin.pause:
+            prompt: "WARNING: This will remove all Orochi containers and data. Type 'YES' to confirm"
+          register: confirm_teardown
+
+        - name: Execute teardown
+          when: confirm_teardown.user_input == "YES"
+          ansible.builtin.include_tasks: playbooks/teardown.yml
+
+  post_tasks:
+    - name: Display Access Information
+      ansible.builtin.debug:
+        msg: |
+          
+          ╔═══════════════════════════════════════════════════════════════╗
+          ║                    DEPLOYMENT COMPLETE                        ║
+          ╠═══════════════════════════════════════════════════════════════╣
+          ║  Service URLs (if deployed):                                  ║
+          ║                                                               ║
+          ║  • Elasticsearch: https://{{ orochi_server_ip }}:{{ ports.elasticsearch }}              ║
+          ║  • Kibana:        https://{{ orochi_server_ip }}:{{ ports.kibana }}                     ║
+          ║  • Fleet Server:  https://{{ orochi_server_ip }}:{{ ports.fleet }}                      ║
+          ║  • TheHive:       http://{{ orochi_server_ip }}:{{ ports.thehive }}                     ║
+          ║  • Velociraptor:  https://{{ orochi_server_ip }}:{{ ports.velociraptor_gui }}           ║
+          ║  • Suricata:      http://{{ orochi_server_ip }}:{{ ports.suricata }}                    ║
+          ║  • Arkime:        http://{{ orochi_server_ip }}:{{ ports.arkime }}                      ║
+          ║  • CyberChef:     http://{{ orochi_server_ip }}:{{ ports.cyberchef }}                   ║
+          ║  • Mattermost:    http://{{ orochi_server_ip }}:{{ ports.mattermost }}                  ║
+          ║                                                               ║
+          ║  Default Credentials: {{ orochi_admin_user }} / [configured password]   ║
+          ╚═══════════════════════════════════════════════════════════════╝
+          
+      when: menu_choice not in ["0", "10", "11"]
+      tags: always

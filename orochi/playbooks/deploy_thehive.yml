@@ -1,0 +1,11 @@
+#!/usr/bin/env ansible-playbook
+---
+# Deploy TheHive 4
+- name: Deploy TheHive 4
+  hosts: orochi_servers
+  become: true
+  gather_facts: true
+  
+  roles:
+    - common
+    - thehive

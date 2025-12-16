@@ -1,0 +1,183 @@
+---
+# ==============================================
+# NGINX REVERSE PROXY ROLE
+# ==============================================
+
+- name: Create Nginx directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - "{{ directories.nginx }}"
+    - "{{ directories.nginx }}/conf.d"
+    - "{{ directories.nginx }}/ssl"
+  tags: nginx
+
+- name: Copy certificates for Nginx
+  ansible.builtin.copy:
+    src: "{{ directories.certs }}/{{ item }}"
+    dest: "{{ directories.nginx }}/ssl/{{ item | basename }}"
+    remote_src: true
+    mode: '0644'
+  loop:
+    - ca/ca.crt
+    - elasticsearch/elasticsearch.crt
+    - elasticsearch/elasticsearch.key
+  tags: nginx
+
+- name: Create Nginx main configuration
+  ansible.builtin.copy:
+    dest: "{{ directories.nginx }}/nginx.conf"
+    content: |
+      user nginx;
+      worker_processes auto;
+      error_log /var/log/nginx/error.log warn;
+      pid /var/run/nginx.pid;
+      
+      events {
+          worker_connections 1024;
+      }
+      
+      http {
+          include /etc/nginx/mime.types;
+          default_type application/octet-stream;
+          
+          log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                          '$status $body_bytes_sent "$http_referer" '
+                          '"$http_user_agent" "$http_x_forwarded_for"';
+          
+          access_log /var/log/nginx/access.log main;
+          sendfile on;
+          keepalive_timeout 65;
+          
+          # Include all virtual host configurations
+          include /etc/nginx/conf.d/*.conf;
+      }
+    mode: '0644'
+  tags: nginx
+
+- name: Create Nginx virtual hosts
+  ansible.builtin.copy:
+    dest: "{{ directories.nginx }}/conf.d/orochi.conf"
+    content: |
+      # Redirect HTTP to HTTPS
+      server {
+          listen 80;
+          server_name _;
+          return 301 https://$host$request_uri;
+      }
+      
+      # Kibana
+      server {
+          listen 443 ssl;
+          server_name kibana.{{ orochi_server_ip }}.nip.io;
+          
+          ssl_certificate /etc/nginx/ssl/elasticsearch.crt;
+          ssl_certificate_key /etc/nginx/ssl/elasticsearch.key;
+          
+          location / {
+              proxy_pass https://kibana:5601;
+              proxy_ssl_verify off;
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+          }
+      }
+      
+      # TheHive
+      server {
+          listen 443 ssl;
+          server_name thehive.{{ orochi_server_ip }}.nip.io;
+          
+          ssl_certificate /etc/nginx/ssl/elasticsearch.crt;
+          ssl_certificate_key /etc/nginx/ssl/elasticsearch.key;
+          
+          location / {
+              proxy_pass http://thehive:9000;
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+          }
+      }
+      
+      # Velociraptor
+      server {
+          listen 443 ssl;
+          server_name velociraptor.{{ orochi_server_ip }}.nip.io;
+          
+          ssl_certificate /etc/nginx/ssl/elasticsearch.crt;
+          ssl_certificate_key /etc/nginx/ssl/elasticsearch.key;
+          
+          location / {
+              proxy_pass https://velociraptor:8889;
+              proxy_ssl_verify off;
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+              proxy_set_header Upgrade $http_upgrade;
+              proxy_set_header Connection "upgrade";
+          }
+      }
+      
+      # Mattermost
+      server {
+          listen 443 ssl;
+          server_name mattermost.{{ orochi_server_ip }}.nip.io;
+          
+          ssl_certificate /etc/nginx/ssl/elasticsearch.crt;
+          ssl_certificate_key /etc/nginx/ssl/elasticsearch.key;
+          
+          location / {
+              proxy_pass http://mattermost:8065;
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+              proxy_set_header Upgrade $http_upgrade;
+              proxy_set_header Connection "upgrade";
+          }
+      }
+    mode: '0644'
+  tags: nginx
+
+- name: Pull Nginx image
+  community.docker.docker_image:
+    name: "nginx:{{ nginx_version }}"
+    source: pull
+  tags: nginx
+
+- name: Start Nginx container
+  community.docker.docker_container:
+    name: nginx-proxy
+    image: "nginx:{{ nginx_version }}"
+    state: started
+    restart_policy: unless-stopped
+    hostname: nginx-proxy
+    networks:
+      - name: "{{ orochi_network_name }}"
+    ports:
+      - "{{ ports.nginx_http }}:80"
+      - "{{ ports.nginx_https }}:443"
+    volumes:
+      - "{{ directories.nginx }}/nginx.conf:/etc/nginx/nginx.conf:ro"
+      - "{{ directories.nginx }}/conf.d:/etc/nginx/conf.d:ro"
+      - "{{ directories.nginx }}/ssl:/etc/nginx/ssl:ro"
+  tags: nginx
+
+- name: Display Nginx status
+  ansible.builtin.debug:
+    msg:
+      - "Nginx Reverse Proxy is running!"
+      - "HTTP: http://{{ orochi_server_ip }}:{{ ports.nginx_http }}"
+      - "HTTPS: https://{{ orochi_server_ip }}:{{ ports.nginx_https }}"
+      - ""
+      - "Virtual Hosts (add to /etc/hosts or use nip.io):"
+      - "  - https://kibana.{{ orochi_server_ip }}.nip.io"
+      - "  - https://thehive.{{ orochi_server_ip }}.nip.io"
+      - "  - https://velociraptor.{{ orochi_server_ip }}.nip.io"
+      - "  - https://mattermost.{{ orochi_server_ip }}.nip.io"
+  tags: nginx

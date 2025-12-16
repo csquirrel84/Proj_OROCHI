@@ -1,0 +1,108 @@
+---
+# ==============================================
+# SURICATA ROLE - Network IDS
+# ==============================================
+
+- name: Create Suricata directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - "{{ directories.suricata }}"
+    - "{{ directories.suricata }}/logs"
+    - "{{ directories.suricata }}/rules"
+  tags: suricata
+
+- name: Create Suricata configuration
+  ansible.builtin.copy:
+    dest: "{{ directories.suricata }}/suricata.yaml"
+    content: |
+      %YAML 1.1
+      ---
+      vars:
+        address-groups:
+          HOME_NET: "{{ suricata.home_net }}"
+          EXTERNAL_NET: "!$HOME_NET"
+        port-groups:
+          HTTP_PORTS: "80"
+          SHELLCODE_PORTS: "!80"
+          SSH_PORTS: "22"
+      
+      default-log-dir: /var/log/suricata/
+      
+      outputs:
+        - eve-log:
+            enabled: yes
+            filetype: regular
+            filename: eve.json
+            types:
+              - alert
+              - http
+              - dns
+              - tls
+              - files
+              - ssh
+              - flow
+        - fast:
+            enabled: yes
+            filename: fast.log
+        - stats:
+            enabled: yes
+            filename: stats.log
+            interval: 8
+      
+      af-packet:
+        - interface: {{ suricata.interface }}
+          threads: auto
+          cluster-id: 99
+          cluster-type: cluster_flow
+          defrag: yes
+      
+      default-rule-path: /var/lib/suricata/rules
+      rule-files:
+        - suricata.rules
+    mode: '0644'
+  tags: suricata
+
+- name: Pull Suricata image
+  community.docker.docker_image:
+    name: "jasonish/suricata:{{ suricata_version }}"
+    source: pull
+  tags: suricata
+
+- name: Start Suricata container
+  community.docker.docker_container:
+    name: suricata
+    image: "jasonish/suricata:{{ suricata_version }}"
+    state: started
+    restart_policy: unless-stopped
+    hostname: suricata
+    network_mode: host
+    capabilities:
+      - NET_ADMIN
+      - SYS_NICE
+      - NET_RAW
+    volumes:
+      - "{{ directories.suricata }}/logs:/var/log/suricata"
+      - "{{ directories.suricata }}/rules:/var/lib/suricata/rules"
+      - "{{ directories.suricata }}/suricata.yaml:/etc/suricata/suricata.yaml:ro"
+    command: ["-i", "{{ suricata.interface }}", "-v"]
+    memory: "{{ resources.suricata.memory }}"
+  tags: suricata
+
+- name: Update Suricata rules
+  ansible.builtin.shell: |
+    docker exec suricata suricata-update
+  changed_when: false
+  ignore_errors: true
+  tags: suricata
+
+- name: Display Suricata status
+  ansible.builtin.debug:
+    msg:
+      - "Suricata IDS is running!"
+      - "Monitoring interface: {{ suricata.interface }}"
+      - "Logs: {{ directories.suricata }}/logs"
+      - "EVE JSON: {{ directories.suricata }}/logs/eve.json"
+  tags: suricata

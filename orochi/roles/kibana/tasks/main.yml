@@ -1,0 +1,96 @@
+---
+# ==============================================
+# KIBANA ROLE
+# ==============================================
+
+- name: Create Kibana directories
+  ansible.builtin.file:
+    path: "{{ directories.kibana }}"
+    state: directory
+    mode: '0777'
+    owner: 1000
+    group: 1000
+  tags: kibana
+
+- name: Generate Kibana encryption key if not set
+  ansible.builtin.shell: openssl rand -hex 32
+  register: generated_kibana_key
+  changed_when: false
+  when: vault_kibana_encryption_key is not defined or vault_kibana_encryption_key == ""
+  no_log: true
+  tags: kibana
+
+- name: Set Kibana encryption key
+  ansible.builtin.set_fact:
+    kibana_encryption_key: "{{ vault_kibana_encryption_key | default(generated_kibana_key.stdout) }}"
+  no_log: true
+  tags: kibana
+
+- name: Set kibana_system password
+  ansible.builtin.uri:
+    url: "https://localhost:{{ ports.elasticsearch }}/_security/user/kibana_system/_password"
+    method: POST
+    user: elastic
+    password: "{{ elasticsearch_password }}"
+    body_format: json
+    body:
+      password: "{{ kibana_password }}"
+    validate_certs: false
+    status_code: 200
+  no_log: true
+  tags: kibana
+
+- name: Pull Kibana image
+  community.docker.docker_image:
+    name: "docker.elastic.co/kibana/kibana:{{ elastic_stack_version }}"
+    source: pull
+  tags: kibana
+
+- name: Start Kibana container
+  community.docker.docker_container:
+    name: kibana
+    image: "docker.elastic.co/kibana/kibana:{{ elastic_stack_version }}"
+    state: started
+    restart_policy: unless-stopped
+    hostname: kibana
+    networks:
+      - name: "{{ orochi_network_name }}"
+    ports:
+      - "{{ ports.kibana }}:5601"
+    volumes:
+      - "{{ directories.certs }}:/usr/share/kibana/config/certs:ro"
+      - "{{ directories.kibana }}:/usr/share/kibana/data"
+    env:
+      SERVERNAME: "kibana"
+      ELASTICSEARCH_HOSTS: "https://elasticsearch:9200"
+      ELASTICSEARCH_USERNAME: "kibana_system"
+      ELASTICSEARCH_PASSWORD: "{{ kibana_password }}"
+      ELASTICSEARCH_SSL_CERTIFICATEAUTHORITIES: "config/certs/ca/ca.crt"
+      SERVER_SSL_ENABLED: "true"
+      SERVER_SSL_CERTIFICATE: "config/certs/kibana/kibana.crt"
+      SERVER_SSL_KEY: "config/certs/kibana/kibana.key"
+      XPACK_SECURITY_ENCRYPTIONKEY: "{{ kibana_encryption_key }}"
+      XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY: "{{ kibana_encryption_key }}"
+      XPACK_REPORTING_ENCRYPTIONKEY: "{{ kibana_encryption_key }}"
+    memory: "{{ resources.kibana.memory }}"
+  tags: kibana
+
+- name: Wait for Kibana to be ready
+  ansible.builtin.uri:
+    url: "https://localhost:{{ ports.kibana }}/api/status"
+    method: GET
+    validate_certs: false
+    status_code: 200
+  register: kibana_health
+  until: kibana_health.status == 200
+  retries: 60
+  delay: 10
+  tags: kibana
+
+- name: Display Kibana status
+  ansible.builtin.debug:
+    msg:
+      - "Kibana is running!"
+      - "URL: https://{{ orochi_server_ip }}:{{ ports.kibana }}"
+      - "Username: elastic"
+  tags: kibana

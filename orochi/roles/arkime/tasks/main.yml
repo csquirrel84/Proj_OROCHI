@@ -1,0 +1,72 @@
+---
+# ==============================================
+# ARKIME ROLE - Full Packet Capture
+# ==============================================
+
+- name: Create Arkime directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - "{{ directories.arkime }}"
+    - "{{ directories.arkime }}/pcap"
+    - "{{ directories.arkime }}/logs"
+    - "{{ directories.arkime }}/config"
+  tags: arkime
+
+- name: Generate Arkime password secret
+  ansible.builtin.shell: openssl rand -base64 32
+  register: arkime_secret
+  changed_when: false
+  no_log: true
+  when: vault_arkime_secret is not defined or vault_arkime_secret == ""
+  tags: arkime
+
+- name: Set Arkime password secret
+  ansible.builtin.set_fact:
+    arkime_password_secret: "{{ vault_arkime_secret | default(arkime_secret.stdout) }}"
+  no_log: true
+  tags: arkime
+
+- name: Pull Arkime image
+  community.docker.docker_image:
+    name: "mammo0/docker-arkime:{{ arkime_version }}"
+    source: pull
+  tags: arkime
+
+- name: Start Arkime container
+  community.docker.docker_container:
+    name: arkime
+    image: "mammo0/docker-arkime:{{ arkime_version }}"
+    state: started
+    restart_policy: unless-stopped
+    hostname: arkime
+    network_mode: host
+    capabilities:
+      - NET_ADMIN
+      - NET_RAW
+    volumes:
+      - "{{ directories.arkime }}/pcap:/data/pcap"
+      - "{{ directories.arkime }}/logs:/data/logs"
+      - "{{ directories.arkime }}/config:/data/config"
+    env:
+      ES_HOST: "{{ orochi_server_ip }}"
+      ES_PORT: "{{ ports.elasticsearch | string }}"
+      ES_USER: "elastic"
+      ES_PASSWORD: "{{ elasticsearch_password }}"
+      ARKIME_PASSWORD: "{{ arkime_password }}"
+      ARKIME_ADMIN_PASSWORD: "{{ arkime_password }}"
+      CAPTURE_INTERFACE: "{{ suricata.interface }}"
+      VIEWER_PORT: "{{ ports.arkime | string }}"
+    memory: "{{ resources.arkime.memory }}"
+  tags: arkime
+
+- name: Display Arkime status
+  ansible.builtin.debug:
+    msg:
+      - "Arkime is running!"
+      - "Viewer: http://{{ orochi_server_ip }}:{{ ports.arkime }}"
+      - "PCAP Storage: {{ directories.arkime }}/pcap"
+      - "Capture interface: {{ suricata.interface }}"
+  tags: arkime

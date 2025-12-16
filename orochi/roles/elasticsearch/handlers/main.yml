@@ -1,0 +1,6 @@
+---
+- name: Restart Elasticsearch
+  community.docker.docker_container:
+    name: elasticsearch
+    state: started
+    restart: true

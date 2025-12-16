@@ -1,0 +1,178 @@
+---
+# ==============================================
+# THEHIVE 4 ROLE
+# ==============================================
+
+- name: Create TheHive directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+    owner: 1000
+    group: 1000
+  loop:
+    - "{{ directories.thehive }}/data"
+    - "{{ directories.thehive }}/config"
+    - "{{ directories.thehive_es }}"
+    - "{{ directories.cassandra }}"
+  tags: thehive
+
+# Elasticsearch 7 for TheHive
+- name: Pull Elasticsearch 7 image
+  community.docker.docker_image:
+    name: "docker.elastic.co/elasticsearch/elasticsearch:{{ elasticsearch_hive_version }}"
+    source: pull
+  tags: thehive
+
+- name: Start Elasticsearch 7 for TheHive
+  community.docker.docker_container:
+    name: elasticsearch-hive
+    image: "docker.elastic.co/elasticsearch/elasticsearch:{{ elasticsearch_hive_version }}"
+    state: started
+    restart_policy: unless-stopped
+    hostname: elasticsearch-hive
+    networks:
+      - name: "{{ orochi_network_name }}"
+    volumes:
+      - "{{ directories.thehive_es }}:/usr/share/elasticsearch/data"
+    env:
+      discovery.type: "single-node"
+      xpack.security.enabled: "false"
+      cluster.name: "hive"
+      ES_JAVA_OPTS: "-Xms{{ resources.elasticsearch_hive.heap }} -Xmx{{ resources.elasticsearch_hive.heap }}"
+    memory: "{{ resources.elasticsearch_hive.memory }}"
+  tags: thehive
+
+# Cassandra
+- name: Pull Cassandra image
+  community.docker.docker_image:
+    name: "cassandra:{{ cassandra_version }}"
+    source: pull
+  tags: thehive
+
+- name: Start Cassandra
+  community.docker.docker_container:
+    name: cassandra
+    image: "cassandra:{{ cassandra_version }}"
+    state: started
+    restart_policy: unless-stopped
+    hostname: cassandra
+    networks:
+      - name: "{{ orochi_network_name }}"
+    volumes:
+      - "{{ directories.cassandra }}:/var/lib/cassandra"
+    env:
+      CASSANDRA_CLUSTER_NAME: "TheHive"
+      MAX_HEAP_SIZE: "{{ resources.cassandra.heap }}"
+      HEAP_NEWSIZE: "{{ resources.cassandra.heap_new }}"
+    memory: "{{ resources.cassandra.memory }}"
+    healthcheck:
+      test: ["CMD-SHELL", "[ $$(nodetool statusgossip) = running ] || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+  tags: thehive
+
+- name: Generate TheHive secret
+  ansible.builtin.shell: cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 64 | head -n 1
+  register: hive_secret
+  changed_when: false
+  no_log: true
+  tags: thehive
+
+- name: Create TheHive application.conf
+  ansible.builtin.copy:
+    dest: "{{ directories.thehive }}/config/application.conf"
+    content: |
+      play.http.secret.key="{{ hive_secret.stdout }}"
+      
+      # Database (Cassandra)
+      db.janusgraph {
+        storage {
+          backend: cql
+          hostname: ["cassandra"]
+          cql {
+            cluster-name: TheHive
+            keyspace: thehive
+          }
+        }
+        index {
+          search {
+            backend: elasticsearch
+            hostname: ["elasticsearch-hive"]
+            index-name: thehive
+          }
+        }
+      }
+      
+      # Storage (Local files)
+      storage {
+        provider: localfs
+        localfs.directory: /opt/thp/thehive/files
+      }
+      
+      # Cortex Configuration (optional)
+      # play.modules.enabled += org.thp.thehive.connector.cortex.CortexModule
+      # cortex {
+      #   servers: [
+      #     {
+      #       name: local
+      #       url: "http://cortex:9001"
+      #       auth {
+      #         type: "bearer"
+      #         key: "API_KEY"
+      #       }
+      #     }
+      #   ]
+      # }
+    mode: '0644'
+  tags: thehive
+
+- name: Wait for Cassandra to be ready
+  ansible.builtin.pause:
+    seconds: 45
+  tags: thehive
+
+# TheHive 4
+- name: Pull TheHive image
+  community.docker.docker_image:
+    name: "thehiveproject/thehive4:{{ thehive_version }}"
+    source: pull
+  tags: thehive
+
+- name: Start TheHive 4
+  community.docker.docker_container:
+    name: thehive
+    image: "thehiveproject/thehive4:{{ thehive_version }}"
+    state: started
+    restart_policy: unless-stopped
+    hostname: thehive
+    networks:
+      - name: "{{ orochi_network_name }}"
+    ports:
+      - "{{ ports.thehive }}:9000"
+    volumes:
+      - "{{ directories.thehive }}/config/application.conf:/etc/thehive/application.conf"
+      - "{{ directories.thehive }}/data:/opt/thp/thehive/files"
+    memory: "{{ resources.thehive.memory }}"
+  tags: thehive
+
+- name: Wait for TheHive to be ready
+  ansible.builtin.uri:
+    url: "http://localhost:{{ ports.thehive }}/api/status"
+    method: GET
+    status_code: [200, 401]
+  register: thehive_status
+  until: thehive_status.status in [200, 401]
+  retries: 30
+  delay: 10
+  tags: thehive
+
+- name: Display TheHive status
+  ansible.builtin.debug:
+    msg:
+      - "TheHive 4 is running!"
+      - "URL: http://{{ orochi_server_ip }}:{{ ports.thehive }}"
+      - "Default credentials: admin@thehive.local / secret"
+      - "IMPORTANT: Change the default password immediately!"
+  tags: thehive

@@ -1,0 +1,47 @@
+---
+# ==============================================
+# OROCHI TEARDOWN PLAYBOOK
+# ==============================================
+
+- name: Stop all Orochi containers
+  community.docker.docker_container:
+    name: "{{ item }}"
+    state: absent
+  loop:
+    - nginx-proxy
+    - mattermost
+    - postgres-mattermost
+    - cyberchef
+    - arkime
+    - suricata
+    - velociraptor
+    - thehive
+    - cassandra
+    - elasticsearch-hive
+    - fleet-server
+    - kibana
+    - elasticsearch
+  ignore_errors: true
+
+- name: Remove Orochi Docker network
+  community.docker.docker_network:
+    name: "{{ orochi_network_name }}"
+    state: absent
+  ignore_errors: true
+
+- name: Prompt for data removal
+  ansible.builtin.pause:
+    prompt: "Do you want to remove all data in {{ orochi_base_path }}? (yes/no)"
+  register: remove_data
+
+- name: Remove Orochi data
+  ansible.builtin.file:
+    path: "{{ orochi_base_path }}"
+    state: absent
+  when: remove_data.user_input | lower == "yes"
+
+- name: Display teardown complete
+  ansible.builtin.debug:
+    msg:
+      - "Orochi teardown complete!"
+      - "Data {{ 'removed' if remove_data.user_input | lower == 'yes' else 'preserved at ' + orochi_base_path }}"

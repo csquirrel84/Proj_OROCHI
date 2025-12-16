@@ -1,0 +1,134 @@
+---
+# ==============================================
+# CERTIFICATES ROLE - SSL/TLS Certificate Generation
+# ==============================================
+
+- name: Create certificates directory
+  ansible.builtin.file:
+    path: "{{ directories.certs }}"
+    state: directory
+    mode: '0755'
+    owner: 1000
+    group: 1000
+  tags: certificates
+
+- name: Check if CA certificate exists
+  ansible.builtin.stat:
+    path: "{{ directories.certs }}/ca/ca.crt"
+  register: ca_cert_check
+  tags: certificates
+
+- name: Generate certificates
+  when: not ca_cert_check.stat.exists
+  tags: certificates
+  block:
+    - name: Create instances.yml for certificate generation
+      ansible.builtin.copy:
+        dest: "{{ directories.certs }}/instances.yml"
+        content: |
+          instances:
+            - name: elasticsearch
+              dns:
+                - elasticsearch
+                - localhost
+              ip:
+                - 127.0.0.1
+                - {{ orochi_server_ip }}
+            - name: kibana
+              dns:
+                - kibana
+                - localhost
+              ip:
+                - 127.0.0.1
+                - {{ orochi_server_ip }}
+            - name: fleet-server
+              dns:
+                - fleet-server
+                - localhost
+              ip:
+                - 127.0.0.1
+                - {{ orochi_server_ip }}
+        mode: '0644'
+
+    - name: Generate CA and certificates using Elasticsearch container
+      ansible.builtin.shell: |
+        docker run --rm \
+          -v {{ directories.certs }}:/usr/share/elasticsearch/config/certs \
+          docker.elastic.co/elasticsearch/elasticsearch:{{ elastic_stack_version }} \
+          bash -c '
+            # Generate CA
+            bin/elasticsearch-certutil ca --silent --pem -out config/certs/ca.zip
+            unzip -o config/certs/ca.zip -d config/certs
+            
+            # Generate certificates from instances.yml
+            bin/elasticsearch-certutil cert --silent --pem \
+              -out config/certs/certs.zip \
+              --in config/certs/instances.yml \
+              --ca-cert config/certs/ca/ca.crt \
+              --ca-key config/certs/ca/ca.key
+            unzip -o config/certs/certs.zip -d config/certs
+            
+            # Set permissions
+            chmod -R 755 config/certs
+          '
+      args:
+        creates: "{{ directories.certs }}/ca/ca.crt"
+
+    - name: Remove temporary files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ directories.certs }}/ca.zip"
+        - "{{ directories.certs }}/certs.zip"
+        - "{{ directories.certs }}/instances.yml"
+
+- name: Set certificate permissions
+  ansible.builtin.file:
+    path: "{{ directories.certs }}"
+    state: directory
+    recurse: true
+    mode: '0755'
+    owner: 1000
+    group: 1000
+  tags: certificates
+
+- name: Restrict private key permissions
+  ansible.builtin.file:
+    path: "{{ item }}"
+    mode: '0600'
+  loop:
+    - "{{ directories.certs }}/ca/ca.key"
+    - "{{ directories.certs }}/elasticsearch/elasticsearch.key"
+    - "{{ directories.certs }}/kibana/kibana.key"
+    - "{{ directories.certs }}/fleet-server/fleet-server.key"
+  ignore_errors: true
+  tags: certificates
+
+- name: Get CA fingerprint
+  ansible.builtin.shell: |
+    openssl x509 -fingerprint -sha256 -noout -in {{ directories.certs }}/ca/ca.crt | cut -d= -f2 | tr -d :
+  register: ca_fingerprint_result
+  changed_when: false
+  tags: certificates
+
+- name: Store CA fingerprint
+  ansible.builtin.set_fact:
+    ca_fingerprint: "{{ ca_fingerprint_result.stdout }}"
+  tags: certificates
+
+- name: Read CA certificate content
+  ansible.builtin.slurp:
+    src: "{{ directories.certs }}/ca/ca.crt"
+  register: ca_cert_content
+  tags: certificates
+
+- name: Store CA certificate
+  ansible.builtin.set_fact:
+    ca_certificate: "{{ ca_cert_content.content | b64decode }}"
+  tags: certificates
+
+- name: Certificates ready
+  ansible.builtin.debug:
+    msg: "Certificates generated. CA Fingerprint: {{ ca_fingerprint }}"
+  tags: certificates

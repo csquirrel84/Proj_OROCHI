@@ -1,0 +1,86 @@
+---
+# ==============================================
+# ELASTICSEARCH ROLE
+# ==============================================
+
+- name: Create Elasticsearch directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0777'
+    owner: 1000
+    group: 1000
+  loop:
+    - "{{ directories.elasticsearch }}/data"
+    - "{{ directories.elasticsearch }}/logs"
+  tags: elasticsearch
+
+- name: Pull Elasticsearch image
+  community.docker.docker_image:
+    name: "docker.elastic.co/elasticsearch/elasticsearch:{{ elastic_stack_version }}"
+    source: pull
+  tags: elasticsearch
+
+- name: Start Elasticsearch container
+  community.docker.docker_container:
+    name: elasticsearch
+    image: "docker.elastic.co/elasticsearch/elasticsearch:{{ elastic_stack_version }}"
+    state: started
+    restart_policy: unless-stopped
+    hostname: elasticsearch
+    networks:
+      - name: "{{ orochi_network_name }}"
+    ports:
+      - "{{ ports.elasticsearch }}:9200"
+      - "9300:9300"
+    volumes:
+      - "{{ directories.certs }}:/usr/share/elasticsearch/config/certs:ro"
+      - "{{ directories.elasticsearch }}/data:/usr/share/elasticsearch/data"
+      - "{{ directories.elasticsearch }}/logs:/usr/share/elasticsearch/logs"
+    env:
+      node.name: "elasticsearch"
+      cluster.name: "{{ elasticsearch.cluster_name }}"
+      discovery.type: "single-node"
+      ELASTIC_PASSWORD: "{{ elasticsearch_password }}"
+      bootstrap.memory_lock: "true"
+      xpack.security.enabled: "true"
+      xpack.security.http.ssl.enabled: "true"
+      xpack.security.http.ssl.key: "certs/elasticsearch/elasticsearch.key"
+      xpack.security.http.ssl.certificate: "certs/elasticsearch/elasticsearch.crt"
+      xpack.security.http.ssl.certificate_authorities: "certs/ca/ca.crt"
+      xpack.security.transport.ssl.enabled: "true"
+      xpack.security.transport.ssl.key: "certs/elasticsearch/elasticsearch.key"
+      xpack.security.transport.ssl.certificate: "certs/elasticsearch/elasticsearch.crt"
+      xpack.security.transport.ssl.certificate_authorities: "certs/ca/ca.crt"
+      xpack.security.transport.ssl.verification_mode: "certificate"
+      xpack.license.self_generated.type: "{{ elasticsearch.license }}"
+      ES_JAVA_OPTS: "-Xms{{ resources.elasticsearch.heap }} -Xmx{{ resources.elasticsearch.heap }}"
+    ulimits:
+      - memlock:-1:-1
+      - nofile:65535:65535
+    memory: "{{ resources.elasticsearch.memory }}"
+  register: elasticsearch_container
+  tags: elasticsearch
+
+- name: Wait for Elasticsearch to be ready
+  ansible.builtin.uri:
+    url: "https://localhost:{{ ports.elasticsearch }}/_cluster/health"
+    method: GET
+    user: elastic
+    password: "{{ elasticsearch_password }}"
+    validate_certs: false
+    status_code: 200
+  register: es_health
+  until: es_health.status == 200
+  retries: 30
+  delay: 10
+  tags: elasticsearch
+
+- name: Display Elasticsearch status
+  ansible.builtin.debug:
+    msg:
+      - "Elasticsearch is running!"
+      - "URL: https://{{ orochi_server_ip }}:{{ ports.elasticsearch }}"
+      - "Cluster: {{ elasticsearch.cluster_name }}"
+      - "Status: {{ es_health.json.status }}"
+  tags: elasticsearch
