@@ -1,5 +1,0 @@
----
-# Encrypted secrets - create with: ansible-vault create vars/vault.yml
-vault_orochi_password: "Mhall1fwwas*"
-vault_kibana_encryption_key: ""  # Will be auto-generated if empty
-vault_arkime_secret: ""          # Will be auto-generated if empty

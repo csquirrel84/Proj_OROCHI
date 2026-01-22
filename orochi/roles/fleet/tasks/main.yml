@@ -222,14 +222,14 @@
 # Start Fleet Server Container
 - name: Pull Elastic Agent image
   community.docker.docker_image:
-    name: "docker.elastic.co/elastic-agent/elastic-agent:{{ elastic_stack_version }}"
+    name: "docker.elastic.co/elastic-agent/elastic-agent:{{ stack_version }}"
     source: pull
   tags: fleet
 
 - name: Start Fleet Server container
   community.docker.docker_container:
     name: fleet-server
-    image: "docker.elastic.co/elastic-agent/elastic-agent:{{ elastic_stack_version }}"
+    image: "docker.elastic.co/elastic-agent/elastic-agent:{{ stack_version }}"
     state: started
     restart_policy: unless-stopped
     user: root

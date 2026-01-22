@@ -11,19 +11,18 @@ orochi_project_name: orochi
 orochi_network_name: orochi-network
 orochi_server_ip: "{{ ansible_default_ipv4.address | default('127.0.0.1') }}"
 
+elasticsearch:
+  cluster_name: "{{ cluster_name }}"
+  license: "{{ license }}"
+
+
 # ==============================================
 # VERSION PINNING
 # ==============================================
-elastic_stack_version: "9.2.2"
 elasticsearch_hive_version: "7.17.9"
 thehive_version: "4.1.19"
 cassandra_version: "4.0"
-mattermost_version: "latest"
-postgres_version: "15-alpine"
-suricata_version: "latest"
-arkime_version: "latest"
-cyberchef_version: "latest"
-nginx_version: "alpine"
+
 
 # ==============================================
 # PORT CONFIGURATION
@@ -43,35 +42,9 @@ ports:
   nginx_http: 80
   nginx_https: 443
 
-# ==============================================
-# RESOURCE LIMITS
-# ==============================================
-resources:
-  elasticsearch:
-    memory: "4g"
-    heap: "2g"
-  kibana:
-    memory: "2g"
-  thehive:
-    memory: "2g"
-  cassandra:
-    memory: "2g"
-    heap: "1024M"
-    heap_new: "256M"
-  elasticsearch_hive:
-    memory: "1g"
-    heap: "512m"
-  velociraptor:
-    memory: "2g"
-  suricata:
-    memory: "2g"
-  arkime:
-    memory: "2g"
-  mattermost:
-    memory: "1g"
 
 # ==============================================
-# AUTHENTICATION (Override in vault.yml)
+# AUTHENTICATION (Override in secrets.yml)
 # ==============================================
 # Default credentials - CHANGE THESE!
 orochi_admin_user: "admin"
@@ -86,25 +59,6 @@ velociraptor_password: "{{ common_password }}"
 mattermost_password: "{{ common_password }}"
 arkime_password: "{{ common_password }}"
 
-# ==============================================
-# ELASTICSEARCH CONFIGURATION
-# ==============================================
-elasticsearch:
-  cluster_name: "orochi"
-  license: "basic"  # basic, trial, gold, platinum
-  
-# ==============================================
-# SURICATA CONFIGURATION
-# ==============================================
-suricata:
-  interface: "{{ ansible_default_ipv4.interface | default('eth0') }}"
-  home_net: "[192.168.0.0/16,10.0.0.0/8,172.16.0.0/12]"
-
-# ==============================================
-# VELOCIRAPTOR CONFIGURATION  
-# ==============================================
-velociraptor:
-  org_name: "Orochi Security"
   
 # ==============================================
 # FEATURE FLAGS

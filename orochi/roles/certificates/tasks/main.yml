@@ -18,51 +18,63 @@
   register: ca_cert_check
   tags: certificates
 
+- name: Check if Elasticsearch leaf key exists
+  ansible.builtin.stat:
+    path: "{{ directories.certs }}/elasticsearch/elasticsearch.key"
+  register: es_key_check
+  tags: certificates
+
 - name: Generate and Distribute Certificates
-  when: not ca_cert_check.stat.exists
+  when: (not ca_cert_check.stat.exists) or (not es_key_check.stat.exists)
   tags: certificates
   block:
     - name: Generate certificates using Elasticsearch container
       ansible.builtin.shell: |
         docker run --rm \
           -v {{ directories.certs }}:/usr/share/elasticsearch/config/certs \
-          docker.elastic.co/elasticsearch/elasticsearch:{{ elastic_stack_version }} \
+          docker.elastic.co/elasticsearch/elasticsearch:{{ stack_version }} \
           bash -c '
+            set -euo pipefail
             cd /usr/share/elasticsearch
-            
+
             # 1. Generate CA
             bin/elasticsearch-certutil ca --silent --pem -out config/certs/ca.zip
             unzip -o config/certs/ca.zip -d config/certs
-            
+
             # 2. Generate Single Stack Certificate (valid for all services)
             bin/elasticsearch-certutil cert --silent --pem \
-              -out config/certs/certs.zip \
               --ca-cert config/certs/ca/ca.crt \
               --ca-key config/certs/ca/ca.key \
               --name orochi \
-              --dns elasticsearch --dns kibana --dns fleet-server --dns localhost \
-              --ip 127.0.0.1 --ip {{ orochi_server_ip }}
-            
+              --dns elasticsearch \
+              --dns kibana \
+              --dns fleet-server \
+              --dns localhost \
+              --ip 127.0.0.1 \
+              --ip {{ orochi_server_ip }} \
+              --out config/certs/certs.zip \
+              --days 1095 \
+
             unzip -o config/certs/certs.zip -d config/certs
-            
+
             # 3. Create Service Directories
             mkdir -p config/certs/elasticsearch
             mkdir -p config/certs/kibana
             mkdir -p config/certs/fleet-server
-            
+
             # 4. Copy Keys to Expected Locations
             # Elasticsearch
             cp config/certs/orochi/orochi.crt config/certs/elasticsearch/elasticsearch.crt
             cp config/certs/orochi/orochi.key config/certs/elasticsearch/elasticsearch.key
-            
+
             # Kibana
             cp config/certs/orochi/orochi.crt config/certs/kibana/kibana.crt
             cp config/certs/orochi/orochi.key config/certs/kibana/kibana.key
-            
+
             # Fleet Server
             cp config/certs/orochi/orochi.crt config/certs/fleet-server/fleet-server.crt
             cp config/certs/orochi/orochi.key config/certs/fleet-server/fleet-server.key
-            
+
             # 5. Set Permissions
             chmod -R 755 config/certs
             find config/certs -name "*.key" -exec chmod 644 {} \;

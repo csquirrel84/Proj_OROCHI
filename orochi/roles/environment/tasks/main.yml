@@ -31,7 +31,7 @@
   ansible.builtin.set_fact:
     stack_version: "{{ existing_env.stdout | regex_search('STACK_VERSION=(.+)', '\\1') | first | default('9.2.2', true) }}"
     cluster_name: "{{ existing_env.stdout | regex_search('CLUSTER_NAME=(.+)', '\\1') | first | default('orochi', true) }}"
-    license: "{{ existing_env.stdout | regex_search('LICENSE=(.+)', '\\1') | first | default('basic', true) }}"
+    license: "{{ existing_env.stdout | regex_search('LICENSE=(.+)', '\\1') | first | default('trial', true) }}"
     mem_limit: "{{ existing_env.stdout | regex_search('MEM_LIMIT=(.+)', '\\1') | first | default('4g', true) }}"
     velox_user: "{{ existing_env.stdout | regex_search('VELOX_USER=(.+)', '\\1') | first | default('admin', true) }}"
     velox_role: "{{ existing_env.stdout | regex_search('VELOX_ROLE=(.+)', '\\1') | first | default('administrator', true) }}"
@@ -40,10 +40,10 @@
     fleet_port: "{{ existing_env.stdout | regex_search('FLEET_PORT=(.+)', '\\1') | first | default('8220', true) }}"
     suricata_port: "{{ existing_env.stdout | regex_search('SURICATA_PORT=(.+)', '\\1') | first | default('8000', true) }}"
     suricata_interface: "{{ existing_env.stdout | regex_search('SURICATA_INTERFACE=(.+)', '\\1') | first | default('eth0', true) }}"
-    local_kbn_url: "{{ existing_env.stdout | regex_search('LOCAL_KBN_URL=(.+)', '\\1') | first | default('https://0.0.0.0:5601', true) }}"
+    local_kbn_url: "{{ existing_env.stdout | regex_search('LOCAL_KBN_URL=(.+)', '\\1') | first | default('https://100.106.108.5:5601', true) }}"
     arkime_es_ip: "{{ existing_env.stdout | regex_search('ARKIME_ELASTICSEARCH_IP=(.+)', '\\1') | first | default('127.0.0.1', true) }}"
-    velox_server_url: "{{ existing_env.stdout | regex_search('VELOX_SERVER_URL=(.+)', '\\1') | first | default('https://0.0.0.0:8889/', true) }}"
-    velox_hostname: "{{ existing_env.stdout | regex_search('VELOX_FRONTEND_HOSTNAME=(.+)', '\\1') | first | default('0.0.0.0', true) }}"
+    velox_server_url: "{{ existing_env.stdout | regex_search('VELOX_SERVER_URL=(.+)', '\\1') | first | default('https://100.106.108.5:8889/', true) }}"
+    velox_hostname: "{{ existing_env.stdout | regex_search('VELOX_FRONTEND_HOSTNAME=(.+)', '\\1') | first | default('100.106.108.5', true) }}"
     selected_ip: "{{ existing_env.stdout | regex_search('SELECTED_IP=(.+)', '\\1') | first | default('127.0.0.1', true) }}"
     arkime_password_secret: "{{ existing_env.stdout | regex_search('ARKIME_PASSWORD_SECRET=(.+)', '\\1') | first }}"
     kibana_encryption_key: "{{ existing_env.stdout | regex_search('KIBANA_ENCRYPTION_KEY=(.+)', '\\1') | first | default('', true) }}"
@@ -54,18 +54,20 @@
   tags: environment
 
 # 2. HANDLE PASSWORDS (VAULT OR PROMPT)
+
 - name: Request Stack Password (If not in Vault)
   ansible.builtin.pause:
     prompt: "Enter password for Elastic/Kibana/TheHive (Required for deployment)"
     echo: no
   register: interactive_password
-  # Only ask if common_password isn't already set by Vault
-  when: common_password is not defined or common_password | length == 0
+  when: common_password is not defined or (common_password | string | length == 0)
   tags: environment
 
-- name: Set Password Variable
+- name: Set Password Variable (from prompt when needed)
   ansible.builtin.set_fact:
-    common_password: "{{ interactive_password.user_input | default(common_password) }}"
+    common_password: "{{ interactive_password.user_input }}"
+  when: common_password is not defined or (common_password | string | length == 0)
+  no_log: true
   tags: environment
 
 - name: Verify Password is Set
@@ -77,7 +79,7 @@
 # 3. INTERACTIVE PROMPTS (Skipped if using existing .env)
 - name: Prompt for Elastic Stack version
   ansible.builtin.pause:
-    prompt: "Enter Elastic Stack version [9.2.2]"
+    prompt: "Enter Elastic Stack version [latest]"
     echo: yes
   register: stack_version_input
   when: not (skip_env_prompts | default(false))
@@ -93,7 +95,7 @@
 
 - name: Prompt for license type
   ansible.builtin.pause:
-    prompt: "Enter license type (basic/trial) [basic]"
+    prompt: "Enter license type (basic/trial) [trial]"
     echo: yes
   register: license_input
   when: not (skip_env_prompts | default(false))
@@ -101,25 +103,9 @@
 
 - name: Prompt for memory limit
   ansible.builtin.pause:
-    prompt: "Enter memory limit [4g]"
+    prompt: "Enter memory limit [8g]"
     echo: yes
   register: mem_limit_input
-  when: not (skip_env_prompts | default(false))
-  tags: environment
-
-- name: Prompt for Velociraptor username
-  ansible.builtin.pause:
-    prompt: "Enter Velociraptor username [admin]"
-    echo: yes
-  register: velox_user_input
-  when: not (skip_env_prompts | default(false))
-  tags: environment
-
-- name: Prompt for Velociraptor role
-  ansible.builtin.pause:
-    prompt: "Enter Velociraptor role [administrator]"
-    echo: yes
-  register: velox_role_input
   when: not (skip_env_prompts | default(false))
   tags: environment
 
@@ -206,7 +192,7 @@
 
 - name: Prompt for Velociraptor server URL
   ansible.builtin.pause:
-    prompt: "Enter Velociraptor server URL [https://0.0.0.0:8889/]"
+    prompt: "Enter Velociraptor server URL [https://100.106.108.5:8889/]"
     echo: yes
   register: velox_url_input
   when: not (skip_env_prompts | default(false))
@@ -243,28 +229,74 @@
 
 - name: Set variables from prompts
   ansible.builtin.set_fact:
-    stack_version: "{{ stack_version_input.user_input | default('9.2.2', true) if stack_version_input.user_input | default('') != '' else '9.2.2' }}"
-    cluster_name: "{{ cluster_name_input.user_input | default('orochi', true) if cluster_name_input.user_input | default('') != '' else 'orochi' }}"
-    license: "{{ license_input.user_input | default('basic', true) if license_input.user_input | default('') != '' else 'basic' }}"
-    mem_limit: "{{ mem_limit_input.user_input | default('4g', true) if mem_limit_input.user_input | default('') != '' else '4g' }}"
-    velox_user: "{{ velox_user_input.user_input | default('admin', true) if velox_user_input.user_input | default('') != '' else 'admin' }}"
-    velox_role: "{{ velox_role_input.user_input | default('administrator', true) if velox_role_input.user_input | default('') != '' else 'administrator' }}"
-    # Defaults for ports if not prompted
+
+    # =========================
+    # CORE STACK VARIABLES
+    # =========================
+    stack_version: "{{ stack_version_input.user_input | default('latest', true) }}"
+    cluster_name: "{{ cluster_name_input.user_input | default('orochi', true) }}"
+    license: "{{ license_input.user_input | default('basic', true) }}"
+    mem_limit: "{{ mem_limit_input.user_input | default('4g', true) }}"
+
+    # =========================
+    # USERS / ROLES
+    # =========================
+    velox_user: "{{ velox_user_input.user_input | default('admin', true) }}"
+    velox_role: "{{ velox_role_input.user_input | default('administrator', true) }}"
+
+    # =========================
+    # PORTS (FIXED)
+    # =========================
     es_port: "9200"
     kibana_port: "5601"
     fleet_port: "8220"
     suricata_port: "8000"
+
+    # =========================
+    # NETWORK
+    # =========================
     suricata_interface: "{{ suricata_interface_parsed }}"
     selected_ip: "{{ selected_ip_parsed }}"
-    velox_server_url: "{{ velox_url_input.user_input | default('https://0.0.0.0:8889/', true) if velox_url_input.user_input | default('') != '' else 'https://0.0.0.0:8889/' }}"
     velox_hostname: "{{ selected_ip_parsed }}"
     arkime_es_ip: "{{ selected_ip_parsed }}"
-    arkime_password_secret: "{{ arkime_password_secret_new.stdout }}"
-    kibana_encryption_key: "{{ kibana_encryption_key if kibana_encryption_key | default('') != '' else kibana_key_gen.stdout }}"
     local_kbn_url: "https://{{ selected_ip_parsed }}:5601"
+
+    velox_server_url: "{{ velox_url_input.user_input | default('https://100.106.108.5:8889/', true) }}"
+
+    # =========================
+    # SECRETS (RUNTIME GENERATED)
+    # =========================
+    arkime_password_secret: "{{ arkime_password_secret_new.stdout }}"
+    kibana_encryption_key: "{{ kibana_encryption_key | default(kibana_key_gen.stdout, true) }}"
+
+    # =========================
+    # RESOURCE LIMITS (REQUIRED)
+    # =========================
+    resources:
+      elasticsearch:
+        memory: "{{ mem_limit | default('8g', true) }}"
+        heap: "2g"
+      kibana:
+        memory: "2g"
+      thehive:
+        memory: "2g"
+      cassandra:
+        memory: "2g"
+        heap: "1024M"
+        heap_new: "256M"
+      elasticsearch_hive:
+        memory: "1g"
+        heap: "512m"
+      suricata:
+        memory: "2g"
+      mattermost:
+        memory: "1g"
+
   when: not (skip_env_prompts | default(false))
   no_log: true
   tags: environment
+
+
 
 # 6. WRITE .ENV (No Passwords)
 - name: Create/Update .env file
