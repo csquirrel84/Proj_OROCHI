@@ -86,7 +86,7 @@
     volumes:
       - "{{ directories.suricata }}/logs:/var/log/suricata"
       - "{{ directories.suricata }}/rules:/var/lib/suricata/rules"
-      - "{{ directories.suricata }}/suricata.yaml:/etc/suricata/suricata.yaml:ro"
+      - "{{ directories.suricata }}/suricata.yaml:/etc/suricata/suricata.yaml"
     command: ["-i", "{{ suricata.interface }}", "-v"]
     memory: "{{ resources.suricata.memory }}"
   tags: suricata

@@ -55,6 +55,9 @@ resources:
     memory: "2g"
     heap: "1024M"
     heap_new: "256M"
+  elasticsearch:
+    memory: "1g"
+    heap: "512m"
   elasticsearch_hive:
     memory: "1g"
     heap: "512m"

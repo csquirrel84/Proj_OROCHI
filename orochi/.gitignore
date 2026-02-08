@@ -1,0 +1,28 @@
+# Orochi Security Stack - Git Ignore
+# ==============================================
+
+# Environment configuration (contains secrets)
+.env
+
+# Ansible vault password file
+.vault_pass
+.vault_password
+
+# Ansible retry files
+*.retry
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# IDE/Editor directories
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db

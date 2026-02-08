@@ -277,7 +277,8 @@
           ╔═══════════════════════════════════════════════════════════════╗
           ║                    DEPLOYMENT COMPLETE                        ║
           ╠═══════════════════════════════════════════════════════════════╣
-          ║  Check {{ orochi_base_path | default('/opt/orochi') }}/.env for credentials            ║
+          ║  Configuration saved to ./orochi/.env (control node)          ║
+          ║  Credentials stored in vars/secrets.yml (vault encrypted)     ║
           ║                                                               ║
           ║  Common Services:                                             ║
           ║  • Elasticsearch: https://<IP>:9200                           ║

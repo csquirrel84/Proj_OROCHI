@@ -197,7 +197,6 @@
 
 - name: Update Fleet default output
   ansible.builtin.uri:
-    # FIXED: Use ['items'] instead of .items
     url: "https://localhost:{{ ports.kibana }}/api/fleet/outputs/{{ fleet_outputs.json['items'][0].id }}"
     method: PUT
     user: elastic
