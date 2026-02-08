@@ -74,10 +74,11 @@
   tags: thehive
 
 - name: Generate TheHive secret
-  ansible.builtin.shell: cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 64 | head -n 1
+  ansible.builtin.shell: cat /dev/urandom | tr -dc 'a-zA-Z0-9' | head -c 64
   register: hive_secret
   changed_when: false
   no_log: true
+  timeout: 10
   tags: thehive
 
 - name: Create TheHive application.conf
