@@ -1,146 +1,74 @@
 ---
 # ==============================================
-# RITA ROLE - Network Traffic Analysis
+# RITA ROLE - Network Traffic Analysis (Bare Metal)
 # ==============================================
 
-- name: Create RITA directories
+- name: Remove old broken RITA installation
   ansible.builtin.file:
     path: "{{ item }}"
-    state: directory
-    mode: '0755'
+    state: absent
   loop:
-    - "{{ directories.rita }}"
-    - "{{ directories.rita }}/config"
-    - "{{ directories.rita }}/logs"
-    - "{{ directories.mongodb }}"
+    - /usr/local/bin/rita
+    - /root/.rita
+    - /home/{{ ansible_user }}/.rita
+    - /opt/rita
+  ignore_errors: true
   tags: rita
 
-- name: Create RITA configuration
-  ansible.builtin.copy:
-    dest: "{{ directories.rita }}/config/config.yaml"
-    content: |
-      MongoDB:
-        ConnectionString: mongodb://mongodb-rita:27017
-        AuthenticationMechanism: null
-        SocketTimeout: 2
-        TLS:
-          Enable: false
-          VerifyCertificate: false
-          CAFile: null
-
-      LogLevel: 2
-      LogPath: /logs
-
-      Filtering:
-        AlwaysInclude: []
-        NeverInclude:
-          - 0.0.0.0/32
-          - 255.255.255.255/32
-          - 127.0.0.0/8
-          - 224.0.0.0/4
-          - 240.0.0.0/4
-          - ::1/128
-          - fe80::/10
-          - ff00::/8
-        InternalSubnets:
-          - 10.0.0.0/8
-          - 172.16.0.0/12
-          - 192.168.0.0/16
-
-      Bro:
-        ImportDirectory: /logs
-        DBRoot: RITA
-        MetaDB: MetaDatabase
-        ImportBuffer: 100000
-
-      BeaconFQDN:
-        Enabled: true
-
-      BeaconProxy:
-        Enabled: true
-
-      BeaconSNI:
-        Enabled: true
-
-      Beacon:
-        Enabled: true
-        DefaultConnectionThresh: 20
-
-      DNS:
-        Enabled: true
-
-      Blacklisted:
-        Enabled: true
-        feodotracker:
-          Enable: true
-        MalwareDomains:
-          Enable: true
+- name: Download RITA installer tarball
+  ansible.builtin.get_url:
+    url: "https://github.com/activecm/rita/releases/download/{{ rita_version }}/rita-{{ rita_version }}.tar.gz"
+    dest: "/tmp/rita-{{ rita_version }}.tar.gz"
     mode: '0644'
   tags: rita
 
-# MongoDB for RITA
-- name: Pull MongoDB image
-  community.docker.docker_image:
-    name: "mongo:{{ mongodb_version }}"
-    source: pull
+- name: Extract RITA installer
+  ansible.builtin.unarchive:
+    src: "/tmp/rita-{{ rita_version }}.tar.gz"
+    dest: /tmp
+    remote_src: true
   tags: rita
 
-- name: Start MongoDB for RITA
-  community.docker.docker_container:
-    name: mongodb-rita
-    image: "mongo:{{ mongodb_version }}"
-    state: started
-    restart_policy: unless-stopped
-    hostname: mongodb-rita
-    networks:
-      - name: "{{ orochi_network_name }}"
-    volumes:
-      - "{{ directories.mongodb }}:/data/db"
-    memory: "{{ resources.mongodb.memory }}"
+- name: Patch RITA installer for Ubuntu 25
+  ansible.builtin.lineinfile:
+    path: "/tmp/rita-{{ rita_version }}-installer/install_pre.yml"
+    regexp: "ansible_distribution_major_version not in \\['22', '24'\\]"
+    line: "          (ansible_distribution == 'Ubuntu'    and ansible_distribution_major_version not in ['22', '24', '25']) or"
   tags: rita
 
-- name: Wait for MongoDB
-  ansible.builtin.pause:
-    seconds: 10
+- name: Run RITA pre-checks playbook
+  ansible.builtin.command:
+    cmd: ansible-playbook install_pre.yml
+    chdir: "/tmp/rita-{{ rita_version }}-installer"
+  environment:
+    ANSIBLE_LOCALHOST_WARNING: 'false'
   tags: rita
 
-# RITA Backend
-- name: Pull RITA image
-  community.docker.docker_image:
-    name: "quay.io/activecm/rita:{{ rita_version }}"
-    source: pull
+- name: Run RITA installation playbook
+  ansible.builtin.command:
+    cmd: ansible-playbook install_rita.yml
+    chdir: "/tmp/rita-{{ rita_version }}-installer"
+  environment:
+    ANSIBLE_LOCALHOST_WARNING: 'false'
   tags: rita
 
-- name: Start RITA backend
-  community.docker.docker_container:
-    name: rita
-    image: "quay.io/activecm/rita:{{ rita_version }}"
-    state: started
-    restart_policy: unless-stopped
-    hostname: rita
-    networks:
-      - name: "{{ orochi_network_name }}"
-    ports:
-      - "{{ ports.rita }}:80"
-    volumes:
-      - "{{ directories.rita }}/config:/root/.rita"
-      - "{{ directories.rita }}/logs:/logs"
-      - "/var/log/suricata:/logs/suricata:ro"
-    env:
-      RITA_CONFIG: "/root/.rita/config.yaml"
-    memory: "{{ resources.rita.memory }}"
-    command: ["sh", "-c", "while true; do sleep 3600; done"]
+- name: Verify RITA installation
+  ansible.builtin.command: rita --version
+  register: rita_version_check
+  changed_when: false
+  failed_when: false
   tags: rita
 
 - name: Display RITA status
   ansible.builtin.debug:
     msg:
-      - "RITA is running!"
-      - "URL: http://{{ orochi_server_ip }}:{{ ports.rita }}"
+      - "RITA {{ rita_version }} installed!"
       - ""
-      - "To import Suricata logs:"
-      - "  docker exec rita rita import /logs/suricata dataset-name"
+      - "Binary: /usr/local/bin/rita"
       - ""
-      - "To view results:"
-      - "  docker exec rita rita html-report"
+      - "Usage:"
+      - "  rita import --database=my-dataset --logs=/path  # Import logs"
+      - "  rita view my-dataset                            # View analysis"
+      - ""
+      - "Version: {{ rita_version_check.stdout | default('Check with: rita --version') }}"
   tags: rita

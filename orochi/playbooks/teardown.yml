@@ -9,12 +9,24 @@
     orochi_base_path: /opt/orochi
 
   tasks:
+    - name: Stop Zeek service (if running on bare metal)
+      ansible.builtin.systemd:
+        name: zeek
+        state: stopped
+        enabled: no
+      ignore_errors: true
+
+    - name: Stop Suricata service (if running on bare metal)
+      ansible.builtin.systemd:
+        name: suricata
+        state: stopped
+        enabled: no
+      ignore_errors: true
+
     - name: Force kill and remove containers
       ansible.builtin.shell: "docker rm -f {{ item }} || true"
       loop:
         - tool-portal  # Tool Portal
-        - rita
-        - mongodb-rita
         - mattermost
         - postgres-mattermost
         - cyberchef

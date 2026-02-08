@@ -1,22 +1,96 @@
 ---
 # ==============================================
-# SURICATA ROLE - Network IDS
+# SURICATA ROLE - Network IDS (Bare Metal)
 # ==============================================
 
-- name: Create Suricata directories
-  ansible.builtin.file:
-    path: "{{ item }}"
-    state: directory
-    mode: '0755'
-  loop:
-    - "{{ directories.suricata }}"
-    - "{{ directories.suricata }}/rules"
-    - "/var/log/suricata"
+- name: Gather facts if not already gathered
+  ansible.builtin.setup:
+  when: ansible_distribution is not defined
   tags: suricata
 
-- name: Create Suricata configuration
+- name: Set Ubuntu release for Suricata PPA
+  ansible.builtin.set_fact:
+    suricata_ubuntu_release: "{{ ansible_distribution_release }}"
+  tags: suricata
+
+- name: Check if Suricata PPA exists for this Ubuntu version
+  ansible.builtin.uri:
+    url: "http://ppa.launchpad.net/oisf/suricata-stable/ubuntu/dists/{{ suricata_ubuntu_release }}/"
+    method: HEAD
+    status_code: [200, 404]
+  register: suricata_ppa_check
+  failed_when: false
+  tags: suricata
+
+- name: Fallback to Ubuntu 24.04 (noble) if PPA not available
+  ansible.builtin.set_fact:
+    suricata_ubuntu_release: "noble"
+  when: suricata_ppa_check.status == 404
+  tags: suricata
+
+- name: Install prerequisites
+  ansible.builtin.apt:
+    name:
+      - software-properties-common
+      - apt-transport-https
+      - gnupg
+    state: present
+    update_cache: yes
+  tags: suricata
+
+- name: Create keyrings directory
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: '0755'
+  tags: suricata
+
+- name: Download Suricata PPA GPG key
+  ansible.builtin.get_url:
+    url: https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x121504ade276e141ad704a75ac10378cf205c960
+    dest: /tmp/suricata-ppa.key
+    mode: '0644'
+  tags: suricata
+
+- name: Add Suricata PPA GPG key to trusted keyring
+  ansible.builtin.shell: |
+    gpg --dearmor < /tmp/suricata-ppa.key > /etc/apt/keyrings/suricata-ppa.gpg
+  args:
+    creates: /etc/apt/keyrings/suricata-ppa.gpg
+  tags: suricata
+
+- name: Add Suricata OISF PPA repository
+  ansible.builtin.apt_repository:
+    repo: "deb [signed-by=/etc/apt/keyrings/suricata-ppa.gpg] http://ppa.launchpad.net/oisf/suricata-stable/ubuntu {{ suricata_ubuntu_release }} main"
+    state: present
+    filename: suricata
+  tags: suricata
+
+- name: Update apt cache
+  ansible.builtin.apt:
+    update_cache: yes
+  tags: suricata
+
+- name: Install Suricata
+  ansible.builtin.apt:
+    name:
+      - suricata
+      - jq
+    state: present
+  tags: suricata
+
+- name: Create Suricata log directory
+  ansible.builtin.file:
+    path: /var/log/suricata
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+  tags: suricata
+
+- name: Configure Suricata YAML
   ansible.builtin.copy:
-    dest: "{{ directories.suricata }}/suricata.yaml"
+    dest: /etc/suricata/suricata.yaml
     content: |
       %YAML 1.1
       ---
@@ -48,81 +122,291 @@
           GENEVE_PORTS: 6081
           VXLAN_PORTS: 4789
           TEREDO_PORTS: 3544
-      
+
       default-log-dir: /var/log/suricata/
-      
+
+      # Logging outputs
       outputs:
         - eve-log:
             enabled: yes
             filetype: regular
             filename: eve.json
             types:
-              - alert
-              - http
-              - dns
-              - tls
-              - files
+              - alert:
+                  tagged-packets: yes
+              - anomaly:
+                  enabled: yes
+              - http:
+                  extended: yes
+              - dns:
+                  query: yes
+                  answer: yes
+              - tls:
+                  extended: yes
+              - files:
+                  force-magic: no
+              - smtp:
               - ssh
               - flow
+              - netflow
         - fast:
             enabled: yes
             filename: fast.log
+            append: yes
         - stats:
             enabled: yes
             filename: stats.log
-            interval: 8
-      
+            append: yes
+            totals: yes
+            threads: no
+
+      # Logging configuration
+      logging:
+        default-log-level: notice
+        outputs:
+          - console:
+              enabled: yes
+          - file:
+              enabled: yes
+              level: info
+              filename: suricata.log
+          - syslog:
+              enabled: no
+
+      # AF_PACKET configuration for high-performance capture
       af-packet:
         - interface: {{ suricata.interface }}
           threads: auto
           cluster-id: 99
           cluster-type: cluster_flow
           defrag: yes
-      
+          use-mmap: yes
+          mmap-locked: yes
+          tpacket-v3: yes
+          ring-size: 2048
+          block-size: 32768
+
+      # Application layer protocols
+      app-layer:
+        protocols:
+          tls:
+            enabled: yes
+            detection-ports:
+              dp: 443
+          http:
+            enabled: yes
+          dns:
+            tcp:
+              enabled: yes
+              detection-ports:
+                dp: 53
+            udp:
+              enabled: yes
+              detection-ports:
+                dp: 53
+          ssh:
+            enabled: yes
+          smtp:
+            enabled: yes
+          ftp:
+            enabled: yes
+          smb:
+            enabled: yes
+          nfs:
+            enabled: yes
+          tftp:
+            enabled: yes
+          dcerpc:
+            enabled: yes
+          # Disable industrial protocols if not needed
+          dnp3:
+            enabled: no
+          modbus:
+            enabled: no
+          enip:
+            enabled: no
+
+      # Threading
+      threading:
+        set-cpu-affinity: no
+        cpu-affinity:
+          - management-cpu-set:
+              cpu: [ 0 ]
+          - receive-cpu-set:
+              cpu: [ 0 ]
+          - worker-cpu-set:
+              cpu: [ "all" ]
+        detect-thread-ratio: 1.0
+
+      # Rule configuration
       default-rule-path: /var/lib/suricata/rules
       rule-files:
         - suricata.rules
+
+      # Rule reload settings
+      detect:
+        profile: medium
+        custom-values:
+          toclient-groups: 3
+          toserver-groups: 25
+        sgh-mpm-context: auto
+        inspection-recursion-limit: 3000
+
+      # Performance tuning
+      stream:
+        memcap: 64mb
+        checksum-validation: yes
+        inline: auto
+        reassembly:
+          memcap: 256mb
+          depth: 1mb
+          toserver-chunk-size: 2560
+          toclient-chunk-size: 2560
+
+      # Defragmentation
+      defrag:
+        memcap: 32mb
+        hash-size: 65536
+        trackers: 65535
+        max-frags: 65535
+        prealloc: yes
+        timeout: 60
+
+      # Host table
+      host:
+        hash-size: 4096
+        prealloc: 1000
+        memcap: 32mb
+
+      # Flow settings
+      flow:
+        memcap: 128mb
+        hash-size: 65536
+        prealloc: 10000
+        emergency-recovery: 30
+
+      # Capture settings
+      capture:
+        disable-offloading: true
+
+      # Stats
+      stats:
+        enabled: yes
+        interval: 8
+
+    mode: '0644'
+    backup: yes
+  notify: restart suricata
+  tags: suricata
+
+- name: Configure Suricata interface in /etc/default/suricata
+  ansible.builtin.lineinfile:
+    path: /etc/default/suricata
+    regexp: '^IFACE='
+    line: 'IFACE={{ suricata.interface }}'
+    create: yes
     mode: '0644'
   tags: suricata
 
-- name: Pull Suricata image
-  community.docker.docker_image:
-    name: "jasonish/suricata:{{ suricata_version }}"
-    source: pull
-  tags: suricata
-
-- name: Start Suricata container
-  community.docker.docker_container:
-    name: suricata
-    image: "jasonish/suricata:{{ suricata_version }}"
-    state: started
-    restart_policy: unless-stopped
-    hostname: suricata
-    network_mode: host
-    capabilities:
-      - NET_ADMIN
-      - SYS_NICE
-      - NET_RAW
-    volumes:
-      - "/var/log/suricata:/var/log/suricata"
-      - "{{ directories.suricata }}/rules:/var/lib/suricata/rules"
-      - "{{ directories.suricata }}/suricata.yaml:/etc/suricata/suricata.yaml"
-    command: ["-i", "{{ suricata.interface }}", "-v"]
-    memory: "{{ resources.suricata.memory }}"
-  tags: suricata
-
 - name: Update Suricata rules
-  ansible.builtin.shell: |
-    docker exec suricata suricata-update
+  ansible.builtin.command: suricata-update
+  register: suricata_update_result
+  changed_when: "'Downloaded' in suricata_update_result.stdout"
+  failed_when: false
+  tags: suricata
+
+- name: Display rule update status
+  ansible.builtin.debug:
+    msg: "{{ suricata_update_result.stdout_lines }}"
+  when: suricata_update_result.stdout_lines is defined
+  tags: suricata
+
+- name: Ensure systemd override directory exists
+  ansible.builtin.file:
+    path: /etc/systemd/system/suricata.service.d
+    state: directory
+    mode: '0755'
+  tags: suricata
+
+- name: Create Suricata systemd service override
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/suricata.service.d/override.conf
+    content: |
+      [Service]
+      ExecStart=
+      ExecStart=/usr/bin/suricata -c /etc/suricata/suricata.yaml --af-packet={{ suricata.interface }} -vvv
+      TimeoutStartSec=300
+      Restart=on-failure
+      RestartSec=10s
+    mode: '0644'
+  notify: reload systemd
+  tags: suricata
+
+- name: Reload systemd daemon
+  ansible.builtin.systemd:
+    daemon_reload: yes
+  tags: suricata
+
+- name: Enable and start Suricata service
+  ansible.builtin.systemd:
+    name: suricata
+    enabled: yes
+    state: started
+  tags: suricata
+
+- name: Wait for Suricata to start
+  ansible.builtin.pause:
+    seconds: 10
+  tags: suricata
+
+- name: Check Suricata status
+  ansible.builtin.command: systemctl status suricata
+  register: suricata_status
   changed_when: false
-  ignore_errors: true
+  failed_when: false
+  tags: suricata
+
+- name: Get Suricata rule statistics
+  ansible.builtin.shell: |
+    if [ -f /var/log/suricata/stats.log ]; then
+      tail -20 /var/log/suricata/stats.log
+    else
+      echo "Stats log not yet available"
+    fi
+  register: suricata_stats
+  changed_when: false
+  failed_when: false
+  tags: suricata
+
+- name: Get loaded rule count
+  ansible.builtin.shell: |
+    grep -i "rule" /var/log/suricata/suricata.log 2>/dev/null | tail -5 || echo "Log file not yet available"
+  register: rule_count
+  changed_when: false
+  failed_when: false
   tags: suricata
 
 - name: Display Suricata status
   ansible.builtin.debug:
     msg:
-      - "Suricata IDS is running!"
+      - "Suricata IDS is running on bare metal!"
       - "Monitoring interface: {{ suricata.interface }}"
+      - "Configuration: /etc/suricata/suricata.yaml"
+      - "Rules: /var/lib/suricata/rules"
       - "Logs: /var/log/suricata"
       - "EVE JSON: /var/log/suricata/eve.json (ready for Elastic Agent)"
+      - ""
+      - "Service Status:"
+      - "{{ suricata_status.stdout_lines[-5:] | default(['Service status check pending']) }}"
+      - ""
+      - "Rule Loading Status:"
+      - "{{ rule_count.stdout_lines | default(['Checking rule count...']) }}"
+      - ""
+      - "Useful commands:"
+      - "  sudo systemctl status suricata       - Check service status"
+      - "  sudo systemctl restart suricata      - Restart Suricata"
+      - "  sudo suricata-update                 - Update rules"
+      - "  sudo tail -f /var/log/suricata/fast.log    - View alerts"
+      - "  sudo tail -f /var/log/suricata/eve.json    - View JSON events"
+      - "  sudo journalctl -u suricata -f       - View service logs"
   tags: suricata

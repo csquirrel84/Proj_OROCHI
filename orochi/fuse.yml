@@ -18,14 +18,15 @@
       "2": "Deploy Elastic Stack (Elasticsearch + Kibana + Fleet)"
       "3": "Deploy TheHive 4 (Incident Response)"
       "4": "Deploy Velociraptor (DFIR & Endpoint Visibility)"
-      "5": "Deploy Suricata (Network IDS)"
-      "6": "Deploy Arkime (Full Packet Capture)"
-      "7": "Deploy CyberChef (Data Analysis)"
-      "8": "Deploy Mattermost (Team Communication)"
-      "9": "Deploy RITA (Network Traffic Analysis)"
-      "10": "Deploy Tool Portal (Dashboard)"
-      "11": "Show Current Status"
-      "12": "Teardown (Remove All)"
+      "5": "Deploy Zeek (Network Analysis)"
+      "6": "Deploy Suricata (Network IDS)"
+      "7": "Deploy Arkime (Full Packet Capture)"
+      "8": "Deploy CyberChef (Data Analysis)"
+      "9": "Deploy Mattermost (Team Communication)"
+      "10": "Deploy RITA (Network Traffic Analysis)"
+      "11": "Deploy Tool Portal (Dashboard)"
+      "12": "Show Current Status"
+      "13": "Teardown (Remove All)"
       "0": "Exit"
 
   pre_tasks:
@@ -62,14 +63,15 @@
           │  2. Deploy Elastic Stack                │
           │  3. Deploy TheHive 4                    │
           │  4. Deploy Velociraptor                 │
-          │  5. Deploy Suricata IDS                 │
-          │  6. Deploy Arkime                       │
-          │  7. Deploy CyberChef                    │
-          │  8. Deploy Mattermost                   │
-          │  9. Deploy RITA                         │
-          │ 10. Deploy Tool Portal                  │
-          │ 11. Show Status                         │
-          │ 12. Teardown All                        │
+          │  5. Deploy Zeek                         │
+          │  6. Deploy Suricata                     │
+          │  7. Deploy Arkime                       │
+          │  8. Deploy CyberChef                    │
+          │  9. Deploy Mattermost                   │
+          │ 10. Deploy RITA                         │
+          │ 11. Deploy Tool Portal                  │
+          │ 12. Show Status                         │
+          │ 13. Teardown All                        │
           │  0. Exit                                │
           └─────────────────────────────────────────┘
           
@@ -78,7 +80,7 @@
 
     - name: Prompt for selection
       ansible.builtin.pause:
-        prompt: "Enter your choice [1-12, 0 to exit]"
+        prompt: "Enter your choice [1-13, 0 to exit]"
       register: user_input
       when: menu_choice is not defined
       tags: always
@@ -116,6 +118,8 @@
             name: velociraptor
         - ansible.builtin.include_role:
             name: suricata
+        - ansible.builtin.include_role:
+            name: zeek
         - ansible.builtin.include_role:
             name: arkime
         - ansible.builtin.include_role:
@@ -164,9 +168,20 @@
         - ansible.builtin.include_role:
             name: velociraptor
 
-    # Option 5: Suricata
-    - name: Deploy Suricata
+    # Option 5: Zeek
+    - name: Deploy Zeek
       when: menu_choice == "5"
+      block:
+        - ansible.builtin.include_role:
+            name: common
+        - ansible.builtin.include_role:
+            name: environment
+        - ansible.builtin.include_role:
+            name: zeek
+
+    # Option 6: Suricata
+    - name: Deploy Suricata
+      when: menu_choice == "6"
       block:
         - ansible.builtin.include_role:
             name: common
@@ -175,9 +190,9 @@
         - ansible.builtin.include_role:
             name: suricata
 
-    # Option 6: Arkime
+    # Option 7: Arkime
     - name: Deploy Arkime
-      when: menu_choice == "6"
+      when: menu_choice == "7"
       block:
         - ansible.builtin.include_role:
             name: common
@@ -190,18 +205,18 @@
         - ansible.builtin.include_role:
             name: arkime
 
-    # Option 7: CyberChef
+    # Option 8: CyberChef
     - name: Deploy CyberChef
-      when: menu_choice == "7"
+      when: menu_choice == "8"
       block:
         - ansible.builtin.include_role:
             name: common
         - ansible.builtin.include_role:
             name: cyberchef
 
-    # Option 8: Mattermost
+    # Option 9: Mattermost
     - name: Deploy Mattermost
-      when: menu_choice == "8"
+      when: menu_choice == "9"
       block:
         - ansible.builtin.include_role:
             name: common
@@ -210,9 +225,9 @@
         - ansible.builtin.include_role:
             name: mattermost
 
-    # Option 9: RITA
+    # Option 10: RITA
     - name: Deploy RITA
-      when: menu_choice == "9"
+      when: menu_choice == "10"
       block:
         - ansible.builtin.include_role:
             name: common
@@ -221,9 +236,9 @@
         - ansible.builtin.include_role:
             name: rita
 
-    # Option 10: Tool Portal
+    # Option 11: Tool Portal
     - name: Deploy Tool Portal
-      when: menu_choice == "10"
+      when: menu_choice == "11"
       block:
         - ansible.builtin.include_role:
             name: common
@@ -234,9 +249,9 @@
         - ansible.builtin.include_role:
             name: nginx_proxy
 
-    # Option 11: Status
+    # Option 12: Status
     - name: Show Status
-      when: menu_choice == "11"
+      when: menu_choice == "12"
       block:
         - name: Get running containers
           ansible.builtin.command: docker ps --format "table {% raw %}{{.Names}}\t{{.Status}}\t{{.Ports}}{% endraw %}"
@@ -247,9 +262,9 @@
           ansible.builtin.debug:
             msg: "{{ container_status.stdout_lines }}"
 
-    # Option 12: Teardown
+    # Option 13: Teardown
     - name: Teardown All
-      when: menu_choice == "12"
+      when: menu_choice == "13"
       block:
         - name: Confirm teardown
           ansible.builtin.pause:
@@ -305,5 +320,5 @@
           ║  • Velociraptor:  https://<IP>:8889                           ║
           ╚═══════════════════════════════════════════════════════════════╝
           
-      when: menu_choice not in ["0", "10", "11"]
+      when: menu_choice not in ["0", "11", "12"]
       tags: always

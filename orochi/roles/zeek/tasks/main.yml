@@ -1,0 +1,223 @@
+---
+# ==============================================
+# ZEEK ROLE - Network Security Monitor (Bare Metal)
+# ==============================================
+
+- name: Gather facts if not already gathered
+  ansible.builtin.setup:
+  when: ansible_distribution is not defined
+  tags: zeek
+
+- name: Determine Ubuntu version for Zeek repository
+  ansible.builtin.set_fact:
+    zeek_ubuntu_version: "xUbuntu_{{ ansible_distribution_version }}"
+  tags: zeek
+
+- name: Check if Zeek repository exists for this Ubuntu version
+  ansible.builtin.uri:
+    url: "https://download.opensuse.org/repositories/security:/zeek/{{ zeek_ubuntu_version }}/"
+    method: HEAD
+    status_code: [200, 404]
+  register: zeek_repo_check
+  failed_when: false
+  tags: zeek
+
+- name: Fallback to Ubuntu 24.04 repo if specific version not available
+  ansible.builtin.set_fact:
+    zeek_ubuntu_version: "xUbuntu_24.04"
+  when: zeek_repo_check.status == 404
+  tags: zeek
+
+- name: Create keyrings directory
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: '0755'
+  tags: zeek
+
+- name: Download Zeek GPG key
+  ansible.builtin.get_url:
+    url: "https://download.opensuse.org/repositories/security:/zeek/{{ zeek_ubuntu_version }}/Release.key"
+    dest: /tmp/zeek-release.key
+    mode: '0644'
+  tags: zeek
+
+- name: Add Zeek GPG key to trusted keyring
+  ansible.builtin.shell: |
+    gpg --dearmor < /tmp/zeek-release.key > /etc/apt/keyrings/zeek-archive-keyring.gpg
+  args:
+    creates: /etc/apt/keyrings/zeek-archive-keyring.gpg
+  tags: zeek
+
+- name: Add Zeek repository
+  ansible.builtin.apt_repository:
+    repo: "deb [signed-by=/etc/apt/keyrings/zeek-archive-keyring.gpg] http://download.opensuse.org/repositories/security:/zeek/{{ zeek_ubuntu_version }}/ /"
+    state: present
+    filename: zeek
+  tags: zeek
+
+- name: Update apt cache
+  ansible.builtin.apt:
+    update_cache: yes
+  tags: zeek
+
+- name: Install Zeek
+  ansible.builtin.apt:
+    name: zeek
+    state: present
+  tags: zeek
+
+- name: Add Zeek to system PATH
+  ansible.builtin.copy:
+    dest: /etc/profile.d/zeek.sh
+    content: |
+      export PATH=/opt/zeek/bin:$PATH
+    mode: '0644'
+  tags: zeek
+
+
+- name: Configure Zeek node.cfg
+  ansible.builtin.copy:
+    dest: /opt/zeek/etc/node.cfg
+    content: |
+      [zeek]
+      type=standalone
+      host=localhost
+      interface={{ suricata.interface }}
+    mode: '0644'
+  tags: zeek
+
+- name: Configure Zeek networks.cfg
+  ansible.builtin.copy:
+    dest: /opt/zeek/etc/networks.cfg
+    content: |
+      # Private IP address space
+      10.0.0.0/8          Private IP space
+      172.16.0.0/12       Private IP space
+      192.168.0.0/16      Private IP space
+    mode: '0644'
+  tags: zeek
+
+- name: Configure zeekctl.cfg
+  ansible.builtin.lineinfile:
+    path: /opt/zeek/etc/zeekctl.cfg
+    regexp: "{{ item.regexp }}"
+    line: "{{ item.line }}"
+    state: present
+  loop:
+    - { regexp: '^#?\s*MailTo', line: 'MailTo = root@localhost' }
+    - { regexp: '^#?\s*LogRotationInterval', line: 'LogRotationInterval = 3600' }
+  tags: zeek
+
+- name: Create Zeek local site policy
+  ansible.builtin.copy:
+    dest: /opt/zeek/share/zeek/site/local.zeek
+    content: |
+      ##! Local site policy for Zeek
+      ##! Customize as needed for your environment
+
+      # Load core protocols
+      @load base/frameworks/software
+      @load base/protocols/conn
+      @load base/protocols/dns
+      @load base/protocols/http
+      @load base/protocols/ssl
+      @load base/protocols/ssh
+      @load base/protocols/ftp
+      @load base/protocols/smtp
+
+      # Enable JSON logging for all logs
+      @load policy/tuning/json-logs
+
+      # Network monitoring
+      @load policy/protocols/conn/known-hosts
+      @load policy/protocols/conn/known-services
+      @load policy/protocols/ssl/known-certs
+
+      # File analysis (without extraction to save disk space)
+      @load frameworks/files/hash-all-files
+
+      # Ensure JSON output
+      redef LogAscii::use_json = T;
+    mode: '0644'
+  tags: zeek
+
+- name: Install Zeek configuration
+  ansible.builtin.shell: /opt/zeek/bin/zeekctl install
+  environment:
+    PATH: "/opt/zeek/bin:{{ ansible_env.PATH }}"
+  changed_when: false
+  tags: zeek
+
+- name: Deploy Zeek
+  ansible.builtin.shell: /opt/zeek/bin/zeekctl deploy
+  environment:
+    PATH: "/opt/zeek/bin:{{ ansible_env.PATH }}"
+  changed_when: false
+  tags: zeek
+
+- name: Create Zeek systemd service
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/zeek.service
+    content: |
+      [Unit]
+      Description=Zeek Network Security Monitor
+      After=network.target network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/opt/zeek/bin/zeekctl start
+      ExecStop=/opt/zeek/bin/zeekctl stop
+      ExecReload=/opt/zeek/bin/zeekctl restart
+      TimeoutStartSec=300
+      TimeoutStopSec=60
+
+      [Install]
+      WantedBy=multi-user.target
+    mode: '0644'
+  tags: zeek
+
+- name: Reload systemd daemon
+  ansible.builtin.systemd:
+    daemon_reload: yes
+  tags: zeek
+
+- name: Enable and start Zeek service
+  ansible.builtin.systemd:
+    name: zeek
+    enabled: yes
+    state: started
+  tags: zeek
+
+- name: Wait for Zeek to start
+  ansible.builtin.pause:
+    seconds: 5
+  tags: zeek
+
+- name: Check Zeek status
+  ansible.builtin.shell: /opt/zeek/bin/zeekctl status
+  environment:
+    PATH: "/opt/zeek/bin:{{ ansible_env.PATH }}"
+  register: zeek_status
+  changed_when: false
+  failed_when: false
+  tags: zeek
+
+- name: Display Zeek status
+  ansible.builtin.debug:
+    msg:
+      - "Zeek Network Security Monitor installed and running!"
+      - "Monitoring interface: {{ suricata.interface }}"
+      - "Logs: /var/log/zeek"
+      - ""
+      - "Zeek Status:"
+      - "{{ zeek_status.stdout_lines }}"
+      - ""
+      - "Useful commands:"
+      - "  sudo zeekctl status    - Check Zeek status"
+      - "  sudo zeekctl restart   - Restart Zeek"
+      - "  sudo zeekctl diag      - Run diagnostics"
+      - "  tail -f /var/log/zeek/current/conn.log  - View connection logs"
+  tags: zeek

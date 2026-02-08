@@ -1,0 +1,13 @@
+---
+# ==============================================
+# SURICATA HANDLERS
+# ==============================================
+
+- name: reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: yes
+
+- name: restart suricata
+  ansible.builtin.systemd:
+    name: suricata
+    state: restarted

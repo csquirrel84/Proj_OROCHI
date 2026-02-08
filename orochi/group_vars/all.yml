@@ -9,7 +9,7 @@ orochi_project_name: orochi
 
 # Network Configuration
 orochi_network_name: orochi-network
-orochi_server_ip: "{{ ansible_default_ipv4.address | default('127.0.0.1') }}"
+orochi_server_ip: "{{ selected_ip | default(ansible_host) | default('127.0.0.1') }}"
 
 elasticsearch:
   cluster_name: "{{ cluster_name }}"
@@ -26,8 +26,8 @@ cyberchef_version: "latest"
 mattermost_version: "latest"
 postgres_version: "15-alpine"
 portal_version: "alpine"
-rita_version: "latest"
-mongodb_version: "4.4"
+rita_version: "v5.1.1"
+clickhouse_version: "latest"
 
 
 # ==============================================
@@ -72,7 +72,7 @@ resources:
     memory: "2g"
   mattermost:
     memory: "1g"
-  mongodb:
+  clickhouse:
     memory: "1g"
   rita:
     memory: "512m"
@@ -128,5 +128,5 @@ directories:
   postgres: "{{ orochi_base_path }}/postgres"
   portal: "{{ orochi_base_path }}/portal"
   rita: "{{ orochi_base_path }}/rita"
-  mongodb: "{{ orochi_base_path }}/mongodb"
+  clickhouse: "{{ orochi_base_path }}/clickhouse"
   logs: "{{ orochi_base_path }}/logs"

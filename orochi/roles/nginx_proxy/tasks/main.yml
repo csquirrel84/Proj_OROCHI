@@ -126,31 +126,13 @@
           </div>
 
           <div class="services">
-              <a href="https://{{ orochi_server_ip }}:{{ ports.elasticsearch }}" class="service-card" target="_blank">
-                  <div class="service-icon">
-                      <img src="https://static-www.elastic.co/v3/assets/bltefdd0b53724fa2ce/blt36f2da8d650732a0/5d0823c3d8ff351753cbc99f/logo-elasticsearch-32-color.svg" alt="Elasticsearch">
-                  </div>
-                  <div class="service-name">Elasticsearch</div>
-                  <div class="service-desc">Search & Analytics Engine</div>
-                  <div class="service-url">https://{{ orochi_server_ip }}:{{ ports.elasticsearch }}</div>
-              </a>
-
               <a href="https://{{ orochi_server_ip }}:{{ ports.kibana }}" class="service-card" target="_blank">
                   <div class="service-icon">
                       <img src="https://static-www.elastic.co/v3/assets/bltefdd0b53724fa2ce/blt4466841eed0bf232/5d082a5e97f2babb5af907ee/logo-kibana-32-color.svg" alt="Kibana">
                   </div>
                   <div class="service-name">Kibana</div>
-                  <div class="service-desc">Data Visualization & SIEM</div>
+                  <div class="service-desc">SIEM & Data Visualization</div>
                   <div class="service-url">https://{{ orochi_server_ip }}:{{ ports.kibana }}</div>
-              </a>
-
-              <a href="https://{{ orochi_server_ip }}:{{ ports.fleet }}" class="service-card" target="_blank">
-                  <div class="service-icon">
-                      <img src="https://static-www.elastic.co/v3/assets/bltefdd0b53724fa2ce/blt7f2d2f233ed49488/5eb26953c3a05b7d7b0a8304/logo-elastic-agent-32-color.svg" alt="Fleet">
-                  </div>
-                  <div class="service-name">Fleet Server</div>
-                  <div class="service-desc">Agent Management</div>
-                  <div class="service-url">https://{{ orochi_server_ip }}:{{ ports.fleet }}</div>
               </a>
 
               <a href="http://{{ orochi_server_ip }}:{{ ports.thehive }}" class="service-card" target="_blank">
@@ -196,15 +178,6 @@
                   <div class="service-name">Mattermost</div>
                   <div class="service-desc">Team Communication</div>
                   <div class="service-url">http://{{ orochi_server_ip }}:{{ ports.mattermost }}</div>
-              </a>
-
-              <a href="http://{{ orochi_server_ip }}:{{ ports.rita }}" class="service-card" target="_blank">
-                  <div class="service-icon">
-                      <img src="https://raw.githubusercontent.com/activecm/rita/master/docs/images/rita_logo.png" alt="RITA">
-                  </div>
-                  <div class="service-name">RITA</div>
-                  <div class="service-desc">Network Traffic Analytics</div>
-                  <div class="service-url">http://{{ orochi_server_ip }}:{{ ports.rita }}</div>
               </a>
           </div>
 

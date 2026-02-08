@@ -31,8 +31,6 @@ OROCHI_CONTAINERS=(
     "suricata"
     "arkime"
     "cyberchef"
-    "rita"
-    "mongodb-rita"
     "mattermost"
     "postgres-mattermost"
     "tool-portal"
@@ -71,9 +69,37 @@ echo -e "${GREEN}Starting Orochi reset...${NC}"
 echo ""
 
 # ==============================================
+# Stop Zeek and Suricata services (if running on bare metal)
+# ==============================================
+echo -e "${YELLOW}[1/5] Stopping bare metal services...${NC}"
+
+# Stop Zeek
+if systemctl is-active --quiet zeek 2>/dev/null; then
+    echo "  - Stopping Zeek service"
+    sudo systemctl stop zeek 2>/dev/null || true
+    sudo systemctl disable zeek 2>/dev/null || true
+    echo -e "${GREEN}✓ Zeek service stopped${NC}"
+else
+    echo "  - Zeek service not running (skipping)"
+fi
+
+# Stop Suricata
+if systemctl is-active --quiet suricata 2>/dev/null; then
+    echo "  - Stopping Suricata service"
+    sudo systemctl stop suricata 2>/dev/null || true
+    sudo systemctl disable suricata 2>/dev/null || true
+    echo -e "${GREEN}✓ Suricata service stopped${NC}"
+else
+    echo "  - Suricata service not running (skipping)"
+fi
+
+echo -e "${GREEN}✓ Bare metal services stopped${NC}"
+echo ""
+
+# ==============================================
 # Stop and remove Orochi containers
 # ==============================================
-echo -e "${YELLOW}[1/4] Stopping and removing Orochi containers...${NC}"
+echo -e "${YELLOW}[2/5] Stopping and removing Orochi containers...${NC}"
 for container in "${OROCHI_CONTAINERS[@]}"; do
     if docker ps -a --format '{{.Names}}' | grep -q "^${container}$"; then
         echo "  - Removing container: ${container}"
@@ -89,7 +115,7 @@ echo ""
 # ==============================================
 # Remove Orochi Docker network
 # ==============================================
-echo -e "${YELLOW}[2/4] Removing Orochi Docker network...${NC}"
+echo -e "${YELLOW}[3/5] Removing Orochi Docker network...${NC}"
 if docker network ls --format '{{.Name}}' | grep -q "^${OROCHI_NETWORK}$"; then
     echo "  - Removing network: ${OROCHI_NETWORK}"
     docker network rm "${OROCHI_NETWORK}" 2>/dev/null || true
@@ -103,7 +129,7 @@ echo ""
 # ==============================================
 # Remove Orochi volumes (optional - only unnamed ones)
 # ==============================================
-echo -e "${YELLOW}[3/4] Cleaning up dangling Docker volumes...${NC}"
+echo -e "${YELLOW}[4/5] Cleaning up dangling Docker volumes...${NC}"
 DANGLING_VOLUMES=$(docker volume ls -qf dangling=true)
 if [ -n "$DANGLING_VOLUMES" ]; then
     echo "  - Removing dangling volumes"
@@ -118,13 +144,13 @@ echo ""
 # ==============================================
 # Remove Orochi data directories
 # ==============================================
-echo -e "${YELLOW}[4/4] Removing Orochi data directories...${NC}"
+echo -e "${YELLOW}[5/5] Removing Orochi data directories...${NC}"
 if [ -d "$OROCHI_BASE_PATH" ]; then
     echo "  - Removing: ${OROCHI_BASE_PATH}"
     echo "    This includes all subdirectories:"
     echo "      • certs, elasticsearch, kibana, fleet"
     echo "      • thehive, thehive-es, cassandra"
-    echo "      • velociraptor, suricata, arkime"
+    echo "      • velociraptor, suricata, zeek, arkime"
     echo "      • mattermost, postgres, tool-portal, logs"
 
     # Check if we need sudo
@@ -138,6 +164,28 @@ if [ -d "$OROCHI_BASE_PATH" ]; then
 else
     echo "  - Directory not found (skipping): ${OROCHI_BASE_PATH}"
     echo -e "${GREEN}✓ Directory already removed${NC}"
+fi
+
+# Remove Zeek logs
+if [ -d "/opt/zeek/logs" ]; then
+    echo "  - Removing Zeek logs: /opt/zeek/logs"
+    if [ -w "/opt/zeek/logs" ]; then
+        rm -rf /opt/zeek/logs
+    else
+        sudo rm -rf /opt/zeek/logs
+    fi
+    echo -e "${GREEN}✓ Zeek logs removed${NC}"
+fi
+
+# Remove Suricata logs
+if [ -d "/var/log/suricata" ]; then
+    echo "  - Removing Suricata logs: /var/log/suricata"
+    if [ -w "/var/log/suricata" ]; then
+        rm -rf /var/log/suricata
+    else
+        sudo rm -rf /var/log/suricata
+    fi
+    echo -e "${GREEN}✓ Suricata logs removed${NC}"
 fi
 echo ""
 

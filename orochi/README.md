@@ -36,7 +36,7 @@ cd orochi
 ansible-vault create vars/vault.yml
 
 # Run interactive deployer
-./site.yml
+./fuse.yml
 
 # Or deploy specific stack
 ansible-playbook playbooks/deploy_elastic_stack.yml
