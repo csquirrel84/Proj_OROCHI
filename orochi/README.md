@@ -22,6 +22,8 @@ An Ansible-based deployment framework for security tools, inspired by [Project T
 | Arkime | Packet Capture | 8005 |
 | CyberChef | Data Analysis | 8080 |
 | Mattermost | Team Chat | 8065 |
+| RITA | Network Traffic Analytics | 8888 |
+| Tool Portal | Service Dashboard | 80 |
 
 ## Quick Start
 

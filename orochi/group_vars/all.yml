@@ -22,6 +22,12 @@ elasticsearch:
 elasticsearch_hive_version: "7.17.9"
 thehive_version: "4.1.19"
 cassandra_version: "4.0"
+cyberchef_version: "latest"
+mattermost_version: "latest"
+postgres_version: "15-alpine"
+portal_version: "alpine"
+rita_version: "latest"
+mongodb_version: "4.4"
 
 
 # ==============================================
@@ -39,8 +45,9 @@ ports:
   arkime: 8005
   cyberchef: 8080
   mattermost: 8065
-  nginx_http: 80
-  nginx_https: 443
+  rita: 8888
+  portal_http: 80
+  portal_https: 443
 
 
 # ==============================================
@@ -55,6 +62,9 @@ resources:
     memory: "2g"
     heap: "1024M"
     heap_new: "256M"
+  elasticsearch:
+    memory: "1g"
+    heap: "512m"
   elasticsearch_hive:
     memory: "1g"
     heap: "512m"
@@ -62,11 +72,18 @@ resources:
     memory: "2g"
   mattermost:
     memory: "1g"
+  mongodb:
+    memory: "1g"
+  rita:
+    memory: "512m"
 
 # ==============================================
-# SURICATA VERSION
+# SURICATA CONFIGURATION
 # ==============================================
 suricata_version: "latest"
+suricata:
+  interface: "eth0"  # Override via environment role prompts
+  home_net: "192.168.0.0/16"  # Override via environment role prompts
 
 # ==============================================
 # AUTHENTICATION (Override in secrets.yml)
@@ -90,7 +107,7 @@ arkime_password: "{{ common_password }}"
 # ==============================================
 features:
   ssl_enabled: true
-  nginx_proxy: false
+  tool_portal: true
   monitoring: true
 
 # ==============================================
@@ -109,5 +126,7 @@ directories:
   arkime: "{{ orochi_base_path }}/arkime"
   mattermost: "{{ orochi_base_path }}/mattermost"
   postgres: "{{ orochi_base_path }}/postgres"
-  nginx: "{{ orochi_base_path }}/nginx"
+  portal: "{{ orochi_base_path }}/portal"
+  rita: "{{ orochi_base_path }}/rita"
+  mongodb: "{{ orochi_base_path }}/mongodb"
   logs: "{{ orochi_base_path }}/logs"

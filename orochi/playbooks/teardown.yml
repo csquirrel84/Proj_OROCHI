@@ -12,7 +12,9 @@
     - name: Force kill and remove containers
       ansible.builtin.shell: "docker rm -f {{ item }} || true"
       loop:
-        - nginx-proxy
+        - tool-portal  # Tool Portal
+        - rita
+        - mongodb-rita
         - mattermost
         - postgres-mattermost
         - cyberchef
@@ -36,13 +38,14 @@
       ansible.builtin.pause:
         prompt: |
           Choose cleanup level:
-          1. Reset Data (Keep .env config, delete databases/logs/certs)
-          2. Full Wipe (Delete EVERYTHING including .env)
-          3. Cancel (Keep files)
+          1. Reset Data (delete databases/logs/certs on target)
+          2. Full Wipe (delete {{ orochi_base_path }} on target)
+          3. Cancel (keep files)
+          Note: .env config is on control node and unaffected
           Enter 1, 2, or 3
       register: cleanup_choice
 
-    - name: Reset Data (Keep .env)
+    - name: Reset Data (Remove subdirectories)
       when: cleanup_choice.user_input == "1"
       block:
         - name: Find all directories in base path
@@ -51,16 +54,13 @@
             file_type: directory
           register: orochi_dirs
 
-        - name: Remove subdirectories (keeps files in root like .env)
+        - name: Remove subdirectories
           ansible.builtin.file:
             path: "{{ item.path }}"
             state: absent
           loop: "{{ orochi_dirs.files }}"
-        
-        - name: Remove generated files (except .env)
-          ansible.builtin.shell: "find {{ orochi_base_path }} -maxdepth 1 -type f -not -name '.env' -delete"
 
-    - name: Full Wipe (Delete Everything)
+    - name: Full Wipe (Delete Everything on target)
       ansible.builtin.file:
         path: "{{ orochi_base_path }}"
         state: absent
@@ -70,5 +70,6 @@
       ansible.builtin.debug:
         msg:
           - "Containers removed."
-          - "{% if cleanup_choice.user_input == '1' %}Data reset. Config preserved at {{ orochi_base_path }}/.env{% endif %}"
-          - "{% if cleanup_choice.user_input == '2' %}Full wipe complete. {{ orochi_base_path }} removed.{% endif %}"
+          - "{% if cleanup_choice.user_input == '1' %}Data reset on target. {{ orochi_base_path }} subdirectories removed.{% endif %}"
+          - "{% if cleanup_choice.user_input == '2' %}Full wipe complete. {{ orochi_base_path }} removed from target.{% endif %}"
+          - "Config preserved at ./orochi/.env on control node."

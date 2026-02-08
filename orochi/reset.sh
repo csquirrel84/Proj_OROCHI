@@ -1,53 +1,158 @@
 #!/bin/bash
 
-# Define the path to the certs folder
-CERTS_FOLDER="./certs"
-RAPTOR_FOLDER="./velociraptor"
-echo "Stopping all running Docker containers..."
-docker stop $(docker ps -aq)
+# ==============================================
+# OROCHI SECURITY STACK - RESET SCRIPT
+# ==============================================
+# This script removes ONLY Orochi components
+# It will NOT affect other Docker projects
+# ==============================================
 
-echo "Removing all Docker containers..."
-docker rm $(docker ps -aq)
+set -e
 
-echo "Removing all Docker images..."
-docker rmi -f $(docker images -q)
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
 
-echo "Removing all Docker volumes..."
-docker volume rm $(docker volume ls -q)
+# Orochi configuration
+OROCHI_BASE_PATH="/opt/orochi"
+OROCHI_NETWORK="orochi-network"
 
-echo "Removing all Docker networks (except default)..."
-docker network rm $(docker network ls -q | grep -v "bridge\|host\|none")
+# List of Orochi containers
+OROCHI_CONTAINERS=(
+    "elasticsearch"
+    "kibana"
+    "fleet-server"
+    "elasticsearch-hive"
+    "thehive"
+    "cassandra"
+    "velociraptor"
+    "suricata"
+    "arkime"
+    "cyberchef"
+    "rita"
+    "mongodb-rita"
+    "mattermost"
+    "postgres-mattermost"
+    "tool-portal"
+)
 
-echo "Cleaning up unused Docker resources..."
-docker system prune -af
-docker volume prune -f
+echo -e "${YELLOW}"
+echo "╔═══════════════════════════════════════════════════════════════╗"
+echo "║                                                               ║"
+echo "║     ██████  ██████   ██████   ██████ ██   ██ ██               ║"
+echo "║    ██    ██ ██   ██ ██    ██ ██      ██   ██ ██               ║"
+echo "║    ██    ██ ██████  ██    ██ ██      ███████ ██               ║"
+echo "║    ██    ██ ██   ██ ██    ██ ██      ██   ██ ██               ║"
+echo "║     ██████  ██   ██  ██████   ██████ ██   ██ ██               ║"
+echo "║                                                               ║"
+echo "║                  RESET SCRIPT v1.0                            ║"
+echo "║                                                               ║"
+echo "╚═══════════════════════════════════════════════════════════════╝"
+echo -e "${NC}"
+echo ""
+echo -e "${RED}WARNING: This will remove ALL Orochi components:${NC}"
+echo "  - Docker containers: ${OROCHI_CONTAINERS[@]}"
+echo "  - Docker network: ${OROCHI_NETWORK}"
+echo "  - All data in: ${OROCHI_BASE_PATH}"
+echo ""
+echo -e "${YELLOW}This will NOT affect other Docker projects on this system.${NC}"
+echo ""
+read -p "Are you sure you want to continue? Type 'YES' to confirm: " CONFIRM
 
-# Remove the certs folder if it exists
-if [ -d "$CERTS_FOLDER" ]; then
-    echo "Removing $CERTS_FOLDER directory..."
-    rm -rf "$CERTS_FOLDER"
-else
-    echo "$CERTS_FOLDER directory does not exist."
+if [ "$CONFIRM" != "YES" ]; then
+    echo -e "${GREEN}Reset cancelled.${NC}"
+    exit 0
 fi
 
-# Remove the VELOCIRAPTOR folder if it exists
-if [ -d "$RAPTOR_FOLDER" ]; then
-    echo "Removing $RAPTOR_FOLDER directory..."
-    rm -rf "$RAPTOR_FOLDER"
+echo ""
+echo -e "${GREEN}Starting Orochi reset...${NC}"
+echo ""
+
+# ==============================================
+# Stop and remove Orochi containers
+# ==============================================
+echo -e "${YELLOW}[1/4] Stopping and removing Orochi containers...${NC}"
+for container in "${OROCHI_CONTAINERS[@]}"; do
+    if docker ps -a --format '{{.Names}}' | grep -q "^${container}$"; then
+        echo "  - Removing container: ${container}"
+        docker stop "${container}" 2>/dev/null || true
+        docker rm -f "${container}" 2>/dev/null || true
+    else
+        echo "  - Container not found (skipping): ${container}"
+    fi
+done
+echo -e "${GREEN}✓ Containers removed${NC}"
+echo ""
+
+# ==============================================
+# Remove Orochi Docker network
+# ==============================================
+echo -e "${YELLOW}[2/4] Removing Orochi Docker network...${NC}"
+if docker network ls --format '{{.Name}}' | grep -q "^${OROCHI_NETWORK}$"; then
+    echo "  - Removing network: ${OROCHI_NETWORK}"
+    docker network rm "${OROCHI_NETWORK}" 2>/dev/null || true
+    echo -e "${GREEN}✓ Network removed${NC}"
 else
-    echo "$RAPTOR_FOLDER directory does not exist."
+    echo "  - Network not found (skipping): ${OROCHI_NETWORK}"
+    echo -e "${GREEN}✓ Network already removed${NC}"
 fi
+echo ""
 
-# Ensure that zeek is removed
-sudo dpkg --purge --force-all $(dpkg -l | grep zeek | awk '{print $2}')
-if [ -d "/opt/zeek" ]; then
-    echo "Removing /opt/zeek & /opt/rita directory..."
-    rm -rf /opt/zeek
-    rm -rf /opt/rita
+# ==============================================
+# Remove Orochi volumes (optional - only unnamed ones)
+# ==============================================
+echo -e "${YELLOW}[3/4] Cleaning up dangling Docker volumes...${NC}"
+DANGLING_VOLUMES=$(docker volume ls -qf dangling=true)
+if [ -n "$DANGLING_VOLUMES" ]; then
+    echo "  - Removing dangling volumes"
+    docker volume rm $DANGLING_VOLUMES 2>/dev/null || true
+    echo -e "${GREEN}✓ Dangling volumes removed${NC}"
 else
-    echo "/opt/zeek directory does not exist."
+    echo "  - No dangling volumes found"
+    echo -e "${GREEN}✓ No cleanup needed${NC}"
 fi
+echo ""
 
-clear
+# ==============================================
+# Remove Orochi data directories
+# ==============================================
+echo -e "${YELLOW}[4/4] Removing Orochi data directories...${NC}"
+if [ -d "$OROCHI_BASE_PATH" ]; then
+    echo "  - Removing: ${OROCHI_BASE_PATH}"
+    echo "    This includes all subdirectories:"
+    echo "      • certs, elasticsearch, kibana, fleet"
+    echo "      • thehive, thehive-es, cassandra"
+    echo "      • velociraptor, suricata, arkime"
+    echo "      • mattermost, postgres, tool-portal, logs"
 
-echo "Reset complete. Docker environment, /opt/zeek, and certs folder have been cleaned."
+    # Check if we need sudo
+    if [ -w "$OROCHI_BASE_PATH" ]; then
+        rm -rf "$OROCHI_BASE_PATH"
+    else
+        echo "  - Requires sudo privileges..."
+        sudo rm -rf "$OROCHI_BASE_PATH"
+    fi
+    echo -e "${GREEN}✓ Data directories removed${NC}"
+else
+    echo "  - Directory not found (skipping): ${OROCHI_BASE_PATH}"
+    echo -e "${GREEN}✓ Directory already removed${NC}"
+fi
+echo ""
+
+# ==============================================
+# Summary
+# ==============================================
+echo -e "${GREEN}"
+echo "╔═══════════════════════════════════════════════════════════════╗"
+echo "║                     RESET COMPLETE                            ║"
+echo "╚═══════════════════════════════════════════════════════════════╝"
+echo -e "${NC}"
+echo ""
+echo "Orochi has been completely removed from this system."
+echo "Other Docker projects and images remain untouched."
+echo ""
+echo "To redeploy Orochi, run:"
+echo "  ansible-playbook fuse.yml"
+echo ""

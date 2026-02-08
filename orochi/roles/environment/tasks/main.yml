@@ -3,11 +3,13 @@
 # ENVIRONMENT ROLE - Final Production Version
 # ==============================================
 
-# 1. CHECK FOR EXISTING CONFIG
-- name: Check if .env file already exists
+# 1. CHECK FOR EXISTING CONFIG (on control node)
+- name: Check if .env file already exists on control node
   ansible.builtin.stat:
-    path: "{{ orochi_base_path }}/.env"
+    path: "{{ playbook_dir }}/.env"
   register: env_file_exists
+  delegate_to: localhost
+  become: false
   tags: environment
 
 - name: Prompt to use existing config
@@ -18,10 +20,12 @@
   when: env_file_exists.stat.exists
   tags: environment
 
-- name: Load existing .env variables (No Secrets)
-  ansible.builtin.shell: cat {{ orochi_base_path }}/.env
+- name: Load existing .env variables from control node
+  ansible.builtin.command: cat {{ playbook_dir }}/.env
   register: existing_env
-  when: 
+  delegate_to: localhost
+  become: false
+  when:
     - env_file_exists.stat.exists
     - use_existing_env.user_input | default('y', true) | lower in ['y', 'yes', '']
   changed_when: false
@@ -40,6 +44,7 @@
     fleet_port: "{{ existing_env.stdout | regex_search('FLEET_PORT=(.+)', '\\1') | first | default('8220', true) }}"
     suricata_port: "{{ existing_env.stdout | regex_search('SURICATA_PORT=(.+)', '\\1') | first | default('8000', true) }}"
     suricata_interface: "{{ existing_env.stdout | regex_search('SURICATA_INTERFACE=(.+)', '\\1') | first | default('eth0', true) }}"
+    suricata_home_net: "{{ existing_env.stdout | regex_search('SURICATA_HOME_NET=(.+)', '\\1') | first | default('192.168.0.0/16', true) }}"
     local_kbn_url: "{{ existing_env.stdout | regex_search('LOCAL_KBN_URL=(.+)', '\\1') | first | default('https://100.106.108.5:5601', true) }}"
     arkime_es_ip: "{{ existing_env.stdout | regex_search('ARKIME_ELASTICSEARCH_IP=(.+)', '\\1') | first | default('127.0.0.1', true) }}"
     velox_server_url: "{{ existing_env.stdout | regex_search('VELOX_SERVER_URL=(.+)', '\\1') | first | default('https://100.106.108.5:8889/', true) }}"
@@ -48,7 +53,17 @@
     arkime_password_secret: "{{ existing_env.stdout | regex_search('ARKIME_PASSWORD_SECRET=(.+)', '\\1') | first }}"
     kibana_encryption_key: "{{ existing_env.stdout | regex_search('KIBANA_ENCRYPTION_KEY=(.+)', '\\1') | first | default('', true) }}"
     skip_env_prompts: true
-  when: 
+  when:
+    - env_file_exists.stat.exists
+    - use_existing_env.user_input | default('y', true) | lower in ['y', 'yes', '']
+  tags: environment
+
+- name: Create suricata config dict from existing .env
+  ansible.builtin.set_fact:
+    suricata:
+      interface: "{{ suricata_interface }}"
+      home_net: "{{ suricata_home_net }}"
+  when:
     - env_file_exists.stat.exists
     - use_existing_env.user_input | default('y', true) | lower in ['y', 'yes', '']
   tags: environment
@@ -320,13 +335,14 @@
 
 
 
-# 6. WRITE .ENV (No Passwords)
-- name: Create/Update .env file
+# 6. WRITE .ENV (No Passwords) - On control node only
+- name: Create/Update .env file on control node
   ansible.builtin.copy:
     content: |
       # ==============================================
       # Orochi Security Stack Configuration
       # Generated: {{ ansible_date_time.iso8601 }}
+      # Target: {{ inventory_hostname }}
       # ==============================================
       STACK_VERSION={{ stack_version }}
       CLUSTER_NAME={{ cluster_name }}
@@ -341,6 +357,7 @@
       FLEET_PORT={{ fleet_port }}
       SURICATA_PORT={{ suricata_port }}
       SURICATA_INTERFACE={{ suricata_interface }}
+      SURICATA_HOME_NET={{ suricata.home_net }}
       ARKIME_ELASTICSEARCH_IP={{ arkime_es_ip }}
       ARKIME_PASSWORD_SECRET={{ arkime_password_secret }}
       KIBANA_ENCRYPTION_KEY={{ kibana_encryption_key }}
@@ -348,7 +365,9 @@
       LOCAL_KBN_URL={{ local_kbn_url }}
       SELECTED_IP={{ selected_ip }}
       DEFAULT_TIMEOUT=300
-    dest: "{{ orochi_base_path }}/.env"
-    mode: '0644'
+    dest: "{{ playbook_dir }}/.env"
+    mode: '0600'
+  delegate_to: localhost
+  become: false
   when: not (skip_env_prompts | default(false))
   tags: environment

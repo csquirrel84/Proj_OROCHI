@@ -10,8 +10,8 @@
     mode: '0755'
   loop:
     - "{{ directories.suricata }}"
-    - "{{ directories.suricata }}/logs"
     - "{{ directories.suricata }}/rules"
+    - "/var/log/suricata"
   tags: suricata
 
 - name: Create Suricata configuration
@@ -24,10 +24,30 @@
         address-groups:
           HOME_NET: "{{ suricata.home_net }}"
           EXTERNAL_NET: "!$HOME_NET"
+          HTTP_SERVERS: "$HOME_NET"
+          SMTP_SERVERS: "$HOME_NET"
+          SQL_SERVERS: "$HOME_NET"
+          DNS_SERVERS: "$HOME_NET"
+          TELNET_SERVERS: "$HOME_NET"
+          AIM_SERVERS: "$EXTERNAL_NET"
+          DC_SERVERS: "$HOME_NET"
+          DNP3_SERVER: "$HOME_NET"
+          DNP3_CLIENT: "$HOME_NET"
+          MODBUS_CLIENT: "$HOME_NET"
+          MODBUS_SERVER: "$HOME_NET"
+          ENIP_CLIENT: "$HOME_NET"
+          ENIP_SERVER: "$HOME_NET"
         port-groups:
           HTTP_PORTS: "80"
           SHELLCODE_PORTS: "!80"
           SSH_PORTS: "22"
+          DNP3_PORTS: 20000
+          MODBUS_PORTS: 502
+          FILE_DATA_PORTS: "[$HTTP_PORTS,110,143]"
+          FTP_PORTS: 21
+          GENEVE_PORTS: 6081
+          VXLAN_PORTS: 4789
+          TEREDO_PORTS: 3544
       
       default-log-dir: /var/log/suricata/
       
@@ -84,9 +104,9 @@
       - SYS_NICE
       - NET_RAW
     volumes:
-      - "{{ directories.suricata }}/logs:/var/log/suricata"
+      - "/var/log/suricata:/var/log/suricata"
       - "{{ directories.suricata }}/rules:/var/lib/suricata/rules"
-      - "{{ directories.suricata }}/suricata.yaml:/etc/suricata/suricata.yaml:ro"
+      - "{{ directories.suricata }}/suricata.yaml:/etc/suricata/suricata.yaml"
     command: ["-i", "{{ suricata.interface }}", "-v"]
     memory: "{{ resources.suricata.memory }}"
   tags: suricata
@@ -103,6 +123,6 @@
     msg:
       - "Suricata IDS is running!"
       - "Monitoring interface: {{ suricata.interface }}"
-      - "Logs: {{ directories.suricata }}/logs"
-      - "EVE JSON: {{ directories.suricata }}/logs/eve.json"
+      - "Logs: /var/log/suricata"
+      - "EVE JSON: /var/log/suricata/eve.json (ready for Elastic Agent)"
   tags: suricata
