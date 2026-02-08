@@ -176,6 +176,28 @@
   when: not (skip_env_prompts | default(false))
   tags: environment
 
+- name: Prompt for Suricata HOME_NET (CIDR network)
+  ansible.builtin.pause:
+    prompt: "Enter HOME_NET CIDR for Suricata (e.g., 192.168.0.0/16) [192.168.0.0/16]"
+    echo: yes
+  register: suricata_home_net_input
+  when: not (skip_env_prompts | default(false))
+  tags: environment
+
+- name: Parse Suricata HOME_NET
+  ansible.builtin.set_fact:
+    suricata_home_net_parsed: "{{ suricata_home_net_input.user_input | default('192.168.0.0/16') }}"
+  when: not (skip_env_prompts | default(false))
+  tags: environment
+
+- name: Create suricata config dict
+  ansible.builtin.set_fact:
+    suricata:
+      interface: "{{ suricata_interface_parsed | default('eth0') }}"
+      home_net: "{{ suricata_home_net_parsed | default('192.168.0.0/16') }}"
+  when: not (skip_env_prompts | default(false))
+  tags: environment
+
 - name: Prompt for Fleet/Elasticsearch IP selection
   ansible.builtin.pause:
     prompt: "Select IP number for Fleet Server and Elasticsearch (external access)"

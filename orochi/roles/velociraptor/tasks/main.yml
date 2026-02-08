@@ -85,7 +85,7 @@
         content: |
           {
             "Client": {
-              "server_urls": ["https://{{ selected_ip }}:8000/"],
+              "server_urls": ["https://{{ orochi_server_ip }}:8000/"],
               "use_self_signed_ssl": true
             },
             "API": {
@@ -95,7 +95,7 @@
             "GUI": {
               "bind_address": "0.0.0.0",
               "bind_port": 8889,
-              "public_url": "https://{{ selected_ip }}:8889/app/index.html"
+              "public_url": "https://{{ orochi_server_ip }}:8889/app/index.html"
             },
             "Frontend": {
               "bind_address": "0.0.0.0",
@@ -160,14 +160,27 @@
       velociraptor --config /data/server.config.yaml \
       user add --role administrator '{{ velox_user }}' '{{ common_password }}'
   register: velox_user_create
-  changed_when: "'Created user' in velox_user_create.stdout"
-  failed_when: 
-    - velox_user_create.rc != 0
-    - "'already exists' not in velox_user_create.stderr"
+  failed_when: velox_user_create.rc not in [0, 1]
+  changed_when: "'Created user' in velox_user_create.stdout or 'already exists' not in velox_user_create.stderr"
+
+- name: Show user creation output
+  ansible.builtin.debug:
+    msg: "{{ velox_user_create }}"
+
+- name: Restart Velociraptor to apply user changes
+  community.docker.docker_container:
+    name: velociraptor
+    state: started
+    restart: true
+  register: velociraptor_restart
+
+- name: Wait for Velociraptor to restart
+  ansible.builtin.pause:
+    seconds: 5
 
 - name: Display Velociraptor Connection Info
   ansible.builtin.debug:
     msg: 
-      - "Velociraptor GUI: https://{{ selected_ip }}:8889"
+      - "Velociraptor GUI: https://{{ orochi_server_ip }}:8889"
       - "Username: {{ velox_user }}"
       - "Password: {{ common_password }}"
