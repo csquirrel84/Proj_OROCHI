@@ -22,9 +22,10 @@
       "6": "Deploy Arkime (Full Packet Capture)"
       "7": "Deploy CyberChef (Data Analysis)"
       "8": "Deploy Mattermost (Team Communication)"
-      "9": "Deploy Nginx Reverse Proxy"
-      "10": "Show Current Status"
-      "11": "Teardown (Remove All)"
+      "9": "Deploy RITA (Network Traffic Analysis)"
+      "10": "Deploy Tool Portal (Dashboard)"
+      "11": "Show Current Status"
+      "12": "Teardown (Remove All)"
       "0": "Exit"
 
   pre_tasks:
@@ -65,9 +66,10 @@
           │  6. Deploy Arkime                       │
           │  7. Deploy CyberChef                    │
           │  8. Deploy Mattermost                   │
-          │  9. Deploy Nginx Proxy                  │
-          │ 10. Show Status                         │
-          │ 11. Teardown All                        │
+          │  9. Deploy RITA                         │
+          │ 10. Deploy Tool Portal                  │
+          │ 11. Show Status                         │
+          │ 12. Teardown All                        │
           │  0. Exit                                │
           └─────────────────────────────────────────┘
           
@@ -76,7 +78,7 @@
 
     - name: Prompt for selection
       ansible.builtin.pause:
-        prompt: "Enter your choice [1-11, 0 to exit]"
+        prompt: "Enter your choice [1-12, 0 to exit]"
       register: user_input
       when: menu_choice is not defined
       tags: always
@@ -120,6 +122,8 @@
             name: cyberchef
         - ansible.builtin.include_role:
             name: mattermost
+        - ansible.builtin.include_role:
+            name: rita
 
     # Option 2: Elastic Stack
     - name: Deploy Elastic Stack
@@ -206,9 +210,20 @@
         - ansible.builtin.include_role:
             name: mattermost
 
-    # Option 9: Nginx
-    - name: Deploy Nginx Proxy
+    # Option 9: RITA
+    - name: Deploy RITA
       when: menu_choice == "9"
+      block:
+        - ansible.builtin.include_role:
+            name: common
+        - ansible.builtin.include_role:
+            name: environment
+        - ansible.builtin.include_role:
+            name: rita
+
+    # Option 10: Tool Portal
+    - name: Deploy Tool Portal
+      when: menu_choice == "10"
       block:
         - ansible.builtin.include_role:
             name: common
@@ -219,9 +234,9 @@
         - ansible.builtin.include_role:
             name: nginx_proxy
 
-    # Option 10: Status
+    # Option 11: Status
     - name: Show Status
-      when: menu_choice == "10"
+      when: menu_choice == "11"
       block:
         - name: Get running containers
           ansible.builtin.command: docker ps --format "table {% raw %}{{.Names}}\t{{.Status}}\t{{.Ports}}{% endraw %}"
@@ -232,9 +247,9 @@
           ansible.builtin.debug:
             msg: "{{ container_status.stdout_lines }}"
 
-    # Option 11: Teardown
+    # Option 12: Teardown
     - name: Teardown All
-      when: menu_choice == "11"
+      when: menu_choice == "12"
       block:
         - name: Confirm teardown
           ansible.builtin.pause:
@@ -246,7 +261,9 @@
             name: "{{ item }}"
             state: absent
           loop:
-            - nginx-proxy
+            - tool-portal
+            - rita
+            - mongodb-rita
             - mattermost
             - postgres-mattermost
             - cyberchef

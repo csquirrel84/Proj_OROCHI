@@ -12,7 +12,9 @@
     - name: Force kill and remove containers
       ansible.builtin.shell: "docker rm -f {{ item }} || true"
       loop:
-        - nginx-proxy
+        - tool-portal  # Tool Portal
+        - rita
+        - mongodb-rita
         - mattermost
         - postgres-mattermost
         - cyberchef

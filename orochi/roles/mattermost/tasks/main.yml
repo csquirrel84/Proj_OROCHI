@@ -8,13 +8,30 @@
     path: "{{ item }}"
     state: directory
     mode: '0755'
+    owner: '2000'
+    group: '2000'
   loop:
     - "{{ directories.mattermost }}/config"
     - "{{ directories.mattermost }}/data"
     - "{{ directories.mattermost }}/logs"
     - "{{ directories.mattermost }}/plugins"
     - "{{ directories.mattermost }}/client-plugins"
-    - "{{ directories.postgres }}"
+  tags: mattermost
+
+- name: Create PostgreSQL directory
+  ansible.builtin.file:
+    path: "{{ directories.postgres }}"
+    state: directory
+    mode: '0755'
+  tags: mattermost
+
+- name: Fix Mattermost directory permissions recursively
+  ansible.builtin.file:
+    path: "{{ directories.mattermost }}"
+    state: directory
+    owner: '2000'
+    group: '2000'
+    recurse: yes
   tags: mattermost
 
 # PostgreSQL for Mattermost

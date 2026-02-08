@@ -31,9 +31,11 @@ OROCHI_CONTAINERS=(
     "suricata"
     "arkime"
     "cyberchef"
+    "rita"
+    "mongodb-rita"
     "mattermost"
     "postgres-mattermost"
-    "nginx-proxy"
+    "tool-portal"
 )
 
 echo -e "${YELLOW}"
@@ -123,7 +125,7 @@ if [ -d "$OROCHI_BASE_PATH" ]; then
     echo "      • certs, elasticsearch, kibana, fleet"
     echo "      • thehive, thehive-es, cassandra"
     echo "      • velociraptor, suricata, arkime"
-    echo "      • mattermost, postgres, nginx, logs"
+    echo "      • mattermost, postgres, tool-portal, logs"
 
     # Check if we need sudo
     if [ -w "$OROCHI_BASE_PATH" ]; then

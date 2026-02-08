@@ -44,6 +44,7 @@
     fleet_port: "{{ existing_env.stdout | regex_search('FLEET_PORT=(.+)', '\\1') | first | default('8220', true) }}"
     suricata_port: "{{ existing_env.stdout | regex_search('SURICATA_PORT=(.+)', '\\1') | first | default('8000', true) }}"
     suricata_interface: "{{ existing_env.stdout | regex_search('SURICATA_INTERFACE=(.+)', '\\1') | first | default('eth0', true) }}"
+    suricata_home_net: "{{ existing_env.stdout | regex_search('SURICATA_HOME_NET=(.+)', '\\1') | first | default('192.168.0.0/16', true) }}"
     local_kbn_url: "{{ existing_env.stdout | regex_search('LOCAL_KBN_URL=(.+)', '\\1') | first | default('https://100.106.108.5:5601', true) }}"
     arkime_es_ip: "{{ existing_env.stdout | regex_search('ARKIME_ELASTICSEARCH_IP=(.+)', '\\1') | first | default('127.0.0.1', true) }}"
     velox_server_url: "{{ existing_env.stdout | regex_search('VELOX_SERVER_URL=(.+)', '\\1') | first | default('https://100.106.108.5:8889/', true) }}"
@@ -52,7 +53,17 @@
     arkime_password_secret: "{{ existing_env.stdout | regex_search('ARKIME_PASSWORD_SECRET=(.+)', '\\1') | first }}"
     kibana_encryption_key: "{{ existing_env.stdout | regex_search('KIBANA_ENCRYPTION_KEY=(.+)', '\\1') | first | default('', true) }}"
     skip_env_prompts: true
-  when: 
+  when:
+    - env_file_exists.stat.exists
+    - use_existing_env.user_input | default('y', true) | lower in ['y', 'yes', '']
+  tags: environment
+
+- name: Create suricata config dict from existing .env
+  ansible.builtin.set_fact:
+    suricata:
+      interface: "{{ suricata_interface }}"
+      home_net: "{{ suricata_home_net }}"
+  when:
     - env_file_exists.stat.exists
     - use_existing_env.user_input | default('y', true) | lower in ['y', 'yes', '']
   tags: environment
@@ -346,6 +357,7 @@
       FLEET_PORT={{ fleet_port }}
       SURICATA_PORT={{ suricata_port }}
       SURICATA_INTERFACE={{ suricata_interface }}
+      SURICATA_HOME_NET={{ suricata.home_net }}
       ARKIME_ELASTICSEARCH_IP={{ arkime_es_ip }}
       ARKIME_PASSWORD_SECRET={{ arkime_password_secret }}
       KIBANA_ENCRYPTION_KEY={{ kibana_encryption_key }}

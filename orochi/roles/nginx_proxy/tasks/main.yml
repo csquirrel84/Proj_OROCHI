@@ -1,183 +1,248 @@
 ---
 # ==============================================
-# NGINX REVERSE PROXY ROLE
+# NGINX PORTAL - Simple Landing Page
 # ==============================================
 
-- name: Create Nginx directories
+- name: Create Portal directories
   ansible.builtin.file:
     path: "{{ item }}"
     state: directory
     mode: '0755'
   loop:
-    - "{{ directories.nginx }}"
-    - "{{ directories.nginx }}/conf.d"
-    - "{{ directories.nginx }}/ssl"
-  tags: nginx
+    - "{{ directories.portal }}"
+    - "{{ directories.portal }}/html"
+  tags: portal
 
-- name: Copy certificates for Nginx
+- name: Create Orochi landing page
   ansible.builtin.copy:
-    src: "{{ directories.certs }}/{{ item }}"
-    dest: "{{ directories.nginx }}/ssl/{{ item | basename }}"
-    remote_src: true
-    mode: '0644'
-  loop:
-    - ca/ca.crt
-    - elasticsearch/elasticsearch.crt
-    - elasticsearch/elasticsearch.key
-  tags: nginx
-
-- name: Create Nginx main configuration
-  ansible.builtin.copy:
-    dest: "{{ directories.nginx }}/nginx.conf"
+    dest: "{{ directories.portal }}/html/index.html"
     content: |
-      user nginx;
-      worker_processes auto;
-      error_log /var/log/nginx/error.log warn;
-      pid /var/run/nginx.pid;
-      
-      events {
-          worker_connections 1024;
-      }
-      
-      http {
-          include /etc/nginx/mime.types;
-          default_type application/octet-stream;
-          
-          log_format main '$remote_addr - $remote_user [$time_local] "$request" '
-                          '$status $body_bytes_sent "$http_referer" '
-                          '"$http_user_agent" "$http_x_forwarded_for"';
-          
-          access_log /var/log/nginx/access.log main;
-          sendfile on;
-          keepalive_timeout 65;
-          
-          # Include all virtual host configurations
-          include /etc/nginx/conf.d/*.conf;
-      }
-    mode: '0644'
-  tags: nginx
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>OROCHI Security Stack</title>
+          <style>
+              * { margin: 0; padding: 0; box-sizing: border-box; }
+              body {
+                  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                  background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+                  min-height: 100vh;
+                  display: flex;
+                  flex-direction: column;
+                  align-items: center;
+                  padding: 20px;
+                  color: #fff;
+              }
+              .header {
+                  text-align: center;
+                  margin: 40px 0;
+              }
+              .header h1 {
+                  font-size: 3.5em;
+                  font-weight: 700;
+                  letter-spacing: 2px;
+                  text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+              }
+              .header p {
+                  font-size: 1.2em;
+                  margin-top: 10px;
+                  opacity: 0.9;
+              }
+              .services {
+                  display: grid;
+                  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+                  gap: 25px;
+                  max-width: 1200px;
+                  width: 100%;
+                  margin: 20px 0;
+              }
+              .service-card {
+                  background: rgba(255, 255, 255, 0.95);
+                  border-radius: 15px;
+                  padding: 30px;
+                  text-align: center;
+                  transition: all 0.3s ease;
+                  box-shadow: 0 8px 16px rgba(0,0,0,0.2);
+                  cursor: pointer;
+                  text-decoration: none;
+                  color: #333;
+                  display: block;
+              }
+              .service-card:hover {
+                  transform: translateY(-5px);
+                  box-shadow: 0 12px 24px rgba(0,0,0,0.3);
+              }
+              .service-card.unavailable {
+                  opacity: 0.5;
+                  cursor: not-allowed;
+                  background: rgba(200, 200, 200, 0.5);
+              }
+              .service-card.unavailable:hover {
+                  transform: none;
+              }
+              .service-icon {
+                  height: 80px;
+                  width: 80px;
+                  margin: 0 auto 15px;
+                  display: flex;
+                  align-items: center;
+                  justify-content: center;
+              }
+              .service-icon img {
+                  max-height: 100%;
+                  max-width: 100%;
+                  object-fit: contain;
+              }
+              .service-name {
+                  font-size: 1.5em;
+                  font-weight: 600;
+                  margin-bottom: 10px;
+                  color: #2a5298;
+              }
+              .service-desc {
+                  font-size: 0.9em;
+                  color: #666;
+                  margin-bottom: 10px;
+              }
+              .service-url {
+                  font-size: 0.8em;
+                  color: #999;
+                  font-family: monospace;
+              }
+              .footer {
+                  margin-top: auto;
+                  padding: 20px;
+                  text-align: center;
+                  opacity: 0.8;
+              }
+          </style>
+      </head>
+      <body>
+          <div class="header">
+              <h1>OROCHI</h1>
+              <p>Security Stack Portal</p>
+          </div>
 
-- name: Create Nginx virtual hosts
-  ansible.builtin.copy:
-    dest: "{{ directories.nginx }}/conf.d/orochi.conf"
-    content: |
-      # Redirect HTTP to HTTPS
-      server {
-          listen 80;
-          server_name _;
-          return 301 https://$host$request_uri;
-      }
-      
-      # Kibana
-      server {
-          listen 443 ssl;
-          server_name kibana.{{ orochi_server_ip }}.nip.io;
-          
-          ssl_certificate /etc/nginx/ssl/elasticsearch.crt;
-          ssl_certificate_key /etc/nginx/ssl/elasticsearch.key;
-          
-          location / {
-              proxy_pass https://kibana:5601;
-              proxy_ssl_verify off;
-              proxy_set_header Host $host;
-              proxy_set_header X-Real-IP $remote_addr;
-              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-              proxy_set_header X-Forwarded-Proto $scheme;
-          }
-      }
-      
-      # TheHive
-      server {
-          listen 443 ssl;
-          server_name thehive.{{ orochi_server_ip }}.nip.io;
-          
-          ssl_certificate /etc/nginx/ssl/elasticsearch.crt;
-          ssl_certificate_key /etc/nginx/ssl/elasticsearch.key;
-          
-          location / {
-              proxy_pass http://thehive:9000;
-              proxy_set_header Host $host;
-              proxy_set_header X-Real-IP $remote_addr;
-              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-              proxy_set_header X-Forwarded-Proto $scheme;
-          }
-      }
-      
-      # Velociraptor
-      server {
-          listen 443 ssl;
-          server_name velociraptor.{{ orochi_server_ip }}.nip.io;
-          
-          ssl_certificate /etc/nginx/ssl/elasticsearch.crt;
-          ssl_certificate_key /etc/nginx/ssl/elasticsearch.key;
-          
-          location / {
-              proxy_pass https://velociraptor:8889;
-              proxy_ssl_verify off;
-              proxy_set_header Host $host;
-              proxy_set_header X-Real-IP $remote_addr;
-              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-              proxy_set_header X-Forwarded-Proto $scheme;
-              proxy_set_header Upgrade $http_upgrade;
-              proxy_set_header Connection "upgrade";
-          }
-      }
-      
-      # Mattermost
-      server {
-          listen 443 ssl;
-          server_name mattermost.{{ orochi_server_ip }}.nip.io;
-          
-          ssl_certificate /etc/nginx/ssl/elasticsearch.crt;
-          ssl_certificate_key /etc/nginx/ssl/elasticsearch.key;
-          
-          location / {
-              proxy_pass http://mattermost:8065;
-              proxy_set_header Host $host;
-              proxy_set_header X-Real-IP $remote_addr;
-              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-              proxy_set_header X-Forwarded-Proto $scheme;
-              proxy_set_header Upgrade $http_upgrade;
-              proxy_set_header Connection "upgrade";
-          }
-      }
-    mode: '0644'
-  tags: nginx
+          <div class="services">
+              <a href="https://{{ orochi_server_ip }}:{{ ports.elasticsearch }}" class="service-card" target="_blank">
+                  <div class="service-icon">
+                      <img src="https://static-www.elastic.co/v3/assets/bltefdd0b53724fa2ce/blt36f2da8d650732a0/5d0823c3d8ff351753cbc99f/logo-elasticsearch-32-color.svg" alt="Elasticsearch">
+                  </div>
+                  <div class="service-name">Elasticsearch</div>
+                  <div class="service-desc">Search & Analytics Engine</div>
+                  <div class="service-url">https://{{ orochi_server_ip }}:{{ ports.elasticsearch }}</div>
+              </a>
 
-- name: Pull Nginx image
+              <a href="https://{{ orochi_server_ip }}:{{ ports.kibana }}" class="service-card" target="_blank">
+                  <div class="service-icon">
+                      <img src="https://static-www.elastic.co/v3/assets/bltefdd0b53724fa2ce/blt4466841eed0bf232/5d082a5e97f2babb5af907ee/logo-kibana-32-color.svg" alt="Kibana">
+                  </div>
+                  <div class="service-name">Kibana</div>
+                  <div class="service-desc">Data Visualization & SIEM</div>
+                  <div class="service-url">https://{{ orochi_server_ip }}:{{ ports.kibana }}</div>
+              </a>
+
+              <a href="https://{{ orochi_server_ip }}:{{ ports.fleet }}" class="service-card" target="_blank">
+                  <div class="service-icon">
+                      <img src="https://static-www.elastic.co/v3/assets/bltefdd0b53724fa2ce/blt7f2d2f233ed49488/5eb26953c3a05b7d7b0a8304/logo-elastic-agent-32-color.svg" alt="Fleet">
+                  </div>
+                  <div class="service-name">Fleet Server</div>
+                  <div class="service-desc">Agent Management</div>
+                  <div class="service-url">https://{{ orochi_server_ip }}:{{ ports.fleet }}</div>
+              </a>
+
+              <a href="http://{{ orochi_server_ip }}:{{ ports.thehive }}" class="service-card" target="_blank">
+                  <div class="service-icon">
+                      <img src="https://raw.githubusercontent.com/TheHive-Project/TheHive/master/images/thehive-logo.png" alt="TheHive">
+                  </div>
+                  <div class="service-name">TheHive</div>
+                  <div class="service-desc">Incident Response Platform</div>
+                  <div class="service-url">http://{{ orochi_server_ip }}:{{ ports.thehive }}</div>
+              </a>
+
+              <a href="https://{{ orochi_server_ip }}:{{ ports.velociraptor_gui }}" class="service-card" target="_blank">
+                  <div class="service-icon">
+                      <img src="https://docs.velociraptor.app/velo_bike.png" alt="Velociraptor">
+                  </div>
+                  <div class="service-name">Velociraptor</div>
+                  <div class="service-desc">DFIR & Endpoint Visibility</div>
+                  <div class="service-url">https://{{ orochi_server_ip }}:{{ ports.velociraptor_gui }}</div>
+              </a>
+
+              <a href="http://{{ orochi_server_ip }}:{{ ports.arkime }}" class="service-card" target="_blank">
+                  <div class="service-icon">
+                      <img src="https://raw.githubusercontent.com/arkime/arkime/main/assets/Arkime_Logo_FullGradientBlack@2x.png" alt="Arkime">
+                  </div>
+                  <div class="service-name">Arkime</div>
+                  <div class="service-desc">Full Packet Capture</div>
+                  <div class="service-url">http://{{ orochi_server_ip }}:{{ ports.arkime }}</div>
+              </a>
+
+              <a href="http://{{ orochi_server_ip }}:{{ ports.cyberchef }}" class="service-card" target="_blank">
+                  <div class="service-icon">
+                      <img src="https://gchq.github.io/CyberChef/images/cyberchef-128x128.png" alt="CyberChef">
+                  </div>
+                  <div class="service-name">CyberChef</div>
+                  <div class="service-desc">Data Analysis Toolkit</div>
+                  <div class="service-url">http://{{ orochi_server_ip }}:{{ ports.cyberchef }}</div>
+              </a>
+
+              <a href="http://{{ orochi_server_ip }}:{{ ports.mattermost }}" class="service-card" target="_blank">
+                  <div class="service-icon">
+                      <img src="https://mattermost.com/wp-content/uploads/2022/02/icon.png" alt="Mattermost">
+                  </div>
+                  <div class="service-name">Mattermost</div>
+                  <div class="service-desc">Team Communication</div>
+                  <div class="service-url">http://{{ orochi_server_ip }}:{{ ports.mattermost }}</div>
+              </a>
+
+              <a href="http://{{ orochi_server_ip }}:{{ ports.rita }}" class="service-card" target="_blank">
+                  <div class="service-icon">
+                      <img src="https://raw.githubusercontent.com/activecm/rita/master/docs/images/rita_logo.png" alt="RITA">
+                  </div>
+                  <div class="service-name">RITA</div>
+                  <div class="service-desc">Network Traffic Analytics</div>
+                  <div class="service-url">http://{{ orochi_server_ip }}:{{ ports.rita }}</div>
+              </a>
+          </div>
+
+          <div class="footer">
+            <p>OROCHI Security Stack | Deployed via Ansible</p>
+          </div>
+      </body>
+      </html>
+    mode: '0644'
+  tags: portal
+
+- name: Pull Portal image
   community.docker.docker_image:
-    name: "nginx:{{ nginx_version }}"
+    name: "nginx:{{ portal_version }}"
     source: pull
-  tags: nginx
+  tags: portal
 
-- name: Start Nginx container
+- name: Start Portal
   community.docker.docker_container:
-    name: nginx-proxy
-    image: "nginx:{{ nginx_version }}"
+    name: tool-portal
+    image: "nginx:{{ portal_version }}"
     state: started
     restart_policy: unless-stopped
-    hostname: nginx-proxy
+    hostname: tool-portal
     networks:
       - name: "{{ orochi_network_name }}"
     ports:
-      - "{{ ports.nginx_http }}:80"
-      - "{{ ports.nginx_https }}:443"
+      - "{{ ports.portal_http }}:80"
     volumes:
-      - "{{ directories.nginx }}/nginx.conf:/etc/nginx/nginx.conf:ro"
-      - "{{ directories.nginx }}/conf.d:/etc/nginx/conf.d:ro"
-      - "{{ directories.nginx }}/ssl:/etc/nginx/ssl:ro"
-  tags: nginx
+      - "{{ directories.portal }}/html:/usr/share/nginx/html:ro"
+  tags: portal
 
-- name: Display Nginx status
+- name: Display Portal status
   ansible.builtin.debug:
     msg:
-      - "Nginx Reverse Proxy is running!"
-      - "HTTP: http://{{ orochi_server_ip }}:{{ ports.nginx_http }}"
-      - "HTTPS: https://{{ orochi_server_ip }}:{{ ports.nginx_https }}"
+      - "OROCHI Portal is running!"
       - ""
-      - "Virtual Hosts (add to /etc/hosts or use nip.io):"
-      - "  - https://kibana.{{ orochi_server_ip }}.nip.io"
-      - "  - https://thehive.{{ orochi_server_ip }}.nip.io"
-      - "  - https://velociraptor.{{ orochi_server_ip }}.nip.io"
-      - "  - https://mattermost.{{ orochi_server_ip }}.nip.io"
-  tags: nginx
+      - "Access the dashboard: http://{{ orochi_server_ip }}:{{ ports.portal_http }}"
+      - ""
+      - "Click any service card to open that service directly."
+  tags: portal
