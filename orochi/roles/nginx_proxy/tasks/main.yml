@@ -24,105 +24,254 @@
           <meta name="viewport" content="width=device-width, initial-scale=1.0">
           <title>OROCHI Security Stack</title>
           <style>
+              @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Inter:wght@300;400;500;600&display=swap');
               * { margin: 0; padding: 0; box-sizing: border-box; }
               body {
-                  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-                  background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+                  font-family: 'Inter', sans-serif;
+                  background: #0a0e1a;
                   min-height: 100vh;
                   display: flex;
                   flex-direction: column;
                   align-items: center;
                   padding: 20px;
                   color: #fff;
+                  overflow-x: hidden;
+              }
+              /* Animated background grid */
+              body::before {
+                  content: '';
+                  position: fixed;
+                  top: 0; left: 0; right: 0; bottom: 0;
+                  background:
+                      linear-gradient(rgba(0, 255, 136, 0.03) 1px, transparent 1px),
+                      linear-gradient(90deg, rgba(0, 255, 136, 0.03) 1px, transparent 1px);
+                  background-size: 60px 60px;
+                  animation: gridMove 20s linear infinite;
+                  z-index: 0;
+              }
+              @keyframes gridMove {
+                  0% { transform: translateY(0); }
+                  100% { transform: translateY(60px); }
+              }
+              /* Glow orbs */
+              body::after {
+                  content: '';
+                  position: fixed;
+                  top: -200px; right: -200px;
+                  width: 600px; height: 600px;
+                  background: radial-gradient(circle, rgba(0, 255, 136, 0.08) 0%, transparent 70%);
+                  z-index: 0;
+              }
+              .glow-orb {
+                  position: fixed;
+                  bottom: -200px; left: -100px;
+                  width: 500px; height: 500px;
+                  background: radial-gradient(circle, rgba(0, 170, 255, 0.06) 0%, transparent 70%);
+                  z-index: 0;
+                  pointer-events: none;
               }
               .header {
                   text-align: center;
-                  margin: 40px 0;
+                  margin: 50px 0 40px;
+                  position: relative;
+                  z-index: 1;
               }
               .header h1 {
-                  font-size: 3.5em;
-                  font-weight: 700;
-                  letter-spacing: 2px;
-                  text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+                  font-family: 'Orbitron', monospace;
+                  font-size: 4em;
+                  font-weight: 900;
+                  letter-spacing: 12px;
+                  background: linear-gradient(135deg, #00ff88, #00aaff, #00ff88);
+                  background-size: 200% auto;
+                  -webkit-background-clip: text;
+                  -webkit-text-fill-color: transparent;
+                  background-clip: text;
+                  animation: shimmer 3s ease-in-out infinite;
+                  filter: drop-shadow(0 0 30px rgba(0, 255, 136, 0.3));
               }
-              .header p {
-                  font-size: 1.2em;
-                  margin-top: 10px;
-                  opacity: 0.9;
+              @keyframes shimmer {
+                  0%, 100% { background-position: 0% center; }
+                  50% { background-position: 200% center; }
+              }
+              .header .subtitle {
+                  font-size: 0.95em;
+                  margin-top: 12px;
+                  letter-spacing: 6px;
+                  text-transform: uppercase;
+                  color: rgba(255, 255, 255, 0.4);
+                  font-weight: 300;
+              }
+              .header .tagline {
+                  font-family: 'Orbitron', monospace;
+                  font-size: 0.75em;
+                  margin-top: 8px;
+                  color: rgba(0, 255, 136, 0.5);
+                  letter-spacing: 3px;
               }
               .services {
                   display: grid;
-                  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-                  gap: 25px;
-                  max-width: 1200px;
+                  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+                  gap: 20px;
+                  max-width: 1300px;
                   width: 100%;
                   margin: 20px 0;
+                  position: relative;
+                  z-index: 1;
               }
               .service-card {
-                  background: rgba(255, 255, 255, 0.95);
-                  border-radius: 15px;
-                  padding: 30px;
-                  text-align: center;
-                  transition: all 0.3s ease;
-                  box-shadow: 0 8px 16px rgba(0,0,0,0.2);
+                  background: rgba(255, 255, 255, 0.03);
+                  border: 1px solid rgba(255, 255, 255, 0.06);
+                  border-radius: 16px;
+                  padding: 28px 24px;
+                  text-align: left;
+                  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
                   cursor: pointer;
                   text-decoration: none;
-                  color: #333;
-                  display: block;
+                  color: #fff;
+                  display: flex;
+                  align-items: center;
+                  gap: 20px;
+                  position: relative;
+                  overflow: hidden;
+                  backdrop-filter: blur(10px);
+              }
+              .service-card::before {
+                  content: '';
+                  position: absolute;
+                  top: 0; left: 0; right: 0;
+                  height: 1px;
+                  background: linear-gradient(90deg, transparent, rgba(0, 255, 136, 0), transparent);
+                  transition: all 0.4s ease;
+              }
+              .service-card::after {
+                  content: '';
+                  position: absolute;
+                  top: 0; left: 0; right: 0; bottom: 0;
+                  background: linear-gradient(135deg, rgba(0, 255, 136, 0.05) 0%, transparent 50%);
+                  opacity: 0;
+                  transition: opacity 0.4s ease;
               }
               .service-card:hover {
-                  transform: translateY(-5px);
-                  box-shadow: 0 12px 24px rgba(0,0,0,0.3);
+                  transform: translateY(-4px);
+                  border-color: rgba(0, 255, 136, 0.2);
+                  box-shadow: 0 8px 32px rgba(0, 255, 136, 0.1), 0 0 0 1px rgba(0, 255, 136, 0.1);
+                  background: rgba(255, 255, 255, 0.05);
               }
-              .service-card.unavailable {
-                  opacity: 0.5;
-                  cursor: not-allowed;
-                  background: rgba(200, 200, 200, 0.5);
+              .service-card:hover::before {
+                  background: linear-gradient(90deg, transparent, rgba(0, 255, 136, 0.5), transparent);
               }
-              .service-card.unavailable:hover {
-                  transform: none;
-              }
+              .service-card:hover::after { opacity: 1; }
+              .service-card:hover .service-icon { border-color: rgba(0, 255, 136, 0.3); }
+              .service-card:hover .service-name { color: #00ff88; }
+              .service-card:hover .arrow { opacity: 1; transform: translateX(0); }
               .service-icon {
-                  height: 80px;
-                  width: 80px;
-                  margin: 0 auto 15px;
+                  height: 56px;
+                  width: 56px;
+                  min-width: 56px;
                   display: flex;
                   align-items: center;
                   justify-content: center;
+                  border-radius: 12px;
+                  border: 1px solid rgba(255, 255, 255, 0.08);
+                  background: rgba(255, 255, 255, 0.04);
+                  padding: 10px;
+                  transition: all 0.4s ease;
+                  position: relative;
+                  z-index: 1;
               }
               .service-icon img {
                   max-height: 100%;
                   max-width: 100%;
                   object-fit: contain;
+                  filter: brightness(0) invert(1);
+                  opacity: 0.8;
+                  transition: all 0.3s ease;
+              }
+              .service-card:hover .service-icon img {
+                  opacity: 1;
+                  filter: brightness(0) invert(1) drop-shadow(0 0 4px rgba(0, 255, 136, 0.4));
+              }
+              .service-info {
+                  flex: 1;
+                  position: relative;
+                  z-index: 1;
               }
               .service-name {
-                  font-size: 1.5em;
+                  font-size: 1.15em;
                   font-weight: 600;
-                  margin-bottom: 10px;
-                  color: #2a5298;
+                  margin-bottom: 4px;
+                  color: rgba(255, 255, 255, 0.9);
+                  transition: color 0.3s ease;
               }
               .service-desc {
-                  font-size: 0.9em;
-                  color: #666;
-                  margin-bottom: 10px;
+                  font-size: 0.8em;
+                  color: rgba(255, 255, 255, 0.35);
+                  margin-bottom: 6px;
+                  font-weight: 300;
               }
               .service-url {
-                  font-size: 0.8em;
-                  color: #999;
-                  font-family: monospace;
+                  font-size: 0.7em;
+                  color: rgba(0, 255, 136, 0.3);
+                  font-family: 'Orbitron', monospace;
+                  letter-spacing: 0.5px;
+              }
+              .arrow {
+                  position: relative;
+                  z-index: 1;
+                  opacity: 0;
+                  transform: translateX(-8px);
+                  transition: all 0.3s ease;
+                  color: #00ff88;
+                  font-size: 1.2em;
+              }
+              .status-bar {
+                  display: flex;
+                  gap: 24px;
+                  margin: 40px 0 20px;
+                  padding: 16px 32px;
+                  border-radius: 12px;
+                  background: rgba(255, 255, 255, 0.02);
+                  border: 1px solid rgba(255, 255, 255, 0.04);
+                  position: relative;
+                  z-index: 1;
+              }
+              .stat {
+                  text-align: center;
+              }
+              .stat-value {
+                  font-family: 'Orbitron', monospace;
+                  font-size: 1.4em;
+                  font-weight: 700;
+                  color: #00ff88;
+              }
+              .stat-label {
+                  font-size: 0.65em;
+                  text-transform: uppercase;
+                  letter-spacing: 2px;
+                  color: rgba(255, 255, 255, 0.25);
+                  margin-top: 4px;
               }
               .footer {
                   margin-top: auto;
-                  padding: 20px;
+                  padding: 30px;
                   text-align: center;
-                  opacity: 0.8;
+                  position: relative;
+                  z-index: 1;
+              }
+              .footer p {
+                  font-size: 0.7em;
+                  color: rgba(255, 255, 255, 0.15);
+                  letter-spacing: 2px;
+                  text-transform: uppercase;
               }
           </style>
       </head>
       <body>
+          <div class="glow-orb"></div>
           <div class="header">
               <h1>OROCHI</h1>
-              <p>Security Stack Portal</p>
+              <div class="subtitle">Security Stack Portal</div>
+              <div class="tagline">{{ orochi_server_ip }}</div>
           </div>
 
           <div class="services">
@@ -130,59 +279,92 @@
                   <div class="service-icon">
                       <img src="https://static-www.elastic.co/v3/assets/bltefdd0b53724fa2ce/blt4466841eed0bf232/5d082a5e97f2babb5af907ee/logo-kibana-32-color.svg" alt="Kibana">
                   </div>
-                  <div class="service-name">Kibana</div>
-                  <div class="service-desc">SIEM & Data Visualization</div>
-                  <div class="service-url">https://{{ orochi_server_ip }}:{{ ports.kibana }}</div>
+                  <div class="service-info">
+                      <div class="service-name">Kibana</div>
+                      <div class="service-desc">SIEM &amp; Data Visualization</div>
+                      <div class="service-url">:{{ ports.kibana }}</div>
+                  </div>
+                  <div class="arrow">&#8594;</div>
               </a>
 
               <a href="http://{{ orochi_server_ip }}:{{ ports.thehive }}" class="service-card" target="_blank">
                   <div class="service-icon">
                       <img src="https://raw.githubusercontent.com/TheHive-Project/TheHive/master/images/thehive-logo.png" alt="TheHive">
                   </div>
-                  <div class="service-name">TheHive</div>
-                  <div class="service-desc">Incident Response Platform</div>
-                  <div class="service-url">http://{{ orochi_server_ip }}:{{ ports.thehive }}</div>
+                  <div class="service-info">
+                      <div class="service-name">TheHive</div>
+                      <div class="service-desc">Incident Response Platform</div>
+                      <div class="service-url">:{{ ports.thehive }}</div>
+                  </div>
+                  <div class="arrow">&#8594;</div>
               </a>
 
               <a href="https://{{ orochi_server_ip }}:{{ ports.velociraptor_gui }}" class="service-card" target="_blank">
                   <div class="service-icon">
-                      <img src="https://docs.velociraptor.app/velo_bike.png" alt="Velociraptor">
+                      <img src="https://docs.velociraptor.app/images/VeloR7_LightMode.svg" alt="Velociraptor">
                   </div>
-                  <div class="service-name">Velociraptor</div>
-                  <div class="service-desc">DFIR & Endpoint Visibility</div>
-                  <div class="service-url">https://{{ orochi_server_ip }}:{{ ports.velociraptor_gui }}</div>
+                  <div class="service-info">
+                      <div class="service-name">Velociraptor</div>
+                      <div class="service-desc">DFIR &amp; Endpoint Visibility</div>
+                      <div class="service-url">:{{ ports.velociraptor_gui }}</div>
+                  </div>
+                  <div class="arrow">&#8594;</div>
               </a>
 
               <a href="http://{{ orochi_server_ip }}:{{ ports.arkime }}" class="service-card" target="_blank">
                   <div class="service-icon">
-                      <img src="https://raw.githubusercontent.com/arkime/arkime/main/assets/Arkime_Logo_FullGradientBlack@2x.png" alt="Arkime">
+                      <img src="https://arkime.com/assets/simple_logo.png" alt="Arkime">
                   </div>
-                  <div class="service-name">Arkime</div>
-                  <div class="service-desc">Full Packet Capture</div>
-                  <div class="service-url">http://{{ orochi_server_ip }}:{{ ports.arkime }}</div>
+                  <div class="service-info">
+                      <div class="service-name">Arkime</div>
+                      <div class="service-desc">Full Packet Capture</div>
+                      <div class="service-url">:{{ ports.arkime }}</div>
+                  </div>
+                  <div class="arrow">&#8594;</div>
               </a>
 
               <a href="http://{{ orochi_server_ip }}:{{ ports.cyberchef }}" class="service-card" target="_blank">
                   <div class="service-icon">
                       <img src="https://gchq.github.io/CyberChef/images/cyberchef-128x128.png" alt="CyberChef">
                   </div>
-                  <div class="service-name">CyberChef</div>
-                  <div class="service-desc">Data Analysis Toolkit</div>
-                  <div class="service-url">http://{{ orochi_server_ip }}:{{ ports.cyberchef }}</div>
+                  <div class="service-info">
+                      <div class="service-name">CyberChef</div>
+                      <div class="service-desc">Data Analysis Toolkit</div>
+                      <div class="service-url">:{{ ports.cyberchef }}</div>
+                  </div>
+                  <div class="arrow">&#8594;</div>
               </a>
 
               <a href="http://{{ orochi_server_ip }}:{{ ports.mattermost }}" class="service-card" target="_blank">
                   <div class="service-icon">
                       <img src="https://mattermost.com/wp-content/uploads/2022/02/icon.png" alt="Mattermost">
                   </div>
-                  <div class="service-name">Mattermost</div>
-                  <div class="service-desc">Team Communication</div>
-                  <div class="service-url">http://{{ orochi_server_ip }}:{{ ports.mattermost }}</div>
+                  <div class="service-info">
+                      <div class="service-name">Mattermost</div>
+                      <div class="service-desc">Team Communication</div>
+                      <div class="service-url">:{{ ports.mattermost }}</div>
+                  </div>
+                  <div class="arrow">&#8594;</div>
               </a>
           </div>
 
+          <div class="status-bar">
+              <div class="stat">
+                  <div class="stat-value">6</div>
+                  <div class="stat-label">Services</div>
+              </div>
+              <div class="stat">
+                  <div class="stat-value">&#9679;</div>
+                  <div class="stat-label">Online</div>
+              </div>
+              <div class="stat">
+                  <div class="stat-value">v1.0</div>
+                  <div class="stat-label">Stack</div>
+              </div>
+          </div>
+
           <div class="footer">
-            <p>OROCHI Security Stack | Deployed via Ansible</p>
+              <p>Orochi Security Stack &bull; Deployed via Ansible</p>
           </div>
       </body>
       </html>
