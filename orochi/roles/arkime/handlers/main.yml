@@ -1,0 +1,8 @@
+---
+- name: restart arkime
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: restarted
+  loop:
+    - arkimecapture
+    - arkimeviewer

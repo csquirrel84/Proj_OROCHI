@@ -128,6 +128,8 @@
             name: mattermost
         - ansible.builtin.include_role:
             name: rita
+        - ansible.builtin.include_role:
+            name: nginx_proxy
 
     # Option 2: Elastic Stack
     - name: Deploy Elastic Stack
@@ -271,6 +273,17 @@
             prompt: "WARNING: This will remove all Orochi containers and data. Type 'YES' to confirm"
           register: confirm_teardown
 
+        - name: Stop Arkime services (bare metal)
+          ansible.builtin.systemd:
+            name: "{{ item }}"
+            state: stopped
+            enabled: no
+          loop:
+            - arkimecapture
+            - arkimeviewer
+          ignore_errors: true
+          when: confirm_teardown.user_input == "YES"
+
         - name: Stop all Orochi containers
           community.docker.docker_container:
             name: "{{ item }}"
@@ -282,7 +295,6 @@
             - mattermost
             - postgres-mattermost
             - cyberchef
-            - arkime
             - suricata
             - velociraptor
             - thehive

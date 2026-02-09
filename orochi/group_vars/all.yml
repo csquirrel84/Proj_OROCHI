@@ -27,6 +27,7 @@ mattermost_version: "latest"
 postgres_version: "15-alpine"
 portal_version: "alpine"
 rita_version: "v5.1.1"
+arkime_version: "5.8.3"
 clickhouse_version: "latest"
 
 
@@ -63,8 +64,8 @@ resources:
     heap: "1024M"
     heap_new: "256M"
   elasticsearch:
-    memory: "1g"
-    heap: "512m"
+    memory: "4g"
+    heap: "2g"
   elasticsearch_hive:
     memory: "1g"
     heap: "512m"

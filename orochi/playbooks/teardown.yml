@@ -23,6 +23,16 @@
         enabled: no
       ignore_errors: true
 
+    - name: Stop Arkime services (if running on bare metal)
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: stopped
+        enabled: no
+      loop:
+        - arkimecapture
+        - arkimeviewer
+      ignore_errors: true
+
     - name: Force kill and remove containers
       ansible.builtin.shell: "docker rm -f {{ item }} || true"
       loop:

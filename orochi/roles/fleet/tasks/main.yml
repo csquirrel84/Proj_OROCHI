@@ -3,6 +3,30 @@
 # FLEET SERVER ROLE
 # ==============================================
 
+# Load environment variables from .env file
+- name: Check if .env file exists
+  ansible.builtin.stat:
+    path: "{{ playbook_dir }}/.env"
+  register: env_file
+  delegate_to: localhost
+  become: false
+  tags: fleet
+
+- name: Read .env file
+  ansible.builtin.slurp:
+    src: "{{ playbook_dir }}/.env"
+  register: env_content
+  delegate_to: localhost
+  become: false
+  when: env_file.stat.exists
+  tags: fleet
+
+- name: Parse selected_ip from .env
+  ansible.builtin.set_fact:
+    selected_ip: "{{ (env_content.content | b64decode | regex_search('SELECTED_IP=(.+)', '\\1') | first) | default(ansible_host, true) }}"
+  when: env_file.stat.exists
+  tags: fleet
+
 - name: Create Fleet Server directories
   ansible.builtin.file:
     path: "{{ directories.fleet }}"
@@ -178,6 +202,27 @@
     validate_certs: false
     status_code: [200, 201]
   when: fleet_server_hosts.json.total == 0
+  tags: fleet
+
+- name: Update Fleet Server host configuration
+  ansible.builtin.uri:
+    url: "https://localhost:{{ ports.kibana }}/api/fleet/fleet_server_hosts/{{ fleet_server_hosts.json['items'][0].id }}"
+    method: PUT
+    user: elastic
+    password: "{{ elasticsearch_password }}"
+    force_basic_auth: true
+    headers:
+      kbn-xsrf: "true"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "Default Fleet Server"
+      host_urls:
+        - "https://{{ orochi_server_ip }}:{{ ports.fleet }}"
+      is_default: true
+    validate_certs: false
+    status_code: [200]
+  when: fleet_server_hosts.json.total > 0
   tags: fleet
 
 # Configure Fleet output
