@@ -264,6 +264,25 @@
                   letter-spacing: 2px;
                   text-transform: uppercase;
               }
+              .service-card.disabled {
+                  opacity: 0.25;
+                  cursor: default;
+                  pointer-events: none;
+              }
+              .service-card.disabled .service-icon img {
+                  filter: brightness(0) invert(1) saturate(0);
+                  opacity: 0.3;
+              }
+              .service-card.disabled .service-url {
+                  display: none;
+              }
+              .not-installed {
+                  font-size: 0.6em;
+                  text-transform: uppercase;
+                  letter-spacing: 2px;
+                  color: rgba(255, 255, 255, 0.2);
+                  font-weight: 600;
+              }
           </style>
       </head>
       <body>
@@ -287,6 +306,7 @@
                   <div class="arrow">&#8594;</div>
               </a>
 
+{% if 'thehive' in deployed_components %}
               <a href="http://{{ orochi_server_ip }}:{{ ports.thehive }}" class="service-card" target="_blank">
                   <div class="service-icon">
                       <img src="https://raw.githubusercontent.com/TheHive-Project/TheHive/master/images/thehive-logo.png" alt="TheHive">
@@ -298,7 +318,20 @@
                   </div>
                   <div class="arrow">&#8594;</div>
               </a>
+{% else %}
+              <div class="service-card disabled">
+                  <div class="service-icon">
+                      <img src="https://raw.githubusercontent.com/TheHive-Project/TheHive/master/images/thehive-logo.png" alt="TheHive">
+                  </div>
+                  <div class="service-info">
+                      <div class="service-name">TheHive</div>
+                      <div class="service-desc">Incident Response Platform</div>
+                      <div class="not-installed">Not Installed</div>
+                  </div>
+              </div>
+{% endif %}
 
+{% if 'velociraptor' in deployed_components %}
               <a href="https://{{ orochi_server_ip }}:{{ ports.velociraptor_gui }}" class="service-card" target="_blank">
                   <div class="service-icon">
                       <img src="https://docs.velociraptor.app/images/VeloR7_LightMode.svg" alt="Velociraptor">
@@ -310,7 +343,20 @@
                   </div>
                   <div class="arrow">&#8594;</div>
               </a>
+{% else %}
+              <div class="service-card disabled">
+                  <div class="service-icon">
+                      <img src="https://docs.velociraptor.app/images/VeloR7_LightMode.svg" alt="Velociraptor">
+                  </div>
+                  <div class="service-info">
+                      <div class="service-name">Velociraptor</div>
+                      <div class="service-desc">DFIR &amp; Endpoint Visibility</div>
+                      <div class="not-installed">Not Installed</div>
+                  </div>
+              </div>
+{% endif %}
 
+{% if 'arkime' in deployed_components %}
               <a href="http://{{ orochi_server_ip }}:{{ ports.arkime }}" class="service-card" target="_blank">
                   <div class="service-icon">
                       <img src="https://arkime.com/assets/simple_logo.png" alt="Arkime">
@@ -322,7 +368,20 @@
                   </div>
                   <div class="arrow">&#8594;</div>
               </a>
+{% else %}
+              <div class="service-card disabled">
+                  <div class="service-icon">
+                      <img src="https://arkime.com/assets/simple_logo.png" alt="Arkime">
+                  </div>
+                  <div class="service-info">
+                      <div class="service-name">Arkime</div>
+                      <div class="service-desc">Full Packet Capture</div>
+                      <div class="not-installed">Not Installed</div>
+                  </div>
+              </div>
+{% endif %}
 
+{% if 'cyberchef' in deployed_components %}
               <a href="http://{{ orochi_server_ip }}:{{ ports.cyberchef }}" class="service-card" target="_blank">
                   <div class="service-icon">
                       <img src="https://gchq.github.io/CyberChef/images/cyberchef-128x128.png" alt="CyberChef">
@@ -334,7 +393,20 @@
                   </div>
                   <div class="arrow">&#8594;</div>
               </a>
+{% else %}
+              <div class="service-card disabled">
+                  <div class="service-icon">
+                      <img src="https://gchq.github.io/CyberChef/images/cyberchef-128x128.png" alt="CyberChef">
+                  </div>
+                  <div class="service-info">
+                      <div class="service-name">CyberChef</div>
+                      <div class="service-desc">Data Analysis Toolkit</div>
+                      <div class="not-installed">Not Installed</div>
+                  </div>
+              </div>
+{% endif %}
 
+{% if 'mattermost' in deployed_components %}
               <a href="http://{{ orochi_server_ip }}:{{ ports.mattermost }}" class="service-card" target="_blank">
                   <div class="service-icon">
                       <img src="https://mattermost.com/wp-content/uploads/2022/02/icon.png" alt="Mattermost">
@@ -346,11 +418,23 @@
                   </div>
                   <div class="arrow">&#8594;</div>
               </a>
+{% else %}
+              <div class="service-card disabled">
+                  <div class="service-icon">
+                      <img src="https://mattermost.com/wp-content/uploads/2022/02/icon.png" alt="Mattermost">
+                  </div>
+                  <div class="service-info">
+                      <div class="service-name">Mattermost</div>
+                      <div class="service-desc">Team Communication</div>
+                      <div class="not-installed">Not Installed</div>
+                  </div>
+              </div>
+{% endif %}
           </div>
 
           <div class="status-bar">
               <div class="stat">
-                  <div class="stat-value">6</div>
+                  <div class="stat-value">{{ deployed_components | intersect(['elk', 'thehive', 'velociraptor', 'arkime', 'cyberchef', 'mattermost']) | length }}</div>
                   <div class="stat-label">Services</div>
               </div>
               <div class="stat">
@@ -358,7 +442,7 @@
                   <div class="stat-label">Online</div>
               </div>
               <div class="stat">
-                  <div class="stat-value">v1.0</div>
+                  <div class="stat-value">v2.0</div>
                   <div class="stat-label">Stack</div>
               </div>
           </div>

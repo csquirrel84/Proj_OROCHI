@@ -42,8 +42,8 @@
           ║    ██    ██ ██   ██ ██    ██ ██      ██   ██ ██               ║
           ║     ██████  ██   ██  ██████   ██████ ██   ██ ██               ║
           ║                                                               ║
-          ║              SECURITY STACK DEPLOYER v1.0                     ║
-          ║         Based on Project Tiamat by csquirrel84                ║
+          ║              SECURITY STACK DEPLOYER v2.0                     ║
+          ║                  Localhost Edition                           ║
           ║                                                               ║
           ╚═══════════════════════════════════════════════════════════════╝
           
@@ -273,7 +273,7 @@
             prompt: "WARNING: This will remove all Orochi containers and data. Type 'YES' to confirm"
           register: confirm_teardown
 
-        - name: Stop Arkime services (bare metal)
+        - name: Stop bare-metal services
           ansible.builtin.systemd:
             name: "{{ item }}"
             state: stopped
@@ -281,6 +281,8 @@
           loop:
             - arkimecapture
             - arkimeviewer
+            - zeek
+            - suricata
           ignore_errors: true
           when: confirm_teardown.user_input == "YES"
 
@@ -317,20 +319,24 @@
     - name: Display Access Information
       ansible.builtin.debug:
         msg: |
-          
+
           ╔═══════════════════════════════════════════════════════════════╗
           ║                    DEPLOYMENT COMPLETE                        ║
           ╠═══════════════════════════════════════════════════════════════╣
-          ║  Configuration saved to ./orochi/.env (control node)          ║
-          ║  Credentials stored in vars/secrets.yml (vault encrypted)     ║
+          ║  Configuration: .env  |  Vault: vars/secrets.yml              ║
           ║                                                               ║
-          ║  Common Services:                                             ║
-          ║  • Elasticsearch: https://<IP>:9200                           ║
-          ║  • Kibana:        https://<IP>:5601                           ║
-          ║  • Fleet Server:  https://<IP>:8220                           ║
-          ║  • TheHive:       http://<IP>:9000                            ║
-          ║  • Velociraptor:  https://<IP>:8889                           ║
+          ║  Analyst Services ({{ orochi_server_ip | default('N/A') }}):
+          ║  • Tool Portal:  http://{{ orochi_server_ip | default('N/A') }}
+          ║  • Kibana:       https://{{ orochi_server_ip | default('N/A') }}:5601
+          ║  • TheHive:      http://{{ orochi_server_ip | default('N/A') }}:9000
+          ║  • Velociraptor: https://{{ orochi_server_ip | default('N/A') }}:8889
+          ║  • Arkime:       http://{{ orochi_server_ip | default('N/A') }}:8005
+          ║  • CyberChef:    http://{{ orochi_server_ip | default('N/A') }}:8080
+          ║  • Mattermost:   http://{{ orochi_server_ip | default('N/A') }}:8065
+          ║                                                               ║
+          ║  Agent Enrollment ({{ fleet_server_ip | default('N/A') }}):
+          ║  • Fleet Server: https://{{ fleet_server_ip | default('N/A') }}:8220
           ╚═══════════════════════════════════════════════════════════════╝
-          
-      when: menu_choice not in ["0", "11", "12"]
+
+      when: menu_choice not in ["0", "12", "13"]
       tags: always

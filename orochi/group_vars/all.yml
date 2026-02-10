@@ -7,9 +7,13 @@
 orochi_base_path: /opt/orochi
 orochi_project_name: orochi
 
-# Network Configuration
+# Network Configuration (3-interface model)
+# access_ip    = Analyst-facing (portal, Kibana, TheHive URLs)
+# ingestion_ip = Agent-facing (Fleet enrollment, ES log shipping)
+# pcap_interface = SPAN/mirror port (Suricata, Zeek, Arkime capture)
 orochi_network_name: orochi-network
-orochi_server_ip: "{{ selected_ip | default(ansible_host) | default('127.0.0.1') }}"
+orochi_server_ip: "{{ access_ip | default(selected_ip) | default('127.0.0.1') }}"
+fleet_server_ip: "{{ ingestion_ip | default(access_ip) | default(selected_ip) | default('127.0.0.1') }}"
 
 elasticsearch:
   cluster_name: "{{ cluster_name }}"
@@ -83,8 +87,8 @@ resources:
 # ==============================================
 suricata_version: "latest"
 suricata:
-  interface: "eth0"  # Override via environment role prompts
-  home_net: "192.168.0.0/16"  # Override via environment role prompts
+  interface: "{{ pcap_interface | default('eth0') }}"
+  home_net: "{{ suricata_home_net | default('192.168.0.0/16') }}"
 
 # ==============================================
 # AUTHENTICATION (Override in secrets.yml)

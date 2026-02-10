@@ -2,30 +2,10 @@
 # ==============================================
 # FLEET SERVER ROLE
 # ==============================================
-
-# Load environment variables from .env file
-- name: Check if .env file exists
-  ansible.builtin.stat:
-    path: "{{ playbook_dir }}/.env"
-  register: env_file
-  delegate_to: localhost
-  become: false
-  tags: fleet
-
-- name: Read .env file
-  ansible.builtin.slurp:
-    src: "{{ playbook_dir }}/.env"
-  register: env_content
-  delegate_to: localhost
-  become: false
-  when: env_file.stat.exists
-  tags: fleet
-
-- name: Parse selected_ip from .env
-  ansible.builtin.set_fact:
-    selected_ip: "{{ (env_content.content | b64decode | regex_search('SELECTED_IP=(.+)', '\\1') | first) | default(ansible_host, true) }}"
-  when: env_file.stat.exists
-  tags: fleet
+# Expects environment role to have run first,
+# setting: fleet_server_ip, orochi_server_ip,
+# elasticsearch_password, stack_version, etc.
+# ==============================================
 
 - name: Create Fleet Server directories
   ansible.builtin.file:
@@ -197,7 +177,7 @@
     body:
       name: "Default Fleet Server"
       host_urls:
-        - "https://{{ orochi_server_ip }}:{{ ports.fleet }}"
+        - "https://{{ fleet_server_ip }}:{{ ports.fleet }}"
       is_default: true
     validate_certs: false
     status_code: [200, 201]
@@ -218,7 +198,7 @@
     body:
       name: "Default Fleet Server"
       host_urls:
-        - "https://{{ orochi_server_ip }}:{{ ports.fleet }}"
+        - "https://{{ fleet_server_ip }}:{{ ports.fleet }}"
       is_default: true
     validate_certs: false
     status_code: [200]
@@ -253,7 +233,7 @@
     body_format: json
     body:
       hosts:
-        - "https://{{ orochi_server_ip }}:{{ ports.elasticsearch }}"
+        - "https://{{ fleet_server_ip }}:{{ ports.elasticsearch }}"
       ca_trusted_fingerprint: "{{ ca_fingerprint }}"
       ssl:
         certificate_authorities:
@@ -335,7 +315,7 @@
   ansible.builtin.debug:
     msg:
       - "Fleet Server is running!"
-      - "URL: https://{{ orochi_server_ip }}:{{ ports.fleet }}"
+      - "Enrollment URL: https://{{ fleet_server_ip }}:{{ ports.fleet }}"
       - "Kibana Fleet: https://{{ orochi_server_ip }}:{{ ports.kibana }}/app/fleet"
       - "Status: {{ fleet_server_status.json.status | default('Starting...') }}"
   tags: fleet

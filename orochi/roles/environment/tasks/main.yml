@@ -1,373 +1,100 @@
 ---
 # ==============================================
-# ENVIRONMENT ROLE - Final Production Version
+# ENVIRONMENT ROLE - Load configuration from .env
+# ==============================================
+# deploy.sh creates .env with all configuration.
+# This role loads it and sets Ansible facts that
+# other roles depend on. No interactive prompts.
 # ==============================================
 
-# 1. CHECK FOR EXISTING CONFIG (on control node)
-- name: Check if .env file already exists on control node
+# 1. CHECK FOR .ENV
+- name: Check for .env configuration
   ansible.builtin.stat:
     path: "{{ playbook_dir }}/.env"
-  register: env_file_exists
-  delegate_to: localhost
-  become: false
+  register: env_file
   tags: environment
 
-- name: Prompt to use existing config
-  ansible.builtin.pause:
-    prompt: "Existing configuration found. Use it? (y/n) [y]"
-    echo: yes
-  register: use_existing_env
-  when: env_file_exists.stat.exists
+- name: Fail if .env missing
+  ansible.builtin.fail:
+    msg: |
+      No .env configuration found!
+      Run deploy.sh first to configure the stack:
+        ./deploy.sh
+  when: not env_file.stat.exists
   tags: environment
 
-- name: Load existing .env variables from control node
-  ansible.builtin.command: cat {{ playbook_dir }}/.env
-  register: existing_env
-  delegate_to: localhost
-  become: false
-  when:
-    - env_file_exists.stat.exists
-    - use_existing_env.user_input | default('y', true) | lower in ['y', 'yes', '']
-  changed_when: false
+# 2. LOAD AND PARSE .ENV
+- name: Read .env file
+  ansible.builtin.slurp:
+    src: "{{ playbook_dir }}/.env"
+  register: env_raw
   tags: environment
 
-- name: Parse existing configuration
+- name: Decode .env content
   ansible.builtin.set_fact:
-    stack_version: "{{ existing_env.stdout | regex_search('STACK_VERSION=(.+)', '\\1') | first | default('9.2.2', true) }}"
-    cluster_name: "{{ existing_env.stdout | regex_search('CLUSTER_NAME=(.+)', '\\1') | first | default('orochi', true) }}"
-    license: "{{ existing_env.stdout | regex_search('LICENSE=(.+)', '\\1') | first | default('trial', true) }}"
-    mem_limit: "{{ existing_env.stdout | regex_search('MEM_LIMIT=(.+)', '\\1') | first | default('4g', true) }}"
-    velox_user: "{{ existing_env.stdout | regex_search('VELOX_USER=(.+)', '\\1') | first | default('admin', true) }}"
-    velox_role: "{{ existing_env.stdout | regex_search('VELOX_ROLE=(.+)', '\\1') | first | default('administrator', true) }}"
-    es_port: "{{ existing_env.stdout | regex_search('ES_PORT=(.+)', '\\1') | first | default('9200', true) }}"
-    kibana_port: "{{ existing_env.stdout | regex_search('KIBANA_PORT=(.+)', '\\1') | first | default('5601', true) }}"
-    fleet_port: "{{ existing_env.stdout | regex_search('FLEET_PORT=(.+)', '\\1') | first | default('8220', true) }}"
-    suricata_port: "{{ existing_env.stdout | regex_search('SURICATA_PORT=(.+)', '\\1') | first | default('8000', true) }}"
-    suricata_interface: "{{ existing_env.stdout | regex_search('SURICATA_INTERFACE=(.+)', '\\1') | first | default('eth0', true) }}"
-    suricata_home_net: "{{ existing_env.stdout | regex_search('SURICATA_HOME_NET=(.+)', '\\1') | first | default('192.168.0.0/16', true) }}"
-    local_kbn_url: "{{ existing_env.stdout | regex_search('LOCAL_KBN_URL=(.+)', '\\1') | first | default('https://100.106.108.5:5601', true) }}"
-    arkime_es_ip: "{{ existing_env.stdout | regex_search('ARKIME_ELASTICSEARCH_IP=(.+)', '\\1') | first | default('127.0.0.1', true) }}"
-    velox_server_url: "{{ existing_env.stdout | regex_search('VELOX_SERVER_URL=(.+)', '\\1') | first | default('https://100.106.108.5:8889/', true) }}"
-    velox_hostname: "{{ existing_env.stdout | regex_search('VELOX_FRONTEND_HOSTNAME=(.+)', '\\1') | first | default('100.106.108.5', true) }}"
-    selected_ip: "{{ existing_env.stdout | regex_search('SELECTED_IP=(.+)', '\\1') | first | default('127.0.0.1', true) }}"
-    arkime_password_secret: "{{ existing_env.stdout | regex_search('ARKIME_PASSWORD_SECRET=(.+)', '\\1') | first }}"
-    kibana_encryption_key: "{{ existing_env.stdout | regex_search('KIBANA_ENCRYPTION_KEY=(.+)', '\\1') | first | default('', true) }}"
-    skip_env_prompts: true
-  when:
-    - env_file_exists.stat.exists
-    - use_existing_env.user_input | default('y', true) | lower in ['y', 'yes', '']
-  tags: environment
-
-- name: Create suricata config dict from existing .env
-  ansible.builtin.set_fact:
-    suricata:
-      interface: "{{ suricata_interface }}"
-      home_net: "{{ suricata_home_net }}"
-  when:
-    - env_file_exists.stat.exists
-    - use_existing_env.user_input | default('y', true) | lower in ['y', 'yes', '']
-  tags: environment
-
-# 2. HANDLE PASSWORDS (VAULT OR PROMPT)
-
-- name: Request Stack Password (If not in Vault)
-  ansible.builtin.pause:
-    prompt: "Enter password for Elastic/Kibana/TheHive (Required for deployment)"
-    echo: no
-  register: interactive_password
-  when: common_password is not defined or (common_password | string | length == 0)
-  tags: environment
-
-- name: Set Password Variable (from prompt when needed)
-  ansible.builtin.set_fact:
-    common_password: "{{ interactive_password.user_input }}"
-  when: common_password is not defined or (common_password | string | length == 0)
+    env_content: "{{ env_raw.content | b64decode }}"
   no_log: true
   tags: environment
 
-- name: Verify Password is Set
+- name: Parse .env configuration
+  ansible.builtin.set_fact:
+    stack_version: "{{ env_content | regex_search('STACK_VERSION=(.+)', '\\1') | first | default('9.3.0', true) }}"
+    cluster_name: "{{ env_content | regex_search('CLUSTER_NAME=(.+)', '\\1') | first | default('orochi', true) }}"
+    license: "{{ env_content | regex_search('LICENSE=(.+)', '\\1') | first | default('trial', true) }}"
+    velox_user: "{{ env_content | regex_search('VELOX_USER=(.+)', '\\1') | first | default('admin', true) }}"
+    velox_role: "{{ env_content | regex_search('VELOX_ROLE=(.+)', '\\1') | first | default('administrator', true) }}"
+    velox_server_url: "{{ env_content | regex_search('VELOX_SERVER_URL=(.+)', '\\1') | first | default('https://127.0.0.1:8889/', true) }}"
+    velox_hostname: "{{ env_content | regex_search('VELOX_FRONTEND_HOSTNAME=(.+)', '\\1') | first | default('127.0.0.1', true) }}"
+    es_port: "{{ env_content | regex_search('ES_PORT=(.+)', '\\1') | first | default('9200', true) }}"
+    kibana_port: "{{ env_content | regex_search('KIBANA_PORT=(.+)', '\\1') | first | default('5601', true) }}"
+    fleet_port: "{{ env_content | regex_search('FLEET_PORT=(.+)', '\\1') | first | default('8220', true) }}"
+    pcap_interface: "{{ env_content | regex_search('PCAP_INTERFACE=(.+)', '\\1') | first | default('eth0', true) }}"
+    suricata_interface: "{{ env_content | regex_search('SURICATA_INTERFACE=(.+)', '\\1') | first | default('eth0', true) }}"
+    suricata_home_net: "{{ env_content | regex_search('SURICATA_HOME_NET=(.+)', '\\1') | first | default('192.168.0.0/16', true) }}"
+    ingestion_ip: "{{ env_content | regex_search('INGESTION_IP=(.+)', '\\1') | first | default('127.0.0.1', true) }}"
+    access_ip: "{{ env_content | regex_search('ACCESS_IP=(.+)', '\\1') | first | default('127.0.0.1', true) }}"
+    selected_ip: "{{ env_content | regex_search('SELECTED_IP=(.+)', '\\1') | first | default('127.0.0.1', true) }}"
+    arkime_es_ip: "{{ env_content | regex_search('ARKIME_ELASTICSEARCH_IP=(.+)', '\\1') | first | default('127.0.0.1', true) }}"
+    arkime_password_secret: "{{ env_content | regex_search('ARKIME_PASSWORD_SECRET=(.+)', '\\1') | first | default('', true) }}"
+    kibana_encryption_key: "{{ env_content | regex_search('KIBANA_ENCRYPTION_KEY=(.+)', '\\1') | first | default('', true) }}"
+    local_kbn_url: "{{ env_content | regex_search('LOCAL_KBN_URL=(.+)', '\\1') | first | default('https://127.0.0.1:5601', true) }}"
+  no_log: true
+  tags: environment
+
+# 3. PARSE DEPLOYED COMPONENTS LIST
+- name: Parse deployed components
+  ansible.builtin.set_fact:
+    deployed_components: "{{ (env_content | regex_search('DEPLOYED_COMPONENTS=(.+)', '\\1') | first | default('elk,thehive,velociraptor,suricata,zeek,arkime,cyberchef,mattermost,rita,portal', true)).split(',') }}"
+  tags: environment
+
+# 4. SET SURICATA CONFIG DICT
+# This overrides group_vars/all.yml defaults with actual .env values
+- name: Set suricata configuration
+  ansible.builtin.set_fact:
+    suricata:
+      interface: "{{ pcap_interface }}"
+      home_net: "{{ suricata_home_net }}"
+  tags: environment
+
+# 4. VERIFY PASSWORD FROM VAULT
+- name: Verify common_password is available
   ansible.builtin.fail:
-    msg: "Password is required! Check vars/secrets.yml or enter it interactively."
+    msg: |
+      common_password not found! Ensure vars/secrets.yml exists and
+      you are passing the vault password:
+        ansible-playbook fuse.yml --ask-vault-pass
+        ansible-playbook fuse.yml --vault-password-file .vault_pass
   when: common_password is not defined or common_password == ""
   tags: environment
 
-# 3. INTERACTIVE PROMPTS (Skipped if using existing .env)
-- name: Prompt for Elastic Stack version
-  ansible.builtin.pause:
-    prompt: "Enter Elastic Stack version [latest]"
-    echo: yes
-  register: stack_version_input
-  when: not (skip_env_prompts | default(false))
-  tags: environment
-
-- name: Prompt for cluster name
-  ansible.builtin.pause:
-    prompt: "Enter cluster name [orochi]"
-    echo: yes
-  register: cluster_name_input
-  when: not (skip_env_prompts | default(false))
-  tags: environment
-
-- name: Prompt for license type
-  ansible.builtin.pause:
-    prompt: "Enter license type (basic/trial) [trial]"
-    echo: yes
-  register: license_input
-  when: not (skip_env_prompts | default(false))
-  tags: environment
-
-- name: Prompt for memory limit
-  ansible.builtin.pause:
-    prompt: "Enter memory limit [8g]"
-    echo: yes
-  register: mem_limit_input
-  when: not (skip_env_prompts | default(false))
-  tags: environment
-
-# 4. NETWORK DISCOVERY & SELECTION (Crucial Part)
-- name: Build network interfaces list
-  ansible.builtin.shell: |
-    counter=1
-    ip -o -4 addr show | while read line; do
-      iface=$(echo "$line" | awk '{print $2}')
-      ip=$(echo "$line" | awk '{print $4}' | cut -d'/' -f1)
-      case "$iface" in
-        lo|docker*|br-*|veth*) continue ;;
-      esac
-      echo "${counter}. ${iface} (${ip})"
-      counter=$((counter + 1))
-    done
-  register: network_interfaces
-  changed_when: false
-  when: not (skip_env_prompts | default(false))
-  tags: environment
-
-- name: Build IP lookup table
-  ansible.builtin.shell: |
-    ip -o -4 addr show | while read line; do
-      iface=$(echo "$line" | awk '{print $2}')
-      ip=$(echo "$line" | awk '{print $4}' | cut -d'/' -f1)
-      case "$iface" in
-        lo|docker*|br-*|veth*) continue ;;
-      esac
-      echo "$ip"
-    done
-  register: ip_lookup_table
-  changed_when: false
-  when: not (skip_env_prompts | default(false))
-  tags: environment
-
-- name: Build interface lookup table
-  ansible.builtin.shell: |
-    ip -o -4 addr show | while read line; do
-      iface=$(echo "$line" | awk '{print $2}')
-      case "$iface" in
-        lo|docker*|br-*|veth*) continue ;;
-      esac
-      echo "$iface"
-    done
-  register: iface_lookup_table
-  changed_when: false
-  when: not (skip_env_prompts | default(false))
-  tags: environment
-
-- name: Display available network interfaces
+# 5. DISPLAY CONFIGURATION SUMMARY
+- name: Display loaded configuration
   ansible.builtin.debug:
-    msg: "{{ network_interfaces.stdout_lines }}"
-  when: not (skip_env_prompts | default(false))
-  tags: environment
-
-- name: Prompt for Suricata interface selection
-  ansible.builtin.pause:
-    prompt: "Select Suricata interface number or press Enter for default"
-    echo: yes
-  register: suricata_interface_input
-  when: not (skip_env_prompts | default(false))
-  tags: environment
-
-- name: Parse Suricata interface selection
-  ansible.builtin.set_fact:
-    suricata_interface_parsed: "{{ iface_lookup_table.stdout_lines[suricata_interface_input.user_input | int - 1] if suricata_interface_input.user_input | default('') | regex_search('^[0-9]+$') else (iface_lookup_table.stdout_lines[0] | default('eth0')) }}"
-  when: not (skip_env_prompts | default(false))
-  tags: environment
-
-- name: Prompt for Suricata HOME_NET (CIDR network)
-  ansible.builtin.pause:
-    prompt: "Enter HOME_NET CIDR for Suricata (e.g., 192.168.0.0/16) [192.168.0.0/16]"
-    echo: yes
-  register: suricata_home_net_input
-  when: not (skip_env_prompts | default(false))
-  tags: environment
-
-- name: Parse Suricata HOME_NET
-  ansible.builtin.set_fact:
-    suricata_home_net_parsed: "{{ suricata_home_net_input.user_input | default('192.168.0.0/16') }}"
-  when: not (skip_env_prompts | default(false))
-  tags: environment
-
-- name: Create suricata config dict
-  ansible.builtin.set_fact:
-    suricata:
-      interface: "{{ suricata_interface_parsed | default('eth0') }}"
-      home_net: "{{ suricata_home_net_parsed | default('192.168.0.0/16') }}"
-  when: not (skip_env_prompts | default(false))
-  tags: environment
-
-- name: Prompt for Fleet/Elasticsearch IP selection
-  ansible.builtin.pause:
-    prompt: "Select IP number for Fleet Server and Elasticsearch (external access)"
-    echo: yes
-  register: selected_ip_input
-  when: not (skip_env_prompts | default(false))
-  tags: environment
-
-- name: Parse selected IP
-  ansible.builtin.set_fact:
-    selected_ip_parsed: "{{ ip_lookup_table.stdout_lines[selected_ip_input.user_input | int - 1] if selected_ip_input.user_input | default('') | regex_search('^[0-9]+$') else (ip_lookup_table.stdout_lines[0] | default('127.0.0.1')) }}"
-  when: not (skip_env_prompts | default(false))
-  tags: environment
-
-- name: Prompt for Velociraptor server URL
-  ansible.builtin.pause:
-    prompt: "Enter Velociraptor server URL [https://100.106.108.5:8889/]"
-    echo: yes
-  register: velox_url_input
-  when: not (skip_env_prompts | default(false))
-  tags: environment
-
-- name: Generate Arkime password secret
-  ansible.builtin.shell: openssl rand -base64 32
-  register: arkime_password_secret_new
-  changed_when: false
-  when: not (skip_env_prompts | default(false))
-  no_log: true
-  tags: environment
-
-- name: Generate Kibana Encryption Key
-  ansible.builtin.shell: openssl rand -hex 32
-  register: kibana_key_gen
-  changed_when: false
-  when: 
-    - not (skip_env_prompts | default(false))
-    - kibana_encryption_key | default('') == ''
-  tags: environment
-
-# 5. VARIABLE MAPPING (Crucial Fix for Passwords)
-- name: Propagate Global Passwords to Roles
-  ansible.builtin.set_fact:
-    elasticsearch_password: "{{ common_password }}"
-    kibana_password: "{{ common_password }}"
-    thehive_password: "{{ common_password }}"
-    velociraptor_password: "{{ common_password }}"
-    arkime_password: "{{ common_password }}"
-    mattermost_password: "{{ common_password }}"
-    fleet_elasticsearch_password: "{{ common_password }}"
-  tags: environment
-
-- name: Set variables from prompts
-  ansible.builtin.set_fact:
-
-    # =========================
-    # CORE STACK VARIABLES
-    # =========================
-    stack_version: "{{ stack_version_input.user_input | default('latest', true) }}"
-    cluster_name: "{{ cluster_name_input.user_input | default('orochi', true) }}"
-    license: "{{ license_input.user_input | default('basic', true) }}"
-    mem_limit: "{{ mem_limit_input.user_input | default('4g', true) }}"
-
-    # =========================
-    # USERS / ROLES
-    # =========================
-    velox_user: "{{ velox_user_input.user_input | default('admin', true) }}"
-    velox_role: "{{ velox_role_input.user_input | default('administrator', true) }}"
-
-    # =========================
-    # PORTS (FIXED)
-    # =========================
-    es_port: "9200"
-    kibana_port: "5601"
-    fleet_port: "8220"
-    suricata_port: "8000"
-
-    # =========================
-    # NETWORK
-    # =========================
-    suricata_interface: "{{ suricata_interface_parsed }}"
-    selected_ip: "{{ selected_ip_parsed }}"
-    velox_hostname: "{{ selected_ip_parsed }}"
-    arkime_es_ip: "{{ selected_ip_parsed }}"
-    local_kbn_url: "https://{{ selected_ip_parsed }}:5601"
-
-    velox_server_url: "{{ velox_url_input.user_input | default('https://100.106.108.5:8889/', true) }}"
-
-    # =========================
-    # SECRETS (RUNTIME GENERATED)
-    # =========================
-    arkime_password_secret: "{{ arkime_password_secret_new.stdout }}"
-    kibana_encryption_key: "{{ kibana_encryption_key | default(kibana_key_gen.stdout, true) }}"
-
-    # =========================
-    # RESOURCE LIMITS (REQUIRED)
-    # =========================
-    resources:
-      elasticsearch:
-        memory: "{{ mem_limit | default('8g', true) }}"
-        heap: "2g"
-      kibana:
-        memory: "2g"
-      thehive:
-        memory: "2g"
-      cassandra:
-        memory: "2g"
-        heap: "1024M"
-        heap_new: "256M"
-      elasticsearch_hive:
-        memory: "1g"
-        heap: "512m"
-      suricata:
-        memory: "2g"
-      mattermost:
-        memory: "1g"
-
-  when: not (skip_env_prompts | default(false))
-  no_log: true
-  tags: environment
-
-
-
-# 6. WRITE .ENV (No Passwords) - On control node only
-- name: Create/Update .env file on control node
-  ansible.builtin.copy:
-    content: |
-      # ==============================================
-      # Orochi Security Stack Configuration
-      # Generated: {{ ansible_date_time.iso8601 }}
-      # Target: {{ inventory_hostname }}
-      # ==============================================
-      STACK_VERSION={{ stack_version }}
-      CLUSTER_NAME={{ cluster_name }}
-      LICENSE={{ license }}
-      MEM_LIMIT={{ mem_limit }}
-      VELOX_USER={{ velox_user }}
-      VELOX_ROLE={{ velox_role }}
-      VELOX_SERVER_URL={{ velox_server_url }}
-      VELOX_FRONTEND_HOSTNAME={{ velox_hostname }}
-      ES_PORT={{ es_port }}
-      KIBANA_PORT={{ kibana_port }}
-      FLEET_PORT={{ fleet_port }}
-      SURICATA_PORT={{ suricata_port }}
-      SURICATA_INTERFACE={{ suricata_interface }}
-      SURICATA_HOME_NET={{ suricata.home_net }}
-      ARKIME_ELASTICSEARCH_IP={{ arkime_es_ip }}
-      ARKIME_PASSWORD_SECRET={{ arkime_password_secret }}
-      KIBANA_ENCRYPTION_KEY={{ kibana_encryption_key }}
-      FLEET_SERVER_HOST={{ selected_ip }}
-      LOCAL_KBN_URL={{ local_kbn_url }}
-      SELECTED_IP={{ selected_ip }}
-      DEFAULT_TIMEOUT=300
-    dest: "{{ playbook_dir }}/.env"
-    mode: '0600'
-  delegate_to: localhost
-  become: false
-  when: not (skip_env_prompts | default(false))
+    msg:
+      - "Configuration loaded from .env"
+      - "Stack Version: {{ stack_version }}"
+      - "Analyst Access IP: {{ access_ip }}"
+      - "Log Ingestion IP: {{ ingestion_ip }}"
+      - "PCAP Interface: {{ pcap_interface }}"
+      - "HOME_NET: {{ suricata_home_net }}"
   tags: environment

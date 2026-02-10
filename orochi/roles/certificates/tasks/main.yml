@@ -52,6 +52,7 @@
               --dns localhost \
               --ip 127.0.0.1 \
               --ip {{ orochi_server_ip }} \
+              --ip {{ fleet_server_ip }} \
               --out config/certs/certs.zip \
               --days 1095 \
 
