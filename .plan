@@ -1,0 +1,154 @@
+# Orochi Localhost Deployment - Implementation Plan
+
+## Goal
+Reconfigure Orochi for single-box localhost deployment, runnable from a USB stick by a zero-experience analyst on a fresh Ubuntu 24/25 install.
+
+---
+
+## New Deployment Flow (Analyst Experience)
+
+```
+1. Install Ubuntu 24 or 25 on a box with 3 NICs
+2. Plug in USB stick
+3. Run: ./deploy.sh
+4. Answer 5 questions:
+   - Service password
+   - Vault password
+   - Which NIC is PCAP (SPAN/mirror port)?
+   - Which NIC is log ingestion (endpoints send logs here)?
+   - Which NIC is analyst access (SOC analysts browse here)?
+5. Walk away — full stack deploys automatically
+```
+
+---
+
+## Files to CREATE
+
+### 1. `deploy.sh` (new entry point)
+Bootstrap script that handles everything before Ansible runs:
+- Checks Ubuntu 24/25
+- Installs Ansible + dependencies (`ansible`, `python3-docker`, `community.docker` collection)
+- Displays OROCHI banner
+- Prompts for **service password** (hidden input)
+- Prompts for **vault password** (hidden input)
+- Lists all network interfaces (filtering out lo, docker*, br-*, veth*)
+- Prompts analyst to assign 3 roles:
+  - **PCAP interface** (Suricata/Zeek/Arkime capture — may have no IP)
+  - **Log ingestion interface** (Fleet enrollment, agent-facing ES)
+  - **Analyst access interface** (portal, Kibana, TheHive URLs)
+- Auto-detects IPs from the ingestion and access interfaces
+- Auto-derives HOME_NET from the access interface subnet
+- Creates `vars/secrets.yml` encrypted vault (contains `common_password`)
+- Writes `.env` with all configuration (IPs, interfaces, generated secrets)
+- Writes `.vault_pass` temporarily for the playbook run
+- Runs `ansible-playbook fuse.yml -e menu_choice=1 --vault-password-file .vault_pass`
+- Cleans up `.vault_pass` after completion
+- Displays summary with all service URLs
+
+---
+
+## Files to MODIFY
+
+### 2. `inventory/hosts.yml`
+Change from remote SSH target to localhost:
+```yaml
+---
+all:
+  children:
+    orochi_servers:
+      hosts:
+        localhost:
+          ansible_connection: local
+          ansible_python_interpreter: /usr/bin/python3
+```
+
+### 3. `ansible.cfg`
+- Remove entire `[ssh_connection]` section (not needed for localhost)
+- Change `become_ask_pass = False` (deploy.sh runs with sudo already, or we use -K)
+- Keep `ask_vault_pass = False` (deploy.sh passes vault password file)
+- Keep privilege escalation settings
+
+### 4. `group_vars/all.yml`
+- Add new variables for the 3-interface model:
+  - `pcap_interface` (replaces single `suricata.interface`)
+  - `ingestion_ip` (Fleet Server, agent-facing ES URL)
+  - `access_ip` (portal, Kibana, TheHive, Velociraptor URLs)
+- Update `orochi_server_ip` to use `access_ip`
+- Add `fleet_ingestion_ip` for Fleet enrollment URLs
+- Suricata/Zeek/Arkime use `pcap_interface`
+
+### 5. `roles/environment/tasks/main.yml`
+Major simplification:
+- On first run (no .env): all config comes from deploy.sh which already created .env
+- On subsequent runs: load from existing .env (current behavior)
+- Remove the massive interactive prompt chain (deploy.sh handles all of it)
+- Add parsing for new .env variables: `PCAP_INTERFACE`, `INGESTION_IP`, `ACCESS_IP`
+- Set `suricata.interface` from `PCAP_INTERFACE`
+- Set `selected_ip` (for UI URLs) from `ACCESS_IP`
+- Set `fleet_ingestion_ip` from `INGESTION_IP`
+
+### 6. `roles/fleet/tasks/main.yml`
+- Fleet Server host URLs use `ingestion_ip` (not `selected_ip`)
+- Fleet output ES URL uses `ingestion_ip`
+- Kibana Fleet UI link still uses `access_ip` (analysts access it)
+
+### 7. `roles/certificates/tasks/main.yml`
+- Add BOTH IPs to the certificate SAN (Subject Alternative Names):
+  - `--ip {{ access_ip }}`
+  - `--ip {{ ingestion_ip }}`
+  - `--ip 127.0.0.1` (already there)
+- This ensures TLS works from both networks
+
+### 8. `fuse.yml`
+- Keep the interactive menu (useful for re-running individual components)
+- Update `hosts: orochi_servers` stays the same (inventory handles localhost)
+- The deploy.sh auto-selects option 1 on first run
+
+### 9. `roles/nginx_proxy/tasks/main.yml` (portal)
+- Service URLs use `access_ip` (analyst-facing)
+- Update service count in status bar to 7 (if Cortex added) or keep at 6
+
+### 10. `.env` template (written by deploy.sh)
+Add new variables:
+```
+PCAP_INTERFACE=<selected>
+INGESTION_IP=<detected>
+ACCESS_IP=<detected>
+```
+
+### 11. `reset.sh`
+- Add RITA and Arkime cleanup (already partially there)
+- Ensure it works for localhost
+
+### 12. `.gitignore`
+- Already ignores .env and .vault_pass — good
+
+---
+
+## Files that need NO changes
+- `roles/elasticsearch/tasks/main.yml` — already uses variables
+- `roles/kibana/tasks/main.yml` — already uses variables
+- `roles/thehive/tasks/main.yml` — already uses variables
+- `roles/velociraptor/tasks/main.yml` — uses `orochi_server_ip` which will resolve to `access_ip`
+- `roles/suricata/tasks/main.yml` — uses `suricata.interface` which will resolve to `pcap_interface`
+- `roles/zeek/tasks/main.yml` — uses `suricata.interface` which will resolve to `pcap_interface`
+- `roles/arkime/tasks/main.yml` — uses `suricata.interface` for capture, ES on localhost
+- `roles/cyberchef/tasks/main.yml` — simple, no IP-specific config
+- `roles/mattermost/tasks/main.yml` — uses `orochi_server_ip`
+- `roles/rita/tasks/main.yml` — bare metal install, no network config
+- `roles/common/tasks/main.yml` — Docker install works the same on localhost
+- All handlers — no changes needed
+
+---
+
+## Implementation Order
+1. Create `deploy.sh` (the analyst's entry point)
+2. Update `inventory/hosts.yml` (localhost)
+3. Update `ansible.cfg` (remove SSH, adjust for local)
+4. Update `group_vars/all.yml` (3-interface variables)
+5. Rewrite `roles/environment/tasks/main.yml` (simplified, loads from .env)
+6. Update `roles/fleet/tasks/main.yml` (ingestion_ip for enrollment)
+7. Update `roles/certificates/tasks/main.yml` (dual IP SANs)
+8. Update `roles/nginx_proxy/tasks/main.yml` (access_ip for portal links)
+9. Update `.env` generation in deploy.sh
+10. Test the flow mentally end-to-end
