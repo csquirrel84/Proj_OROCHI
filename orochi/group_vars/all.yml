@@ -3,22 +3,33 @@
 # OROCHI SECURITY STACK - MAIN CONFIGURATION
 # ==============================================
 
-# Base Configuration
 orochi_base_path: /opt/orochi
 orochi_project_name: orochi
-
-# Network Configuration
 orochi_network_name: orochi-network
-orochi_server_ip: "{{ selected_ip | default(ansible_host) | default('127.0.0.1') }}"
+orochi_server_ip: "{{ ansible_host | default('127.0.0.1') }}"
 
 elasticsearch:
-  cluster_name: "{{ cluster_name }}"
-  license: "{{ license }}"
+  cluster_name: "orochi"
+  license: "basic"
+
+
+# ==============================================
+# MANAGEMENT BOX
+# ==============================================
+# Production: direct ethernet link 10.16.255.253
+# Override via -e mgmt_box_ip=192.168.0.24 for dev
+mgmt_box_ip: "10.16.255.253"
+mgmt_registry_port: 5000
+mgmt_apt_proxy_port: 3142
+mgmt_artifact_port: 8888
+
+artifact_base_url: "http://{{ mgmt_box_ip }}:{{ mgmt_artifact_port }}"
 
 
 # ==============================================
 # VERSION PINNING
 # ==============================================
+stack_version: "9.3.4"
 elasticsearch_hive_version: "7.17.9"
 thehive_version: "4.1.19"
 cassandra_version: "4.0"
@@ -28,7 +39,24 @@ postgres_version: "15-alpine"
 portal_version: "alpine"
 rita_version: "v5.1.1"
 arkime_version: "5.8.3"
-clickhouse_version: "latest"
+
+
+# ==============================================
+# DOCKER IMAGE REFERENCES
+# All pulled from local registry on management box
+# ==============================================
+images:
+  elasticsearch:      "{{ mgmt_box_ip }}:{{ mgmt_registry_port }}/elasticsearch/elasticsearch:{{ stack_version }}"
+  elasticsearch_hive: "{{ mgmt_box_ip }}:{{ mgmt_registry_port }}/elasticsearch/elasticsearch:{{ elasticsearch_hive_version }}"
+  kibana:             "{{ mgmt_box_ip }}:{{ mgmt_registry_port }}/kibana/kibana:{{ stack_version }}"
+  elastic_agent:      "{{ mgmt_box_ip }}:{{ mgmt_registry_port }}/elastic-agent/elastic-agent:{{ stack_version }}"
+  cassandra:          "{{ mgmt_box_ip }}:{{ mgmt_registry_port }}/cassandra:{{ cassandra_version }}"
+  thehive:            "{{ mgmt_box_ip }}:{{ mgmt_registry_port }}/thehiveproject/thehive4:{{ thehive_version }}"
+  debian_slim:        "{{ mgmt_box_ip }}:{{ mgmt_registry_port }}/debian:bookworm-slim"
+  mattermost:         "{{ mgmt_box_ip }}:{{ mgmt_registry_port }}/mattermost/mattermost-team-edition:{{ mattermost_version }}"
+  postgres:           "{{ mgmt_box_ip }}:{{ mgmt_registry_port }}/postgres:{{ postgres_version }}"
+  cyberchef:          "{{ mgmt_box_ip }}:{{ mgmt_registry_port }}/gchq/cyberchef:{{ cyberchef_version }}"
+  nginx:              "{{ mgmt_box_ip }}:{{ mgmt_registry_port }}/nginx:{{ portal_version }}"
 
 
 # ==============================================
@@ -42,17 +70,15 @@ ports:
   velociraptor_gui: 8889
   velociraptor_frontend: 8000
   velociraptor_api: 8001
-  suricata: 8888
   arkime: 8005
   cyberchef: 8080
   mattermost: 8065
-  rita: 8888
   portal_http: 80
   portal_https: 443
 
 
 # ==============================================
-# RESOURCE CONFIGURATION
+# RESOURCE LIMITS
 # ==============================================
 resources:
   kibana:
@@ -69,31 +95,49 @@ resources:
   elasticsearch_hive:
     memory: "1g"
     heap: "512m"
-  suricata:
-    memory: "2g"
   mattermost:
     memory: "1g"
-  clickhouse:
-    memory: "1g"
-  rita:
-    memory: "512m"
+
 
 # ==============================================
-# SURICATA CONFIGURATION
+# NETWORK INTERFACES
+# MAC-addressed to survive kernel renames
 # ==============================================
-suricata_version: "latest"
+analyst_nic_mac: "88:ae:dd:0f:d9:0e"
+target_nic_mac: "98:e7:43:22:5b:91"
+nic_wg_bearer: wlo1
+
+# capture_interface set after USB NIC is procured
+# capture_nic_present: false
+
+
+# ==============================================
+# SURICATA / ZEEK / ARKIME CAPTURE INTERFACE
+# Temporarily set to target NIC until capture NIC (nic2) is procured
+# ==============================================
+capture_interface: "enx98e743225b91"
+
 suricata:
-  interface: "eth0"  # Override via environment role prompts
-  home_net: "192.168.0.0/16"  # Override via environment role prompts
+  interface: "{{ capture_interface }}"
+  home_net: "192.168.0.0/16"
+
 
 # ==============================================
-# AUTHENTICATION (Override in secrets.yml)
+# WIREGUARD
 # ==============================================
-# Default credentials - CHANGE THESE!
+wireguard_port: 51820
+wireguard_interface: wg0
+wireguard_server_ip: 10.99.0.1/24
+wireguard_peer_ip: 10.99.0.2/32
+
+
+# ==============================================
+# AUTHENTICATION
+# common_password is prompted at runtime by fuse.yml
+# ==============================================
 orochi_admin_user: "admin"
 orochi_admin_password: "{{ common_password }}"
 
-# Service-specific (inherit from main by default)
 elasticsearch_password: "{{ common_password }}"
 kibana_password: "{{ common_password }}"
 thehive_password: "{{ common_password }}"
@@ -101,15 +145,8 @@ velox_user: "{{ orochi_admin_user }}"
 velociraptor_password: "{{ common_password }}"
 mattermost_password: "{{ common_password }}"
 arkime_password: "{{ common_password }}"
+arkime_password_secret: "{{ common_password }}"
 
-  
-# ==============================================
-# FEATURE FLAGS
-# ==============================================
-features:
-  ssl_enabled: true
-  tool_portal: true
-  monitoring: true
 
 # ==============================================
 # DATA DIRECTORIES
@@ -127,7 +164,7 @@ directories:
   arkime: "{{ orochi_base_path }}/arkime"
   mattermost: "{{ orochi_base_path }}/mattermost"
   postgres: "{{ orochi_base_path }}/postgres"
+  postgres_timesketch: "{{ orochi_base_path }}/postgres-timesketch"
   portal: "{{ orochi_base_path }}/portal"
   rita: "{{ orochi_base_path }}/rita"
-  clickhouse: "{{ orochi_base_path }}/clickhouse"
   logs: "{{ orochi_base_path }}/logs"

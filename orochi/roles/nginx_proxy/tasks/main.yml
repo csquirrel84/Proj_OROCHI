@@ -373,14 +373,14 @@
 
 - name: Pull Portal image
   community.docker.docker_image:
-    name: "nginx:{{ portal_version }}"
+    name: "{{ images.nginx }}"
     source: pull
   tags: portal
 
 - name: Start Portal
   community.docker.docker_container:
     name: tool-portal
-    image: "nginx:{{ portal_version }}"
+    image: "{{ images.nginx }}"
     state: started
     restart_policy: unless-stopped
     hostname: tool-portal

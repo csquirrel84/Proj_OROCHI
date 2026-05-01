@@ -1,0 +1,26 @@
+---
+# configure_host.yml — network policy and VPN
+# Run this before deploying any services.
+#
+# Required vars:
+#   wireguard_peer_pubkey   — remote analyst's WireGuard public key
+#
+# Optional vars (override defaults in roles):
+#   wireguard_port          — default 51820
+#   capture_nic_present     — set true once USB capture NIC is installed
+
+- name: Configure host network policy and WireGuard VPN
+  hosts: orochi_node
+  become: true
+  gather_facts: true
+
+  vars_prompt:
+    - name: wireguard_peer_pubkey
+      prompt: "Remote analyst WireGuard public key (leave blank to skip WireGuard)"
+      private: false
+
+  roles:
+    - role: iptables
+
+    - role: wireguard
+      when: wireguard_peer_pubkey | length > 0

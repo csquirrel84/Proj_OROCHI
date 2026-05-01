@@ -1,0 +1,229 @@
+---
+# Sets up a fresh Ubuntu management box with everything needed to deploy Orochi.
+#
+# Bootstrap (run this once on the management box before anything else):
+#   sudo apt update && sudo apt install -y ansible
+#   ansible-playbook ~/orochi/orochi/playbooks/setup_mgmt_box.yml
+#
+# After this runs, the box is ready to run prep_for_battle.yml and Terraform.
+
+- name: Set up Orochi management box
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: true
+
+  tasks:
+
+    - name: Update apt cache
+      apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Install base packages
+      apt:
+        name:
+          - git
+          - curl
+          - wget
+          - rsync
+          - unzip
+          - gnupg
+          - software-properties-common
+          - python3-pip
+          - python3-netaddr
+          - python3-jmespath
+          - openssh-client
+        state: present
+
+    # ── Terraform ──────────────────────────────────────────────────────────────
+
+    - name: Add HashiCorp GPG key
+      get_url:
+        url: https://apt.releases.hashicorp.com/gpg
+        dest: /usr/share/keyrings/hashicorp-archive-keyring.asc
+        mode: '0644'
+
+    - name: Add HashiCorp apt repository
+      apt_repository:
+        repo: >-
+          deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.asc]
+          https://apt.releases.hashicorp.com {{ ansible_distribution_release }} main
+        state: present
+        filename: hashicorp
+
+    - name: Install Terraform
+      apt:
+        name: terraform
+        state: present
+        update_cache: true
+
+    # ── Docker (management box needs it to run the local registry) ────────────
+
+    - name: Create Docker keyrings directory
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Add Docker GPG key
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        dest: /etc/apt/keyrings/docker.asc
+        mode: '0644'
+
+    - name: Add Docker apt repository
+      ansible.builtin.apt_repository:
+        repo: "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+        state: present
+        filename: docker
+
+    - name: Install Docker
+      ansible.builtin.apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+          - python3-docker
+        state: present
+        update_cache: true
+
+    - name: Ensure Docker is running
+      ansible.builtin.systemd:
+        name: docker
+        state: started
+        enabled: true
+
+    # ── apt-cacher-ng ──────────────────────────────────────────────────────────
+
+    - name: Install apt-cacher-ng
+      ansible.builtin.apt:
+        name: apt-cacher-ng
+        state: present
+
+    - name: Configure apt-cacher-ng
+      ansible.builtin.copy:
+        dest: /etc/apt-cacher-ng/local.conf
+        content: |
+          PassThroughPattern: .*
+          DnsCacheSeconds: 2000
+          ExThreshold: 100
+        mode: '0644'
+      notify: restart apt-cacher-ng
+
+    - name: Ensure apt-cacher-ng is running
+      ansible.builtin.systemd:
+        name: apt-cacher-ng
+        state: started
+        enabled: true
+
+    # ── Local Docker registry ──────────────────────────────────────────────────
+
+    - name: Create registry data directory
+      ansible.builtin.file:
+        path: /opt/orochi/registry
+        state: directory
+        mode: '0755'
+
+    - name: Start local Docker registry
+      community.docker.docker_container:
+        name: orochi-registry
+        image: registry:2
+        state: started
+        restart_policy: unless-stopped
+        ports:
+          - "5000:5000"
+        volumes:
+          - /opt/orochi/registry:/var/lib/registry
+
+    # ── Artifact nginx server ──────────────────────────────────────────────────
+
+    - name: Create artifacts directory
+      ansible.builtin.file:
+        path: /opt/orochi/artifacts
+        state: directory
+        mode: '0755'
+
+    - name: Start nginx artifact server
+      community.docker.docker_container:
+        name: orochi-artifacts
+        image: nginx:alpine
+        state: started
+        restart_policy: unless-stopped
+        ports:
+          - "8888:80"
+        volumes:
+          - /opt/orochi/artifacts:/usr/share/nginx/html:ro
+
+    # ── Ansible collections ────────────────────────────────────────────────────
+
+    - name: Install required Ansible collections
+      become: false
+      community.general.ansible_galaxy_install:
+        type: collection
+        name: "{{ item }}"
+      loop:
+        - community.crypto      # SSH key generation
+        - ansible.posix         # authorized_key, sysctl modules
+        - community.general     # misc modules
+        - community.docker      # Docker container management
+
+    # ── SSH key ────────────────────────────────────────────────────────────────
+
+    - name: Generate Orochi SSH key pair
+      become: false
+      community.crypto.openssh_keypair:
+        path: ~/.ssh/orochi_id_ed25519
+        type: ed25519
+        comment: orochi-management
+        force: false
+
+    # ── Terraform provider cache dir ───────────────────────────────────────────
+
+    - name: Create Terraform plugin cache directory
+      become: false
+      file:
+        path: ~/.terraform.d/plugin-cache
+        state: directory
+        mode: '0755'
+
+    - name: Configure Terraform plugin cache
+      become: false
+      copy:
+        dest: ~/.terraformrc
+        content: |
+          plugin_cache_dir = "$HOME/.terraform.d/plugin-cache"
+        mode: '0644'
+
+    # ── Done ───────────────────────────────────────────────────────────────────
+
+    - name: Print versions
+      become: false
+      command: "{{ item }}"
+      register: versions
+      loop:
+        - ansible --version
+        - terraform --version
+      changed_when: false
+
+    - name: Show installed versions
+      debug:
+        msg: "{{ item.stdout_lines[0] }}"
+      loop: "{{ versions.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Management box is ready
+      debug:
+        msg:
+          - "Setup complete."
+          - "Next: run prep_artefacts.yml to download all deployment artefacts."
+          - "Then disconnect from internet and run fuse.yml on-site."
+
+  handlers:
+    - name: restart apt-cacher-ng
+      ansible.builtin.systemd:
+        name: apt-cacher-ng
+        state: restarted

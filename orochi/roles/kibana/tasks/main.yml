@@ -42,14 +42,14 @@
 
 - name: Pull Kibana image
   community.docker.docker_image:
-    name: "docker.elastic.co/kibana/kibana:{{ stack_version }}"
+    name: "{{ images.kibana }}"
     source: pull
   tags: kibana
 
 - name: Start Kibana container
   community.docker.docker_container:
     name: kibana
-    image: "docker.elastic.co/kibana/kibana:{{ stack_version }}"
+    image: "{{ images.kibana }}"
     state: started
     restart_policy: unless-stopped
     hostname: kibana

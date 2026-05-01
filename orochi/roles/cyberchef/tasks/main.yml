@@ -5,14 +5,14 @@
 
 - name: Pull CyberChef image
   community.docker.docker_image:
-    name: "ghcr.io/gchq/cyberchef:{{ cyberchef_version }}"
+    name: "{{ images.cyberchef }}"
     source: pull
   tags: cyberchef
 
 - name: Start CyberChef container
   community.docker.docker_container:
     name: cyberchef
-    image: "ghcr.io/gchq/cyberchef:{{ cyberchef_version }}"
+    image: "{{ images.cyberchef }}"
     state: started
     restart_policy: unless-stopped
     hostname: cyberchef

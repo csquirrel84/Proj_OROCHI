@@ -15,9 +15,9 @@
   ignore_errors: true
   tags: rita
 
-- name: Download RITA installer tarball
+- name: Download RITA installer tarball from artifact server
   ansible.builtin.get_url:
-    url: "https://github.com/activecm/rita/releases/download/{{ rita_version }}/rita-{{ rita_version }}.tar.gz"
+    url: "{{ artifact_base_url }}/rita-{{ rita_version }}.tar.gz"
     dest: "/tmp/rita-{{ rita_version }}.tar.gz"
     mode: '0644'
   tags: rita

@@ -9,37 +9,18 @@
     state: directory
     mode: '0755'
 
-- name: Get latest Velociraptor release info from GitHub
-  ansible.builtin.uri:
-    url: https://api.github.com/repos/Velocidex/velociraptor/releases/latest
-    return_content: true
-  register: velox_release_info
-  check_mode: false
-
-- name: Parse download URL for Linux AMD64
-  ansible.builtin.set_fact:
-    velox_url: >-
-      {{ 
-        velox_release_info.json.assets 
-        | selectattr('name', 'search', 'linux-amd64') 
-        | rejectattr('name', 'search', 'sig') 
-        | rejectattr('name', 'search', 'musl') 
-        | map(attribute='browser_download_url') 
-        | first 
-      }}
-
-- name: Download Velociraptor binary
+- name: Download Velociraptor binary from artifact server
   ansible.builtin.get_url:
-    url: "{{ velox_url }}"
+    url: "{{ artifact_base_url }}/velociraptor-linux-amd64"
     dest: /opt/orochi/velociraptor-build/velociraptor
     mode: '0755'
-    force: true  # Checks timestamp/size to ensure we always have the latest
+    force: false
 
 - name: Create Velociraptor Dockerfile
   ansible.builtin.copy:
     dest: /opt/orochi/velociraptor-build/Dockerfile
     content: |
-      FROM debian:bookworm-slim
+      FROM {{ images.debian_slim }}
       
       # Copy the binary downloaded by Ansible
       COPY velociraptor /usr/local/bin/velociraptor

@@ -1,0 +1,32 @@
+---
+# Configures the Orochi node to use the management box as its
+# artifact source before any packages or images are installed.
+# Must run before any other role.
+
+- name: Verify management box is reachable
+  ansible.builtin.wait_for:
+    host: "{{ mgmt_box_ip }}"
+    port: "{{ mgmt_artifact_port }}"
+    timeout: 10
+  failed_when: false
+  register: mgmt_reachable
+
+- name: Fail if management box artifact server is not reachable
+  ansible.builtin.fail:
+    msg: >
+      Management box artifact server not reachable at
+      {{ mgmt_box_ip }}:{{ mgmt_artifact_port }}.
+      Ensure setup_mgmt_box.yml and prep_artefacts.yml have been run.
+  when: mgmt_reachable.failed | default(false)
+
+# ── apt proxy ─────────────────────────────────────────────────────────────────
+
+- name: Configure apt to use management box as proxy
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/01orochi-proxy
+    content: |
+      Acquire::http::Proxy "http://{{ mgmt_box_ip }}:{{ mgmt_apt_proxy_port }}";
+      Acquire::https::Proxy "DIRECT";
+    mode: '0644'
+    owner: root
+    group: root

@@ -1,0 +1,35 @@
+# Copy this to terraform.tfvars and fill in real values before running.
+# terraform.tfvars is gitignored — never commit it.
+
+# ─── Proxmox connection ───────────────────────────────────────────────────────
+proxmox_endpoint     = "https://100.70.2.104:8006"   # Tailscale (dev) or https://10.16.255.254:8006 (prod)
+proxmox_api_token    = "terraform@pve!terraform=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+proxmox_ssh_user     = "root"
+proxmox_ssh_password = "your-proxmox-root-password"
+proxmox_node         = "pve"
+
+# ─── Engagement inputs ────────────────────────────────────────────────────────
+case_reference        = "CASE-2024-001"
+common_password       = "ChangeMe123!"
+ssh_public_key        = "ssh-ed25519 AAAA... analyst@orochi"
+target_network_cidr   = "192.168.100.0/24"
+wireguard_peer_pubkey = ""   # Leave blank if no remote analyst
+
+# ─── Hardware ─────────────────────────────────────────────────────────────────
+has_capture_nic = false   # Set true once USB ethernet adapter is procured
+
+# ─── PfSense ISO ──────────────────────────────────────────────────────────────
+# Download from https://www.pfsense.org/download/ (AMD64, DVD Image ISO)
+# Upload via Proxmox UI → local storage → ISO Images → Upload
+pfsense_iso_file_id = "local:iso/pfSense-CE-2.7.2-RELEASE-amd64.iso"
+
+# ─── VM sizing overrides (optional — defaults in variables.tf are reasonable) ─
+# vm1_cpu_cores = 8
+# vm1_memory_mb = 24576
+# vm1_disk_gb   = 200
+# vm2_cpu_cores = 4
+# vm2_memory_mb = 8192
+# vm2_disk_gb   = 500
+# vm3_cpu_cores = 2
+# vm3_memory_mb = 4096
+# vm3_disk_gb   = 50

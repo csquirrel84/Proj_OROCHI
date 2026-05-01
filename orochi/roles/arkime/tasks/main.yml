@@ -10,9 +10,9 @@
   failed_when: false
   tags: arkime
 
-- name: Download Arkime .deb package
+- name: Download Arkime .deb package from artifact server
   ansible.builtin.get_url:
-    url: "https://github.com/arkime/arkime/releases/download/v{{ arkime_version }}/arkime_{{ arkime_version }}-1.ubuntu2404_amd64.deb"
+    url: "{{ artifact_base_url }}/arkime_{{ arkime_version }}.deb"
     dest: "/tmp/arkime_{{ arkime_version }}.deb"
     mode: '0644'
   when: arkime_installed.rc != 0

@@ -17,14 +17,14 @@
 
 - name: Pull Elasticsearch image
   community.docker.docker_image:
-    name: "docker.elastic.co/elasticsearch/elasticsearch:{{ stack_version }}"
+    name: "{{ images.elasticsearch }}"
     source: pull
   tags: elasticsearch
 
 - name: Start Elasticsearch container
   community.docker.docker_container:
     name: elasticsearch
-    image: "docker.elastic.co/elasticsearch/elasticsearch:{{ stack_version }}"
+    image: "{{ images.elasticsearch }}"
     state: started
     restart_policy: unless-stopped
     hostname: elasticsearch
