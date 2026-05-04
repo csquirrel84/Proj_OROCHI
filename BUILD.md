@@ -1,8 +1,8 @@
-# OROCHI Security Stack — Build Guide
+# OROCHI Security Stack — Build and Operations Guide
 
 ## Table of Contents
 
-1. [Overview](#overview)
+1. [How It Works](#how-it-works)
 2. [Architecture](#architecture)
 3. [Hardware Requirements](#hardware-requirements)
 4. [Network Layout](#network-layout)
@@ -13,16 +13,67 @@
 9. [Recommended Deployment Order](#recommended-deployment-order)
 10. [Service Access Reference](#service-access-reference)
 11. [Verification Checklist](#verification-checklist)
-12. [Teardown](#teardown)
-13. [Troubleshooting](#troubleshooting)
+12. [Teardown and Reset](#teardown-and-reset)
+13. [Adapting for Different Hardware](#adapting-for-different-hardware)
+14. [Updating Tool Versions](#updating-tool-versions)
+15. [Troubleshooting](#troubleshooting)
 
 ---
 
-## Overview
+## How It Works
 
-Orochi is a self-contained DFIR and network monitoring platform designed for rapid deployment in air-gapped or internet-restricted environments. The entire stack — Elastic SIEM, IDS/IPS, full packet capture, incident response, endpoint visibility, and timeline analysis — can be operational in under six hours from unpacking hardware.
+OROCHI is a self-contained DFIR and network monitoring platform designed for rapid deployment in air-gapped or internet-restricted environments. The full security stack — Elastic SIEM, IDS/IPS, full packet capture, incident response, endpoint visibility, and timeline analysis — can be operational in under six hours from unpacking hardware.
 
-All dependencies are pre-cached on a management laptop before going on-site. The deployment target (the Orochi node) never requires internet access.
+### The Core Problem It Solves
+
+Deploying security tools on a network you're monitoring is inherently constrained: you cannot download packages from the internet (the network is compromised or isolated), you may not have DNS, and pulling images from Docker Hub is out of the question. OROCHI solves this by pre-staging everything on a management laptop before arriving on-site.
+
+### The Two-Box Model
+
+OROCHI uses exactly two machines:
+
+**Management box** (your laptop) — the Ansible control node. Before going on-site, it downloads every Docker image, every `.deb` package, every binary, and every Suricata rule file. On-site, it runs three server processes that the orochi node uses as its sole source for all software:
+
+- **Docker registry** (port 5000) — serves all Docker images locally. Every image the orochi node pulls comes from here, not the internet.
+- **Nginx artifact server** (port 8888) — serves binary files: Velociraptor executable, Arkime `.deb`, RITA tarball, Suricata and Zeek `.deb` tarballs, Zeek GPG key, Suricata rules archive.
+- **apt-cacher-ng** (port 3142) — transparent apt proxy. When the orochi node runs `apt-get install`, it routes through the management box cache instead of hitting the internet.
+
+**Orochi node** (the deployment target) — a bare-metal Ubuntu Server that pulls everything from the management box and runs the full security stack. It requires zero internet access during or after deployment.
+
+### How Ansible Drives Everything
+
+`fuse.yml` is the single entry point for all deployments. It:
+
+1. Runs `bootstrap_node` as a pre-task (always, before any menu choice) — this configures the orochi node to use the management box for apt, discovers NIC names from MAC addresses, and verifies the management box is reachable.
+2. Prompts for a single engagement password that flows into every service's authentication.
+3. Presents an interactive menu and runs the selected role chain.
+
+Every role is idempotent — re-running the same option is safe and will skip already-complete steps while re-applying any changed configuration.
+
+### NIC Discovery by MAC Address
+
+Linux kernel interface names (e.g. `enp89s0`, `enx98e743225b91`) are not stable across hardware or kernel updates. OROCHI never hardcodes interface names. Instead, `bootstrap_node` resolves kernel names at runtime by looking up the MAC addresses stored in `group_vars/all.yml`:
+
+```
+analyst_nic_mac: "88:ae:dd:0f:d9:0e"   →  discovers: nic_analyst (Ansible fact)
+target_nic_mac:  "98:e7:43:22:5b:91"   →  discovers: capture_interface (Ansible fact)
+```
+
+These facts are cached for the duration of the play and used by all roles that need a NIC name (Suricata, Zeek, Arkime). When deploying on different hardware, only the MACs in `group_vars/all.yml` need to change.
+
+### The Single Password Pattern
+
+One password is entered at `fuse.yml` startup and flows into every service:
+
+- Elasticsearch superuser (`elastic` / *password*)
+- Kibana system user
+- Fleet Server enrolment token
+- Velociraptor admin
+- Arkime admin + HMAC secret
+- Timesketch admin
+- Mattermost (set during first-use wizard)
+
+This means you only have one credential to manage per engagement. **TheHive is the exception** — it uses its own hardcoded default (`admin@thehive.local` / `secret`) which you must change manually after first login.
 
 ---
 
@@ -34,32 +85,65 @@ All dependencies are pre-cached on a management laptop before going on-site. The
 │   (analyst laptop / NUC)        │       │   (bare metal Ubuntu Server)    │
 │                                 │       │                                  │
 │  ┌─────────────────────────┐   │ethernet│  Docker containers:              │
-│  │ Local Docker Registry   │◄──┤ link  ├─► Elasticsearch (9200)           │
-│  │ localhost:5000          │   │       │  Kibana (5601)                   │
+│  │ Local Docker Registry   │◄──┤ link  ├─► Elasticsearch 9.x (9200)      │
+│  │ :5000                   │   │       │  Kibana (5601)                   │
 │  └─────────────────────────┘   │       │  Fleet Server (8220)             │
-│  ┌─────────────────────────┐   │       │  TheHive (9000)                  │
-│  │ Nginx Artifact Server   │◄──┤       ├─► Velociraptor (8889)            │
-│  │ localhost:8888          │   │       │  CyberChef (8080)                │
-│  └─────────────────────────┘   │       │  Mattermost (8065)               │
-│  ┌─────────────────────────┐   │       │  Timesketch (5000)               │
-│  │ apt-cacher-ng           │◄──┤       ├─► Portal (80)                    │
-│  │ localhost:3142          │   │       │                                  │
-│  └─────────────────────────┘   │       │  Bare metal (systemd):           │
-│                                 │       │  Suricata (IDS)                  │
-│  Ansible control node           │       │  Zeek (NSM)                      │
-│  Runs all playbooks             │       │  Arkime (PCAP, 8005)             │
-└─────────────────────────────────┘       └─────────────────────────────────┘
+│  ┌─────────────────────────┐   │       │  Elasticsearch 7.x (TheHive)     │
+│  │ Nginx Artifact Server   │◄──┤       ├─► Cassandra (TheHive backend)    │
+│  │ :8888                   │   │       │  TheHive 4 (9000)                │
+│  └─────────────────────────┘   │       │  Velociraptor (8889/8000/8001)   │
+│  ┌─────────────────────────┐   │       │  CyberChef (8080)                │
+│  │ apt-cacher-ng           │◄──┤       ├─► Mattermost (8065)              │
+│  │ :3142                   │   │       │  PostgreSQL (Mattermost)         │
+│  └─────────────────────────┘   │       │  Timesketch (5000)               │
+│                                 │       │  Redis (Timesketch)              │
+│  Ansible control node           │       │  PostgreSQL (Timesketch)         │
+│  Runs all playbooks against     │       │  nginx-portal (80)               │
+│  the orochi node via SSH        │       │                                  │
+└─────────────────────────────────┘       │  Bare metal (systemd):           │
+                                          │  Suricata IDS                    │
+                                          │  Zeek NSM                        │
+                                          │  Arkime (PCAP, 8005)             │
+                                          │  RITA (analysis, CLI only)       │
+                                          └─────────────────────────────────┘
 ```
 
-**Management box** runs locally on the analyst's machine and serves all artefacts (Docker images, .deb packages, binary files) to the Orochi node over a direct ethernet link. It is the Ansible control node.
+### Docker Network
 
-**Orochi node** is a bare metal Ubuntu Server that pulls everything from the management box and runs the full security stack. It requires no internet access during or after deployment.
+All containers share a single bridge network named `orochi-network`. This allows containers to reach each other by container name (e.g. Arkime refers to Elasticsearch as `elasticsearch:9200`). The network is created by the `common` role before any containers are started.
+
+### Data Persistence
+
+All persistent data lives under `/opt/orochi/` on the orochi node:
+
+```
+/opt/orochi/
+├── certs/              ← TLS certificates (CA, node cert, node key)
+├── elasticsearch/      ← ES 9.x data and config
+├── kibana/             ← Kibana config and session store
+├── fleet/              ← Fleet Server data
+├── thehive/            ← TheHive data
+├── thehive-es/         ← ES 7.x data for TheHive
+├── cassandra/          ← Cassandra data for TheHive
+├── velociraptor/       ← Velociraptor configs, client keys
+├── arkime/             ← Arkime PCAP and config
+├── mattermost/         ← Mattermost data
+├── postgres/           ← PostgreSQL data (Mattermost)
+├── postgres-timesketch/← PostgreSQL data (Timesketch)
+├── timesketch/         ← Timesketch config
+├── rita/               ← RITA install and databases
+├── portal/             ← nginx portal HTML
+└── logs/               ← Shared log directory
+```
+
+Running option 14 (Teardown) stops and removes containers but does **not** delete these directories. Data survives a teardown and redeploy.
 
 ---
 
 ## Hardware Requirements
 
-### Management Box (Analyst Laptop / NUC)
+### Management Box (Analyst Laptop)
+
 | Component | Minimum | Recommended |
 |-----------|---------|-------------|
 | OS | Ubuntu 24.04 LTS | Ubuntu 25.10 |
@@ -68,83 +152,115 @@ All dependencies are pre-cached on a management laptop before going on-site. The
 | Storage | 100 GB free | 200 GB free |
 | NICs | 1 (WiFi OK) | 2 (WiFi + ethernet) |
 
+The management box needs sufficient disk to cache all Docker image layers (approximately 40–60 GB) plus the binary artefacts (~2 GB). Docker image layers are deduplicated — the cache is smaller than the sum of individual image sizes.
+
 ### Orochi Node (Deployment Target)
+
 | Component | Minimum | Recommended |
 |-----------|---------|-------------|
 | OS | Ubuntu Server 25.10 | Ubuntu Server 25.10 |
 | CPU | 8 cores | 16 cores |
 | RAM | 32 GB | 64 GB |
-| Storage | 500 GB (SSD preferred) | 2 TB NVMe |
-| NICs | 2 | 3 (management + target + dedicated capture) |
+| Storage | 500 GB SSD | 2 TB NVMe |
+| NICs | 2 | 3 (management + target network + dedicated capture) |
 
-> **NIC note:** The Orochi node is currently configured to use the target-network NIC (MAC `98:e7:43:22:5b:91`) as the capture interface until a dedicated USB capture NIC is procured. A third NIC for dedicated packet capture is planned; once installed, update `target_nic_mac` in `group_vars/all.yml` to the new NIC's MAC and set `capture_nic_present: true`.
+**RAM breakdown at full deployment (approximate):**
+- Elasticsearch 9.x: 4 GB container limit (2 GB heap)
+- Elasticsearch 7.x (TheHive): 1 GB container limit
+- Kibana: 2 GB
+- Cassandra: 2 GB
+- TheHive: 2 GB
+- Velociraptor: ~512 MB
+- Timesketch: 2 GB
+- Mattermost + PostgreSQL: ~1.5 GB
+- Suricata (bare metal): ~1–2 GB (scales with rule count)
+- Zeek (bare metal): ~512 MB
+- Arkime (bare metal): ~1 GB
+- **Total:** approximately 20–22 GB active use. 32 GB is the practical minimum; 64 GB is comfortable.
+
+**NIC roles:**
+
+| NIC | Purpose |
+|-----|---------|
+| Analyst NIC (MAC: `88:ae:dd:0f:d9:0e`) | Management traffic — SSH from management box, Docker pulls, apt |
+| Target NIC (MAC: `98:e7:43:22:5b:91`) | Connected to the target network. Currently also used as the packet capture interface. |
+| Future USB NIC | Dedicated packet capture (promiscuous mode). When procured, update `target_nic_mac` in `group_vars/all.yml` to its MAC. |
 
 ---
 
 ## Network Layout
 
 ### Production (On-Site)
+
 ```
 Management Box ──ethernet──► Orochi Node
  10.16.255.253                10.16.255.x (DHCP or static)
 ```
 
-The management box uses a direct ethernet link to the orochi node. The production `mgmt_box_ip` is `10.16.255.253` — this is the address the orochi node uses to reach the artifact server and Docker registry.
+The management box uses a dedicated ethernet port at `10.16.255.253` connected directly to the orochi node's analyst NIC. The `mgmt_box_ip` default in `group_vars/all.yml` is set to this address — no override needed for production runs.
 
-### Development (Home Lab)
+### Development / Home Lab
+
 ```
 Management Box ──switch──► Orochi Node
  192.168.0.24               192.168.0.200
 ```
 
-Override the management box IP at playbook run time with `-e mgmt_box_ip=192.168.0.24` for all dev runs.
+Override `mgmt_box_ip` at runtime for all dev runs:
 
-### Orochi Node NICs
+```bash
+ansible-playbook fuse.yml -e mgmt_box_ip=192.168.0.24
+ansible-playbook playbooks/prep_artefacts.yml -e mgmt_box_ip=192.168.0.24
+```
 
-Interface kernel names are **discovered automatically at deploy time** from their MAC addresses — you never need to know or hardcode names like `enp89s0` or `enx98e743225b91`. The only values you need to keep correct are the MACs in `group_vars/all.yml`.
+### Ports the Orochi Node Needs to Reach on the Management Box
 
-| MAC | Role | `group_vars` key |
-|-----|------|-----------------|
-| `88:ae:dd:0f:d9:0e` | Analyst/management network | `analyst_nic_mac` |
-| `98:e7:43:22:5b:91` | Target network + current capture | `target_nic_mac` |
-| TBC (USB NIC) | Dedicated packet capture (future) | `target_nic_mac` (replace) |
-| `wlo1` (WiFi) | WireGuard bearer | `nic_wg_bearer` |
+| Port | Service | Used for |
+|------|---------|----------|
+| 3142 | apt-cacher-ng | All `apt-get install` calls on the orochi node |
+| 5000 | Docker registry | All Docker image pulls |
+| 8888 | nginx artifact server | Binary files (.deb tarballs, Velociraptor, RITA, Arkime, rules) |
 
-**If deploying on different hardware**, the only change required is updating those two MAC values in `group_vars/all.yml`.
+If any of these three are unreachable, deployment will fail. `bootstrap_node` checks port 8888 at the start of every fuse.yml run.
 
 ---
 
 ## Phase 0 — Management Box Setup
 
-> **Run once** when first setting up the management box. Requires internet. Takes ~10 minutes.
+> **Run once** when first setting up the management box. Requires internet. Takes approximately 10 minutes.
 
 ### 0.1 Install Ubuntu on the Management Box
 
-Install Ubuntu 25.10 (or 24.04 LTS) on the management laptop/NUC. Create a user called `orochiman` with sudo access.
+Install Ubuntu 25.10 (or 24.04 LTS) on the management laptop. During install:
+- Create user `orochiman` with sudo access
+- Enable OpenSSH server (optional — you'll be running everything locally)
+- Do not install any additional packages beyond the base system
 
 ### 0.2 Copy the Orochi Project to the Management Box
 
-**From the Windows dev machine** (if applicable):
+**From the Windows development machine:**
 ```powershell
-# Run from e:\Projects\Proj_OROCHI on the Windows machine
+# Run from E:\Projects\Proj_OROCHI on the Windows machine
 .\orochi\push_to_mgmt.ps1 -IP 192.168.0.24 -User orochiman
 ```
 
 This copies the entire project to `~/orochi/` on the management box via SCP.
 
-**Or clone directly on the management box:**
+**Or directly on the management box:**
 ```bash
 git clone <repo-url> ~/orochi
 ```
 
 ### 0.3 Bootstrap Ansible
 
-On the management box:
+The management box needs Ansible before it can run any playbooks. Install it:
+
 ```bash
 sudo apt update && sudo apt install -y ansible python3-pip
 ```
 
-Install required Ansible collections before running any playbooks:
+Then install the required Ansible collections. These must be installed **before** running `setup_mgmt_box.yml` because the playbook itself uses `community.docker` to start the registry:
+
 ```bash
 ansible-galaxy collection install \
   community.docker \
@@ -160,35 +276,48 @@ cd ~/orochi/orochi
 ansible-playbook playbooks/setup_mgmt_box.yml
 ```
 
-This playbook:
-- Installs Docker CE, Docker Compose plugin
-- Installs and configures `apt-cacher-ng` (port 3142) — caches `.deb` packages for the orochi node
-- Starts a local Docker registry container (port 5000) — serves all Docker images offline
-- Starts an nginx artifact server (port 8888) — serves binary files (Velociraptor, Arkime, RITA, etc.)
-- Generates the SSH keypair `~/.ssh/orochi_id_ed25519` used to connect to the orochi node
+This playbook installs and configures everything the management box needs to serve artefacts to the orochi node:
+
+| Component | What it does |
+|-----------|-------------|
+| Docker CE | Required to run the registry and nginx containers |
+| apt-cacher-ng | Transparent apt proxy on port 3142. The orochi node routes all apt traffic through this. |
+| Docker registry container | Runs `registry:2` on port 5000. Stores Docker image layers under `/opt/orochi/registry/`. |
+| nginx artifact container | Runs `nginx:alpine` on port 8888. Serves files from `/opt/orochi/artifacts/` as a plain directory listing. |
+| Ansible collections | Installs community.docker, community.crypto, ansible.posix, community.general |
+| SSH keypair | Generates `~/.ssh/orochi_id_ed25519` — the key used to SSH to the orochi node |
+
+> **Note:** The playbook also installs Terraform and creates a Terraform plugin cache directory. This is vestigial (Terraform was used in an earlier architecture for VM provisioning). It is harmless — ignore it.
+
+Both the registry and nginx containers are started with `restart_policy: unless-stopped`, so they survive management box reboots.
 
 ### 0.5 Install the Orochi Node OS
 
-Install Ubuntu Server 25.10 on the orochi node. During install:
-- Create user `orochi` with sudo (no password sudo is fine)
+Install **Ubuntu Server 25.10** on the orochi node. During install:
+- Create user `orochi` with sudo access (passwordless sudo is acceptable: `orochi ALL=(ALL) NOPASSWD:ALL`)
 - Enable OpenSSH server
-- Do **not** install any additional packages
+- Do **not** install any additional packages — Docker, Suricata, Zeek etc. are all installed by Ansible
 
 ### 0.6 Distribute the SSH Key
 
 From the management box, copy the generated public key to the orochi node:
+
 ```bash
 ssh-copy-id -i ~/.ssh/orochi_id_ed25519 orochi@192.168.0.200
 ```
 
-Verify the connection works:
+Verify the key-based connection works before proceeding:
+
 ```bash
 ssh -i ~/.ssh/orochi_id_ed25519 orochi@192.168.0.200 "echo OK"
 ```
 
-### 0.7 Verify the Inventory
+You should see `OK` with no password prompt.
 
-Check `orochi/inventory/hosts.yml` matches your environment:
+### 0.7 Update the Ansible Inventory
+
+Check `orochi/inventory/hosts.yml`:
+
 ```yaml
 all:
   children:
@@ -200,15 +329,26 @@ all:
           ansible_ssh_private_key_file: ~/.ssh/orochi_id_ed25519
 ```
 
-Update `ansible_host` if your orochi node has a different IP.
+Change `ansible_host` if your orochi node has a different IP.
+
+### 0.8 Verify the Connection
+
+```bash
+cd ~/orochi/orochi
+ansible orochi_node -m ping
+```
+
+Expected: `orochi | SUCCESS => {"ping": "pong"}`
+
+If this fails, see [Can't SSH to Orochi Node](#cant-ssh-to-orochi-node) in Troubleshooting.
 
 ---
 
 ## Phase 1 — Artefact Pre-Caching
 
-> **Run before every engagement** (or when updating the stack versions). Requires internet. Takes 15–60 minutes depending on connection speed.
+> **Run before every engagement** (or when updating tool versions). Requires internet. Takes 15–60 minutes depending on connection speed.
 
-This step downloads everything the orochi node will need during deployment and stores it on the management box. Once complete, the management box can operate entirely offline.
+This step downloads everything the orochi node will need during deployment and stores it all on the management box. Once complete, the management box is fully offline-capable.
 
 ```bash
 cd ~/orochi/orochi
@@ -216,62 +356,91 @@ cd ~/orochi/orochi
 # Development (home lab):
 ansible-playbook playbooks/prep_artefacts.yml -e mgmt_box_ip=192.168.0.24
 
-# Production (on-site management box):
+# Production (management box at 10.16.255.253):
 ansible-playbook playbooks/prep_artefacts.yml
 ```
 
-### What Gets Downloaded
+### What prep_artefacts.yml Does
 
-| Category | Contents |
-|----------|----------|
-| Docker images | Elasticsearch 9.x, Elasticsearch 7.x, Kibana, Elastic Agent, Cassandra, TheHive4, Mattermost, PostgreSQL, CyberChef, Nginx, Timesketch, Redis |
-| Binary packages | Arkime `.deb`, Velociraptor binary (latest), RITA tarball |
-| APT packages | Docker CE `.deb` tarball, Zeek `.deb` tarball, Suricata `.deb` tarball |
-| Rules | Suricata rules (via `suricata-update`) |
-| Keys | Zeek GPG signing key |
+The playbook runs entirely on `localhost` (the management box). It:
+
+1. **Starts the local Docker registry** at `localhost:5000` (or confirms it's running).
+2. **Pulls Docker images** from their upstream sources (docker.elastic.co, Docker Hub, GitHub Container Registry, Google Artifact Registry) and pushes them all into the local registry under the paths `group_vars/all.yml` references. The orochi node never contacts any upstream registry — it only talks to the management box registry.
+3. **Downloads binary artefacts** (Arkime `.deb`, RITA tarball, Zeek signing key) via direct URL.
+4. **Resolves the latest Velociraptor release** from the GitHub API and downloads the `linux-amd64` binary.
+5. **Downloads Docker CE `.deb` packages** using `apt-get --download-only --reinstall` (the `--reinstall` flag is required — without it, apt skips packages that are already installed at the current version, and nothing gets downloaded).
+6. **Downloads Zeek `.deb` packages** the same way, after adding the Zeek OpenSUSE apt repository.
+7. **Downloads Suricata `.deb` packages** from standard Ubuntu repos.
+8. **Downloads Suricata rules** by spinning up a temporary Ubuntu container, running `suricata-update` inside it, and tarring the resulting rule files to `/opt/orochi/artifacts/suricata-rules.tar.gz`. The orochi node extracts this tarball during deployment — it never runs suricata-update itself.
+9. **Warms apt-cacher-ng** by temporarily pointing the management box's own apt at the local proxy and downloading standard packages (iptables, wireguard, Python libraries, etc.).
+10. **Starts the nginx artifact server** at `localhost:8888` serving `/opt/orochi/artifacts/`.
+11. **Verifies** that all expected registry images and artifact files are present. Fails loudly if anything is missing.
 
 ### What Gets Cached On-Disk
 
 ```
 /opt/orochi/
-├── artifacts/          ← served by nginx on port 8888
+├── artifacts/                      ← served by nginx on port 8888
+│   ├── docker-debs/                ← Docker CE .deb files (directory)
+│   ├── docker-debs.tar.gz          ← tarball of above
+│   ├── zeek-debs/                  ← Zeek .deb files (directory)
+│   ├── zeek-debs.tar.gz            ← tarball of above
+│   ├── suricata-debs/              ← Suricata .deb files (directory)
+│   ├── suricata-debs.tar.gz        ← tarball of above
+│   ├── suricata-rules.tar.gz       ← ET Open rules from suricata-update
 │   ├── arkime_5.8.3.deb
 │   ├── velociraptor-linux-amd64
 │   ├── rita-v5.1.1.tar.gz
-│   ├── docker-debs.tar.gz
-│   ├── zeek-debs.tar.gz
-│   ├── suricata-debs.tar.gz
-│   ├── suricata-rules.tar.gz
 │   └── zeek-release.key
-└── registry/           ← served by Docker registry on port 5000
-    └── (Docker layer blobs for all images)
+└── registry/                       ← Docker layer blobs
+    └── docker/registry/v2/...
 ```
 
 ### Verifying the Cache
 
-The playbook ends with a verification block. A successful run looks like:
+A successful run ends with:
 ```
-ok: [localhost] => (item=elasticsearch/elasticsearch)
-ok: [localhost] => (item=kibana/kibana)
-...
-ok: [localhost] => (item=arkime_5.8.3.deb)
-ok: [localhost] => (item=velociraptor-linux-amd64)
-...
+- All artefacts downloaded and cached.
+- Local registry:    localhost:5000
+- Artifact server:   http://localhost:8888
+- Apt proxy:         localhost:3142
 - Management box is ready for offline deployment.
 - You can now disconnect from the internet.
 ```
 
-If any item shows `failed`, re-run the playbook — it is idempotent and will skip already-completed steps.
-
-### Updating Artefacts
-
-To update a specific tool version, edit `group_vars/all.yml`:
-```yaml
-arkime_version: "5.8.3"      # ← change here
-rita_version: "v5.1.1"
-stack_version: "9.3.4"
+To manually verify the registry contents after caching:
+```bash
+curl http://localhost:5000/v2/_catalog
 ```
-Then re-run `prep_artefacts.yml`. It will only download changed artefacts (Docker images with the same tag are skipped if already present).
+
+To verify a specific artifact file is present and readable:
+```bash
+curl -o /dev/null -w "%{http_code} %{size_download}\n" http://localhost:8888/velociraptor-linux-amd64
+# Expect: 200 <size-in-bytes>
+```
+
+### Re-Running Is Safe
+
+`prep_artefacts.yml` is largely idempotent. Docker images that are already in the local registry are pulled again from upstream (they are re-tagged and re-pushed, but Docker layer deduplication means this is fast for unchanged images). If a download fails partway, re-run the playbook — it will skip completed steps and retry failed ones.
+
+### Updating Artefact Versions
+
+Edit `group_vars/all.yml` to change any version pin:
+
+```yaml
+stack_version: "9.3.4"          # Elasticsearch + Kibana + Fleet Agent
+elasticsearch_hive_version: "7.17.9"   # ES for TheHive (must stay 7.x)
+thehive_version: "4.1.19"
+cassandra_version: "4.0"
+arkime_version: "5.8.3"
+rita_version: "v5.1.1"
+postgres_version: "15-alpine"
+redis_version: "7-alpine"
+```
+
+Then re-run `prep_artefacts.yml`. Only images/files with changed tags will require new downloads.
+
+> **Important:** When you change `stack_version`, the orochi node will also prompt you to enter the new version at deployment time via the `environment` role's interactive prompt. Enter the version that matches what you actually downloaded in prep_artefacts — if they don't match, image pulls will fail with 404.
 
 ---
 
@@ -280,40 +449,42 @@ Then re-run `prep_artefacts.yml`. It will only download changed artefacts (Docke
 ### 2.1 Physical Setup
 
 1. Unpack and power on the orochi node
-2. Connect the management box to the orochi node via ethernet (direct or via switch)
-3. Connect the target-network ethernet to the orochi node's second NIC
+2. Connect the management box ethernet port to the orochi node's analyst NIC (direct cable or via switch)
+3. Connect the target-network ethernet to the orochi node's target NIC
+4. Confirm you can SSH to the orochi node from the management box
 
-### 2.2 Sync the Project (If Updated Since Last Run)
+### 2.2 Verify Management Box Services Are Running
 
-If you've made any changes on the Windows dev machine since the last sync:
+The registry and nginx containers start automatically after reboots (`restart_policy: unless-stopped`), but verify before starting a deployment:
+
+```bash
+# Registry — should return JSON with a list of repositories
+curl http://localhost:5000/v2/_catalog
+
+# Artifact server — should return an nginx HTML directory listing
+curl -o /dev/null -w "%{http_code}\n" http://localhost:8888/
+
+# apt-cacher-ng — should be listening on 3142
+ss -tlnp | grep 3142
+```
+
+If any service is down:
+```bash
+docker start orochi-registry       # restart registry
+docker start orochi-artifacts      # restart nginx
+sudo systemctl start apt-cacher-ng
+```
+
+### 2.3 Sync the Project (If Updated Since Last Cache Run)
+
+If you've made changes on the Windows development machine:
 ```powershell
 .\orochi\push_to_mgmt.ps1 -IP <mgmt-box-ip> -User orochiman
 ```
 
-Or from the management box itself if pulling from git:
+Or pull from git on the management box:
 ```bash
 cd ~/orochi && git pull
-```
-
-### 2.3 Verify Management Box Services Are Running
-
-On the management box:
-```bash
-# Registry should return {"repositories": [...]}
-curl http://localhost:5000/v2/_catalog
-
-# Artifact server should return an nginx directory listing
-curl http://localhost:8888/
-
-# apt-cacher-ng should be listening
-ss -tlnp | grep 3142
-```
-
-If any service is down, restart it:
-```bash
-docker start orochi-registry
-docker start orochi-artifacts
-sudo systemctl start apt-cacher-ng
 ```
 
 ### 2.4 Verify the Orochi Node Is Reachable
@@ -323,31 +494,32 @@ cd ~/orochi/orochi
 ansible orochi_node -m ping
 ```
 
-Expected output: `orochi | SUCCESS => {"ping": "pong"}`
+Expected: `orochi | SUCCESS => {"ping": "pong"}`
 
-If this fails, check the SSH key and IP address in the inventory.
-
-### 2.5 Override mgmt_box_ip for Dev/Lab
-
-If deploying in the dev/home-lab environment (management box at `192.168.0.24` rather than the production `10.16.255.253`):
-```bash
-# Add -e mgmt_box_ip=192.168.0.24 to every fuse.yml command
-ansible-playbook fuse.yml -e mgmt_box_ip=192.168.0.24
-```
-
-> **This flag is not needed on-site.** The production default (`10.16.255.253`) is correct when using the direct ethernet link.
-
-### 2.6 Launch the Deployer
+### 2.5 Launch the Deployer
 
 ```bash
 cd ~/orochi/orochi
+
+# Production (management box is at 10.16.255.253 — default):
 ansible-playbook fuse.yml
+
+# Development (override management box IP):
+ansible-playbook fuse.yml -e mgmt_box_ip=192.168.0.24
 ```
 
-You will be prompted for:
-1. **Engagement password** — used for all service authentication (Elasticsearch, Kibana, Velociraptor, Arkime, Timesketch, Mattermost). Choose something strong and record it securely.
+You will be prompted to enter and confirm the **engagement password**. This password is used for every service's authentication. Choose something strong and record it securely — it cannot be retrieved after the session ends.
 
-The interactive menu will then appear:
+### 2.6 What Happens Before the Menu Appears
+
+Before displaying the menu, `fuse.yml` always runs the `bootstrap_node` role as a pre-task. This:
+
+1. **Verifies the management box is reachable** — fails immediately if port 8888 is unreachable.
+2. **Configures apt on the orochi node** to proxy through the management box (`/etc/apt/apt.conf.d/01orochi-proxy`). All subsequent `apt-get` calls on the node go through port 3142 on the management box.
+3. **Discovers NIC names from MAC addresses** — runs `ip link | grep -B1 <mac>` for each MAC defined in `group_vars/all.yml`, sets `nic_analyst` and `capture_interface` as cacheable Ansible facts. These facts are used by Suricata, Zeek, and Arkime roles — you never need to know or specify the kernel interface name.
+
+### 2.7 The Interactive Menu
+
 ```
 ┌─────────────────────────────────────────┐
 │           DEPLOYMENT OPTIONS            │
@@ -370,92 +542,151 @@ The interactive menu will then appear:
 └─────────────────────────────────────────┘
 ```
 
+Each option runs `common` (Docker install + network + base directories) before doing its specific work, so individual options are safe to run standalone.
+
 ---
 
 ## Deployment Menu Reference
 
-Each option below describes what it deploys, what it depends on, and how long it typically takes.
-
 ### Option 1 — Deploy Complete Stack
 
-Deploys everything in the correct order. Use this for a full engagement build.
+Deploys everything in order. Use this for a full engagement build from a clean node.
 
-**Deploys:** Elasticsearch, Kibana, Fleet Server, TheHive 4 (+ Cassandra + ES7), Velociraptor, Suricata, Zeek, Arkime, CyberChef, Mattermost, RITA, Timesketch, Portal
-
-**Dependencies:** All artefacts cached (Phase 1 complete)
+**Role execution order:**
+`common` → `environment` → `certificates` → `elasticsearch` → `kibana` → `fleet` → `thehive` → `velociraptor` → `suricata` → `zeek` → `arkime` → `cyberchef` → `mattermost` → `rita` → `timesketch` → `nginx_proxy`
 
 **Estimated time:** 45–90 minutes
+
+**Caveats:**
+- Suricata startup takes up to 15 minutes for rule compilation on first run (see option 6 below for detail)
+- RITA requires internet for MongoDB download (see option 10 below for workarounds)
 
 ---
 
 ### Option 2 — Deploy Elastic Stack
 
-Deploys Elasticsearch, Kibana, and Fleet Server only. This is the foundation for SIEM and endpoint telemetry.
+Deploys Elasticsearch 9.x, Kibana, and Fleet Server. This is the foundation — Arkime requires it, and it's the destination for Kibana dashboards and Fleet-managed agents.
+
+**What it deploys:**
+- `elasticsearch` container — single-node cluster in `basic` licence mode, TLS enabled, heap 2 GB
+- `kibana` container — connects to ES with the `kibana_system` user; takes 2–5 minutes after start to become ready
+- `fleet-server` container (elastic-agent image) — Fleet Server that manages Elastic Agents; requires Kibana to be healthy first
+
+**Certificate handling:** The `certificates` role generates a self-signed CA and node certificate under `/opt/orochi/certs/`. Kibana and Fleet use these. Velociraptor generates its own separate PKI.
 
 **Estimated time:** 15–25 minutes
 
-> Elastic Stack must be deployed before Arkime, as Arkime uses Elasticsearch for session metadata storage.
+> Elastic Stack must be deployed before Arkime. All other tools are independent of it.
 
 ---
 
 ### Option 3 — Deploy TheHive 4
 
-Deploys TheHive 4 incident response platform with its own Elasticsearch 7.x backend and Cassandra database.
+Deploys the TheHive 4 incident response platform with its own dedicated backend stack.
 
-**Estimated time:** 10–15 minutes (Cassandra startup is slow — expect a 45-second wait)
+**What it deploys:**
+- `cassandra` container (Cassandra 4.0) — TheHive's primary database. Slow to initialise on first run; the role waits 45 seconds for it to become ready.
+- `elasticsearch-hive` container (ES 7.17.9) — TheHive requires ES 7.x specifically (not 9.x). Runs separately from the main Elastic Stack on a different port (no direct external port exposed).
+- `thehive` container (TheHive 4.1.19) — connects to both Cassandra and ES-hive.
 
-**Default credentials after install:** `admin@thehive.local` / `secret`
-**Change the default password immediately** after first login.
+**First-login credentials:** `admin@thehive.local` / `secret`
+
+> **CRITICAL: Change the default TheHive password immediately after first login.** Go to Admin → Users → admin → Edit. This password is not managed by the engagement password and is the same on every deployment.
+
+**Estimated time:** 10–15 minutes (Cassandra start is the bottleneck)
 
 ---
 
 ### Option 4 — Deploy Velociraptor
 
-Deploys Velociraptor for DFIR and endpoint visibility. Builds a local container image from the pre-cached binary and a minimal Debian base image.
+Deploys Velociraptor for DFIR and live endpoint interrogation.
 
-**Estimated time:** 5–10 minutes
+**What it deploys:** Velociraptor runs inside a Docker container built on-node from the pre-cached `debian:bookworm-slim` image and the `velociraptor-linux-amd64` binary downloaded from the artifact server. The role:
+1. Downloads the binary from the artifact server
+2. Generates a server configuration (self-signed TLS, local datastore)
+3. Builds a custom Docker image
+4. Starts the container with GUI (8889), frontend (8000), and API (8001) ports exposed
+5. Creates the admin user
+
+**Endpoint collection:** After deployment, retrieve the client config from `/opt/orochi/velociraptor/client.config.yaml` and use it to generate the agent installer for target endpoints.
 
 **Credentials:** `admin` / *engagement password*
 
-After deployment, collect endpoints by deploying the Velociraptor agent using the client config at `/opt/orochi/velociraptor/client.config.yaml`.
+**Estimated time:** 5–10 minutes
 
 ---
 
 ### Option 5 — Deploy Zeek
 
-Installs Zeek Network Security Monitor from pre-cached packages. Zeek runs as a systemd service and logs to `/var/log/zeek/current/`.
+Installs Zeek Network Security Monitor from the pre-cached `.deb` tarball.
+
+**What it deploys:** Zeek runs as a bare-metal systemd service (not a container). The role:
+1. Downloads `zeek-debs.tar.gz` from the artifact server
+2. Extracts and installs all `.deb` files with `apt-get`
+3. Configures Zeek to monitor `{{ capture_interface }}` (discovered at runtime from `target_nic_mac`)
+4. Configures `zeekctl` and deploys Zeek via `zeekctl deploy`
+
+**Log location:** `/opt/zeek/logs/current/` (conn.log, dns.log, http.log, ssl.log, etc.)
 
 **Estimated time:** 5 minutes
-
-Zeek monitors the interface defined by `capture_interface` in `group_vars/all.yml` (currently the target NIC: `enx98e743225b91`).
 
 ---
 
 ### Option 6 — Deploy Suricata
 
-Installs Suricata IDS from pre-cached packages and pre-downloaded rules. Runs as a systemd service.
+Installs Suricata IDS from the pre-cached `.deb` tarball.
 
-**Logs:** `/var/log/suricata/eve.json` (JSON), `/var/log/suricata/fast.log`
+**What it deploys:** Suricata runs as a bare-metal systemd service. The role:
+1. Downloads `suricata-debs.tar.gz` from the artifact server and installs
+2. Writes `/etc/suricata/suricata.yaml` — configures `HOME_NET`, all required port-groups (HTTP_PORTS, SSH_PORTS, ORACLE_PORTS, DNP3_PORTS, MODBUS_PORTS, FTP_PORTS, SHELLCODE_PORTS, FILE_DATA_PORTS), EVE JSON output, af-packet capture on `{{ capture_interface }}`
+3. Downloads `suricata-rules.tar.gz` (Emerging Threats Open ruleset, ~55,000 signatures) from the artifact server and extracts to `/var/lib/suricata/rules/`
+4. Creates a systemd service override with `TimeoutStartSec=900` and `Restart=on-failure`
+5. Enables and starts the service
 
-**Estimated time:** 5 minutes
+**Important — Suricata startup time:** On first start, Suricata must compile 55,000+ ET Open signatures into its detection engine. This takes **8–15 minutes** depending on hardware. The systemd timeout is set to 900 seconds (15 minutes) to accommodate this. The service will show `activating` in `systemctl status` for the full duration. This is normal — do not interrupt it. You can monitor progress:
+
+```bash
+# On the orochi node — watch for "Engine started." in the journal
+journalctl -fu suricata
+```
+
+Once you see `Engine started.`, Suricata is live. Subsequent restarts are fast (~30 seconds) because the detection engine is reloaded from the compiled state.
+
+**Logs:**
+- `/var/log/suricata/eve.json` — full JSON event log (alerts, DNS, HTTP, TLS, flows)
+- `/var/log/suricata/fast.log` — human-readable alert log
+- `/var/log/suricata/stats.log` — performance statistics
+
+**Estimated time:** 5 minutes to deploy, 8–15 minutes for first service startup
 
 ---
 
 ### Option 7 — Deploy Arkime
 
-Installs Arkime (full packet capture) on bare metal. Requires Elasticsearch to already be running (deploy option 2 first, or use option 1).
+Installs Arkime full packet capture on bare metal.
 
-**Estimated time:** 10 minutes
+**What it deploys:** Arkime runs as two bare-metal systemd services (`arkimecapture` and `arkimeviewer`). The role:
+1. Downloads `arkime_<version>.deb` from the artifact server and installs
+2. Configures Arkime to capture on `{{ capture_interface }}` and index sessions into Elasticsearch
+3. Creates the Elasticsearch index templates via `arkime_add_aws_config`
+4. Creates the admin user via `arkime_add_user`
+5. Starts both capture and viewer services
 
-> Arkime's GeoIP databases require internet for enrichment. Without them, capture still works but sessions won't have country/ASN data. The deployment sets `failed_when: false` for the GeoIP update so offline deployment succeeds.
+**Elasticsearch dependency:** Arkime stores session metadata in the main Elasticsearch 9.x instance. Elastic Stack (option 2) must be running before deploying Arkime, or use option 7 which automatically includes it.
+
+**GeoIP note:** Arkime's GeoIP database enrichment (`geoipupdate`) requires internet. The deployment sets `failed_when: false` for this step so offline deployment succeeds, but sessions will not have country or ASN information.
+
+**PCAP storage:** `/opt/orochi/arkime/raw/`
 
 **Credentials:** `admin` / *engagement password*
+
+**Estimated time:** 10 minutes
 
 ---
 
 ### Option 8 — Deploy CyberChef
 
-Deploys CyberChef as a Docker container. No authentication required. Fully offline once deployed.
+Deploys CyberChef as a Docker container. No authentication. Fully offline — no CDN calls, all resources are bundled in the image.
 
 **Estimated time:** 2 minutes
 
@@ -465,81 +696,115 @@ Deploys CyberChef as a Docker container. No authentication required. Fully offli
 
 Deploys Mattermost team chat with a dedicated PostgreSQL backend.
 
-**Estimated time:** 5 minutes
+**What it deploys:**
+- `postgres-mattermost` container — PostgreSQL 15 database for Mattermost
+- `mattermost` container — Mattermost Team Edition
 
-Complete the initial setup wizard in the browser on first access. Use the engagement password when creating the admin account.
+**First-use setup:** Navigate to `http://<node-ip>:8065`. Mattermost runs a first-use wizard on the first visit — create the admin account here. Use the engagement password for consistency.
+
+**Estimated time:** 5 minutes
 
 ---
 
 ### Option 10 — Deploy RITA
 
-Installs RITA (Real Intelligence Threat Analytics) for beaconing and C2 detection analysis. Runs RITA's own Ansible-based installer which sets up MongoDB.
+Installs RITA (Real Intelligence Threat Analytics) for beaconing and C2 detection from Zeek logs.
 
-**Estimated time:** 10–20 minutes
+**Important — RITA requires internet for MongoDB:** RITA v5's installer downloads MongoDB from `repo.mongodb.org`. If the orochi node has no internet access, this will fail.
 
-> **Important:** RITA v5's installer downloads MongoDB from the official MongoDB apt repository. This **requires internet access** unless the apt-cacher-ng has been pre-warmed with MongoDB packages. Plan accordingly — either deploy RITA before going offline, or warm the cache manually.
+**Options:**
+1. Deploy RITA before going offline (preferred)
+2. Pre-warm apt-cacher-ng with MongoDB packages on the management box: add the MongoDB apt repository to the management box, run `apt-get install -y --download-only mongodb-org` through the local proxy to populate the cache, then the orochi node's apt will pull MongoDB through the proxy
+3. Skip RITA for the engagement
+
+**Estimated time:** 10–20 minutes (includes MongoDB installation)
 
 ---
 
 ### Option 11 — Deploy Timesketch
 
-Deploys Timesketch timeline analysis platform. Uses the shared Elasticsearch 7.x instance (starts it automatically if not already running), with its own dedicated PostgreSQL and Redis containers.
+Deploys Timesketch timeline analysis platform.
 
-**Estimated time:** 10–15 minutes
+**What it deploys:**
+- `redis-timesketch` container — Redis 7 for Timesketch task queue
+- `postgres-timesketch` container — PostgreSQL 15 for Timesketch metadata
+- `timesketch` container — Timesketch application
+
+The Timesketch role also starts `elasticsearch-hive` (ES 7.x) if it's not already running, since Timesketch uses the same ES 7 instance as TheHive for timeline index storage.
+
+After the containers are up, the role:
+1. Waits for PostgreSQL to be ready (15-second pause — increase if startup fails on slow hardware)
+2. Initialises and upgrades the Timesketch database schema
+3. Creates the admin user
 
 **Credentials:** `admin` / *engagement password*
+
+**Estimated time:** 10–15 minutes
 
 ---
 
 ### Option 12 — Deploy Tool Portal
 
-Deploys the Orochi landing page — a single nginx-served HTML dashboard with links to all running services. Access it at `http://<orochi-node-ip>/`.
+Deploys the Orochi landing page — an nginx-served HTML dashboard with links to all running services.
+
+**Access:** `http://<orochi-node-ip>/`
+
+**Offline note:** The portal HTML loads tool logos from external CDN/GitHub URLs. In an air-gapped environment the logos will be broken images, but all navigation links function correctly.
 
 **Estimated time:** 2 minutes
-
-> The portal loads service tool logos from external URLs. In an air-gapped environment the logo images will be broken, but all navigation links work correctly.
 
 ---
 
 ### Option 13 — Show Status
 
-Runs `docker ps` on the orochi node and displays all running containers with their status and port mappings. Does not deploy anything.
+Runs `docker ps` on the orochi node and prints a formatted table of all running containers with their state and port mappings. Also check systemd services:
+
+```bash
+# Bare metal services
+ssh orochi@<node-ip> systemctl status suricata zeek arkimecapture arkimeviewer
+```
 
 ---
 
 ### Option 14 — Teardown All
 
-Stops and removes all Orochi containers and bare metal services (Suricata, Zeek, Arkime). Does **not** delete data directories under `/opt/orochi/`.
+Stops and removes all Orochi Docker containers and bare-metal services (Suricata, Zeek, Arkime). Removes the `orochi-network` Docker bridge.
 
-> You will be prompted to type `YES` to confirm. This is irreversible for running services.
+**Does NOT delete** data under `/opt/orochi/` — redeploy after a teardown picks up existing data.
+
+You will be prompted to type `YES` to confirm.
 
 ---
 
 ## Recommended Deployment Order
 
-For a full engagement build, deploy in this sequence if doing it manually (options 2–12) rather than option 1:
+For a full engagement build using individual options rather than option 1:
 
 ```
-2 → Elastic Stack        (foundation — everything depends on this for logging)
-3 → TheHive              (separate ES7 + Cassandra, no Elastic Stack dependency)
-4 → Velociraptor         (endpoint collection)
-5 → Zeek                 (start capturing immediately)
-6 → Suricata             (start alerting immediately)
-7 → Arkime               (needs Elastic Stack running first)
-8 → CyberChef            (standalone, any time)
-9 → Mattermost           (comms, any time)
-11 → Timesketch          (timeline analysis, can wait)
-10 → RITA                (requires internet — do before going offline or skip)
-12 → Portal              (last — links to everything else)
+2  → Elastic Stack         (foundation — Arkime and Kibana agents depend on this)
+3  → TheHive               (independent; its own ES7 + Cassandra backend)
+4  → Velociraptor          (endpoint collection — get agents deployed early)
+5  → Zeek                  (start network logging immediately)
+6  → Suricata              (start alerting immediately — expect 15 min startup)
+7  → Arkime                (PCAP — needs Elastic Stack running)
+8  → CyberChef             (standalone, any time)
+9  → Mattermost            (comms, any time)
+11 → Timesketch            (timeline analysis — can wait)
+10 → RITA                  (requires internet — do before going offline or skip)
+12 → Portal                (last — links everything together)
 ```
 
-**For the fastest time to visibility**, prioritise: `6 (Suricata) → 5 (Zeek) → 2 (Elastic Stack) → 7 (Arkime)`.
+**For fastest time to visibility**, prioritise the network sensors first:
+```
+6 (Suricata) → 5 (Zeek) → 2 (Elastic Stack) → 7 (Arkime)
+```
+Start Suricata first because its 15-minute startup runs in the background while you deploy the others.
 
 ---
 
 ## Service Access Reference
 
-Replace `<node-ip>` with the orochi node's IP address (e.g. `192.168.0.200` in dev).
+Replace `<node-ip>` with the orochi node's IP address.
 
 | Service | URL | Protocol | Username | Password |
 |---------|-----|----------|----------|----------|
@@ -549,22 +814,23 @@ Replace `<node-ip>` with the orochi node's IP address (e.g. `192.168.0.200` in d
 | **Velociraptor** | `https://<node-ip>:8889` | HTTPS | `admin` | engagement password |
 | **Arkime** | `http://<node-ip>:8005` | HTTP | `admin` | engagement password |
 | **CyberChef** | `http://<node-ip>:8080` | HTTP | — | — |
-| **Mattermost** | `http://<node-ip>:8065` | HTTP | Setup wizard | — |
+| **Mattermost** | `http://<node-ip>:8065` | HTTP | Setup wizard on first visit | — |
 | **Timesketch** | `http://<node-ip>:5000` | HTTP | `admin` | engagement password |
-| **Portal** | `http://<node-ip>:80` | HTTP | — | — |
+| **Tool Portal** | `http://<node-ip>:80` | HTTP | — | — |
 
-> ⚠️ **TheHive default password is `secret`**. Change it immediately after first login via the admin panel.
+> ⚠️ **TheHive default password is `secret`**. Change it immediately after first login: Admin → Users → admin → Edit.
 
 ### Log Locations (on the Orochi Node)
 
-| Service | Log Path |
-|---------|----------|
-| Suricata alerts | `/var/log/suricata/eve.json` |
-| Suricata fast log | `/var/log/suricata/fast.log` |
-| Zeek logs | `/opt/zeek/logs/current/` |
-| Arkime PCAP | `/opt/orochi/arkime/raw/` |
-| Arkime logs | `/opt/arkime/logs/` |
-| Docker service logs | `docker logs <container-name>` |
+| Service | Log Path | Notes |
+|---------|----------|-------|
+| Suricata alerts | `/var/log/suricata/eve.json` | JSON; includes alerts, DNS, HTTP, TLS, flows |
+| Suricata fast log | `/var/log/suricata/fast.log` | Human-readable alert summary |
+| Suricata stats | `/var/log/suricata/stats.log` | Performance counters |
+| Zeek logs | `/opt/zeek/logs/current/` | conn.log, dns.log, http.log, ssl.log, etc. |
+| Arkime PCAP | `/opt/orochi/arkime/raw/` | Raw capture files |
+| Arkime logs | `/opt/arkime/logs/` | Capture and viewer logs |
+| Docker logs | `docker logs <container-name>` | All containerised services |
 
 ---
 
@@ -572,136 +838,200 @@ Replace `<node-ip>` with the orochi node's IP address (e.g. `192.168.0.200` in d
 
 Run these checks after a full deployment to confirm everything is healthy.
 
-### From the Orochi Node
+### Quick Check (from the Management Box)
 
 ```bash
-# Docker containers
-docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+# Elasticsearch cluster health — should show "green" or "yellow"
+curl -k -u elastic:<password> https://<node-ip>:9200/_cluster/health?pretty
 
-# Systemd services
+# Kibana API status — look for "overall.state": "green"
+curl -k https://<node-ip>:5601/api/status | python3 -m json.tool | grep -A3 '"overall"'
+
+# Fleet Server — should return 200
+curl -k -o /dev/null -w "%{http_code}\n" https://<node-ip>:8220/api/status
+
+# TheHive — should return 200 with status JSON
+curl -o /dev/null -w "%{http_code}\n" http://<node-ip>:9000/api/status
+
+# Velociraptor — should return 200 (ignore TLS warning)
+curl -k -o /dev/null -w "%{http_code}\n" https://<node-ip>:8889/
+
+# Arkime viewer — should return 200
+curl -o /dev/null -w "%{http_code}\n" http://<node-ip>:8005/
+
+# Timesketch — should return 200
+curl -o /dev/null -w "%{http_code}\n" http://<node-ip>:5000/
+```
+
+### Bare Metal Services (on the Orochi Node)
+
+```bash
+# All four services should show "active (running)"
 systemctl status suricata zeek arkimecapture arkimeviewer
 
 # Suricata is producing alerts
 tail -f /var/log/suricata/fast.log
 
 # Zeek is logging connections
-ls /opt/zeek/logs/current/
+ls -la /opt/zeek/logs/current/
 
-# Arkime is capturing
+# Arkime is capturing — directory should contain .pcap files
 ls /opt/orochi/arkime/raw/
 ```
 
-### From the Management Box
+### Container Status (Option 13)
 
-```bash
-# Elasticsearch cluster health
-curl -k -u elastic:<engagement-password> https://<node-ip>:9200/_cluster/health?pretty
-
-# Kibana status
-curl -k https://<node-ip>:5601/api/status | python3 -m json.tool | grep '"overall"' -A3
-
-# Fleet Server health
-curl -k https://<node-ip>:8220/api/status
-
-# TheHive API
-curl http://<node-ip>:9000/api/status
-
-# Velociraptor GUI responds
-curl -k -o /dev/null -w "%{http_code}" https://<node-ip>:8889/
-
-# Arkime viewer responds
-curl -o /dev/null -w "%{http_code}" http://<node-ip>:8005/
-```
-
-### Option 13 — Quick Status
-
-The fastest check: run `fuse.yml` again and choose option `13`. It runs `docker ps` on the orochi node and prints a live status table.
+The fastest full check: run `fuse.yml` and choose option `13`. It prints a live `docker ps` table.
 
 ---
 
-## Teardown
+## Teardown and Reset
 
-### Full Teardown (Option 14)
+### Graceful Teardown (Option 14)
 
 ```bash
 ansible-playbook fuse.yml
 # Choose 14, type YES when prompted
 ```
 
-Stops all containers and bare metal services. Data under `/opt/orochi/` is **preserved**.
+Stops all containers and bare metal services. Data under `/opt/orochi/` is preserved.
 
-### Remove Data (Complete Wipe)
+### Full Node Reset
 
-After running option 14:
+To return the orochi node to a completely clean pre-deployment state, use `reset.sh`. Copy it to the orochi node and run it as root:
+
 ```bash
+# From the management box
+scp orochi/reset.sh orochi@<node-ip>:~/reset.sh
+ssh orochi@<node-ip>
+
 # On the orochi node
-sudo rm -rf /opt/orochi/
-sudo rm -rf /var/log/suricata/
-sudo rm -rf /opt/zeek/
-sudo rm -rf /opt/arkime/
-sudo apt remove --purge suricata zeek
+sudo bash reset.sh
 ```
 
-### Teardown Individual Services
+The reset script removes:
+- All Orochi Docker containers (stops and removes)
+- The `orochi-network` Docker bridge
+- All data directories (`/opt/orochi/`, `/var/log/suricata/`, `/var/lib/suricata/`, `/etc/suricata/`, `/opt/zeek/logs/`)
+- Suricata and Zeek packages (purged via `apt-get purge`)
+- Systemd service overrides for Suricata and Zeek
+- The apt proxy config (`/etc/apt/apt.conf.d/01orochi-proxy`)
+- The Docker insecure-registry config (`/etc/docker/daemon.json`)
+- Temporary package download directories in `/tmp/`
 
-To remove a specific container without touching others:
+**Docker itself is preserved.** After reset, the node is ready for a fresh `fuse.yml` deployment.
+
+### Teardown Individual Containers
+
 ```bash
-# On the orochi node
+# Stop and remove one container without touching others
 docker stop <container-name> && docker rm <container-name>
 
-# To also remove its data directory:
+# Remove its data directory too:
 sudo rm -rf /opt/orochi/<service-name>/
 ```
 
 ---
 
-## Troubleshooting
+## Adapting for Different Hardware
 
-### Management Box Artifact Server Not Reachable from Orochi Node
+OROCHI is designed to be hardware-agnostic for the orochi node. The only hardware-specific values are the NIC MAC addresses.
 
-```
-fatal: [orochi]: FAILED! => Management box artifact server not reachable
-```
+### If the Orochi Node Is Different Hardware
 
-**Check:**
+1. Boot the new hardware with Ubuntu Server 25.10 installed
+2. Find the MAC addresses of its NICs:
+   ```bash
+   ip link show
+   # Each interface shows link/ether <mac-address>
+   ```
+3. Decide which NIC is the analyst NIC (connected to the management box) and which is the target NIC (connected to the monitored network)
+4. Update `group_vars/all.yml`:
+   ```yaml
+   analyst_nic_mac: "<new-analyst-mac>"
+   target_nic_mac: "<new-target-mac>"
+   ```
+5. Update `inventory/hosts.yml` with the new node's IP
+6. Run `fuse.yml` — NIC names are discovered automatically at runtime
+
+No other changes are required. All roles use `{{ capture_interface }}` which is resolved from the MAC at runtime.
+
+### If the Management Box Has a Different IP (Production vs Development)
+
+Production default is `10.16.255.253` (set in `group_vars/all.yml`). For development:
+
 ```bash
-# From orochi node — can it reach the management box?
-curl http://10.16.255.253:8888/velociraptor-linux-amd64 -o /dev/null -w "%{http_code}"
-
-# Is nginx container running on management box?
-docker ps | grep orochi-artifacts
-
-# Restart if needed:
-docker start orochi-artifacts
+ansible-playbook fuse.yml -e mgmt_box_ip=192.168.0.24
+ansible-playbook playbooks/prep_artefacts.yml -e mgmt_box_ip=192.168.0.24
 ```
 
-**Root cause is usually:** direct ethernet link not up, or management box nginx container stopped after a reboot.
+The `-e` override takes precedence over `group_vars/all.yml` for that run only. The file on disk remains unchanged.
 
 ---
 
-### Docker Registry Not Reachable (image pull errors)
+## Updating Tool Versions
+
+All version pins are in `group_vars/all.yml`. To update any tool:
+
+1. Edit the relevant version variable in `group_vars/all.yml`
+2. Run `prep_artefacts.yml` with internet access — it downloads the new version and pushes it to the local registry
+3. Run `fuse.yml` on-site — the role detects the container is out of date and recreates it with the new image
+
+**Version constraints to be aware of:**
+- `elasticsearch_hive_version` must stay on `7.x` — TheHive 4 is not compatible with Elasticsearch 8+
+- `cassandra_version: "4.0"` — TheHive 4 is tested against Cassandra 4
+- `stack_version` for Elasticsearch, Kibana, and Fleet Agent must all be the **same version** — the Elastic stack enforces version parity
+
+---
+
+## Troubleshooting
+
+### Management Box Artifact Server Not Reachable
 
 ```
-Error response from daemon: Get "https://10.16.255.253:5000/v2/": ...
+FAILED! => Management box artifact server not reachable at 10.16.255.253:8888
 ```
 
-**Check:**
+**Diagnosis:**
 ```bash
-# Registry running?
-docker ps | grep orochi-registry
+# From the orochi node — can it reach port 8888?
+curl -o /dev/null -w "%{http_code}\n" http://10.16.255.253:8888/
 
-# Can the orochi node reach it?
-curl http://10.16.255.253:5000/v2/_catalog
+# Is nginx running on the management box?
+docker ps | grep orochi-artifacts
 
-# Is daemon.json configured on the orochi node?
+# Can you ping the management box from the orochi node?
+ping 10.16.255.253
+```
+
+**Fixes:**
+- Check the ethernet cable between the two machines
+- Start the nginx container: `docker start orochi-artifacts`
+- Verify the management box IP — if using dev, add `-e mgmt_box_ip=192.168.0.24`
+
+---
+
+### Docker Registry HTTP vs HTTPS Error
+
+```
+Error: Get "https://10.16.255.253:5000/v2/": http: server gave HTTP response to HTTPS client
+```
+
+The Docker daemon on the orochi node doesn't have the management box registry in its `insecure-registries` list. This should be fixed by the `common` role, but if it persists:
+
+```bash
+# Check /etc/docker/daemon.json on the orochi node
 cat /etc/docker/daemon.json
 # Expected: {"insecure-registries": ["10.16.255.253:5000"]}
-```
 
-If `daemon.json` is missing, re-run bootstrap_node (it runs automatically as a pre-task in `fuse.yml`) then restart Docker on the orochi node:
-```bash
+# Check if the running daemon has it loaded
+docker info | grep -A5 "Insecure Registries"
+
+# If daemon.json is correct but docker info doesn't show it — restart Docker
 sudo systemctl restart docker
 ```
+
+If `daemon.json` is missing entirely, re-run the relevant fuse.yml option — the `common` role writes this file and restarts Docker if it's not already loaded.
 
 ---
 
@@ -712,35 +1042,55 @@ docker logs elasticsearch
 # ERROR: max virtual memory areas vm.max_map_count [65530] is too low
 ```
 
-**Fix:**
+The `common` role sets this automatically, but verify it's applied:
+
 ```bash
 # On the orochi node
-sudo sysctl -w vm.max_map_count=262144
-echo 'vm.max_map_count=262144' | sudo tee -a /etc/sysctl.conf
-```
+sudo sysctl vm.max_map_count
+# Should return 262144
 
-The `common` role sets this automatically, but running Elasticsearch standalone before `common` will hit this.
+# If not, set it:
+sudo sysctl -w vm.max_map_count=262144
+```
 
 ---
 
 ### Suricata Fails to Start
 
-```bash
-systemctl status suricata
-# ... Interface enx98e743225b91 does not exist
+**Interface not found:**
+```
+Interface enx98e743225b91 does not exist
 ```
 
-**Cause:** The capture interface name in `group_vars/all.yml` doesn't match the actual interface on this system.
-
-**Fix:**
+The capture interface MAC in `group_vars/all.yml` doesn't match the hardware. Find the correct interface:
 ```bash
-# On the orochi node — find the interface with the target NIC MAC
-ip link | grep -B1 '98:e7:43:22:5b:91'
+# On the orochi node
+ip link
+# Find the NIC connected to the target network and note its MAC
+```
 
-# Update group_vars/all.yml with the correct interface name
-capture_interface: "<correct-name>"
+Update `target_nic_mac` in `group_vars/all.yml` and re-run option 6.
 
-# Re-run option 6 in fuse.yml
+**Configuration test fails:**
+```bash
+# On the orochi node — test the config without starting
+sudo suricata -T -c /etc/suricata/suricata.yaml
+```
+
+Any `Variable "X" is not defined` error means a port-group variable is missing from `suricata.yaml`. This is normally handled by the role — re-run option 6 to re-apply the config.
+
+**Service stuck at `activating`:**
+
+This is **normal** on first start. Suricata is compiling 55,000+ detection signatures. Monitor it:
+
+```bash
+journalctl -fu suricata
+# Wait for: "Engine started."
+```
+
+If it fails after 900 seconds, check the journal for errors:
+```bash
+journalctl -u suricata --since "10 minutes ago"
 ```
 
 ---
@@ -749,30 +1099,30 @@ capture_interface: "<correct-name>"
 
 ```bash
 /opt/zeek/bin/zeekctl status
-# zeek crashed / not running
+# zeek  crashed  orochi  ...
 ```
-
-**Check and restart:**
-```bash
-/opt/zeek/bin/zeekctl check
-/opt/zeek/bin/zeekctl deploy
-```
-
-Common cause is the capture interface not being up or in promiscuous mode when Zeek started.
-
----
-
-### TheHive Not Starting (Cassandra connection refused)
-
-TheHive 4 requires Cassandra to be fully initialised before it can connect. The deployment adds a 45-second pause but on slow hardware Cassandra may take longer.
 
 **Fix:**
 ```bash
-docker logs cassandra | tail -20
-# Wait until you see "Created default superuser role 'cassandra'"
+/opt/zeek/bin/zeekctl check      # check configuration
+/opt/zeek/bin/zeekctl deploy     # redeploy (stop + start)
+```
 
-# Then restart TheHive:
+Common cause: the capture interface was not in promiscuous mode when Zeek started. `zeekctl deploy` sets promiscuous mode itself.
+
+---
+
+### TheHive Not Starting (Cassandra Not Ready)
+
+TheHive requires Cassandra to be fully initialised before it can connect. The deployment pauses 45 seconds, but on slow hardware Cassandra may need longer.
+
+```bash
+# Check Cassandra is ready — look for "Created default superuser role 'cassandra'"
+docker logs cassandra | tail -30
+
+# Once Cassandra is ready, restart TheHive
 docker restart thehive
+docker logs -f thehive
 ```
 
 ---
@@ -783,21 +1133,7 @@ docker restart thehive
 user add: Error: user already exists
 ```
 
-This is expected and harmless on re-runs. The role's `failed_when` condition handles this — it is not a failure.
-
----
-
-### RITA Fails Offline (MongoDB download fails)
-
-```
-TASK [Run RITA pre-checks playbook] FAILED
-# E: Failed to fetch https://repo.mongodb.org/...
-```
-
-RITA's installer downloads MongoDB from the internet. Options:
-1. Deploy RITA before going offline
-2. Pre-warm apt-cacher-ng with MongoDB packages (add MongoDB repo to management box, run `apt-get install -y --download-only mongodb-org` to populate the cache, then the orochi node will pull it through the proxy)
-3. Skip RITA for this engagement
+This is expected on re-runs and is harmless. The `failed_when` condition in the role handles it. Not a failure.
 
 ---
 
@@ -808,17 +1144,32 @@ TASK [Initialise Timesketch database] FAILED
 # could not connect to server: Connection refused
 ```
 
-PostgreSQL or Elasticsearch-hive isn't ready yet. The role pauses 15 seconds for PostgreSQL but on slow hardware it may need more.
+PostgreSQL or Elasticsearch-hive isn't ready yet.
 
-**Fix:**
 ```bash
+# Check PostgreSQL is ready
 docker logs postgres-timesketch | tail -10
-# Wait for: database system is ready to accept connections
+# Wait for: "database system is ready to accept connections"
 
+# Manually initialise if needed
 docker exec timesketch tsctl db init
 docker exec timesketch tsctl db upgrade
 docker exec timesketch tsctl create-user --name admin --password <password> --admin
 ```
+
+---
+
+### RITA Fails (MongoDB Download Fails)
+
+```
+TASK [Run RITA installer] FAILED
+# E: Failed to fetch https://repo.mongodb.org/...
+```
+
+RITA's installer needs internet for MongoDB. Options:
+1. Deploy RITA before going offline
+2. Pre-warm apt-cacher-ng: on the management box, add the MongoDB apt repository and run `apt-get install -y --download-only mongodb-org` through the local proxy. The orochi node will then pull MongoDB through the proxy cache.
+3. Skip RITA for this engagement
 
 ---
 
@@ -829,18 +1180,18 @@ ansible orochi_node -m ping
 # UNREACHABLE! => SSH Error
 ```
 
-1. Check the IP in `inventory/hosts.yml` matches the orochi node
+1. Verify the IP in `inventory/hosts.yml` is correct
 2. Verify the SSH key exists: `ls ~/.ssh/orochi_id_ed25519`
-3. Re-copy the public key: `ssh-copy-id -i ~/.ssh/orochi_id_ed25519 orochi@<node-ip>`
-4. Check the orochi node has sshd running: boot into it directly and run `sudo systemctl start ssh`
+3. Re-copy the key: `ssh-copy-id -i ~/.ssh/orochi_id_ed25519 orochi@<node-ip>`
+4. Verify sshd is running on the orochi node — connect a keyboard/monitor directly and run: `sudo systemctl start ssh`
 
 ---
 
-### Re-Running fuse.yml Is Safe
+### Re-Running fuse.yml Is Always Safe
 
-All roles are idempotent. Running `fuse.yml` again for an already-deployed service will:
-- Skip steps that are already complete
-- Re-apply any configuration that has changed
-- Not delete or recreate containers unless configuration changed
+All roles are idempotent. Running the same option again on an already-deployed service:
+- Skips steps that are already complete (containers running, files already present)
+- Re-applies any configuration that has changed since the last run
+- Does not delete or recreate containers unless their configuration changed
 
-This means you can safely add tools one at a time by re-running and choosing the relevant option.
+This means you can safely re-run individual options to fix a partially-failed deployment, or to push a configuration change without tearing down the whole stack.
