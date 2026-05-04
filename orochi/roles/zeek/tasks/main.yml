@@ -114,6 +114,13 @@
     mode: '0644'
   tags: zeek
 
+- name: Create Zeek log directory
+  ansible.builtin.file:
+    path: /opt/zeek/logs
+    state: directory
+    mode: '0755'
+  tags: zeek
+
 - name: Install Zeek configuration
   ansible.builtin.shell: /opt/zeek/bin/zeekctl install
   environment:

@@ -1,8 +1,7 @@
 ---
 - name: Update apt cache
-  ansible.builtin.apt:
-    update_cache: true
-    cache_valid_time: 3600
+  ansible.builtin.shell: timeout --kill-after=10 90 apt-get update -qq || true
+  changed_when: false
 
 - name: Install base dependencies
   ansible.builtin.apt:

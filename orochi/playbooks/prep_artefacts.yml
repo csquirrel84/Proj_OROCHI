@@ -226,6 +226,64 @@
           -C {{ artifacts_dir }} suricata-debs/
       changed_when: true
 
+    # ── Arkime runtime dependencies ───────────────────────────────────────────
+    # Let apt resolve the full transitive dep tree from the actual .deb so
+    # nothing is missed. The .deb was already downloaded above as a binary
+    # artifact; we reuse that path here.
+
+    - name: Create Arkime deps directory
+      ansible.builtin.file:
+        path: "{{ artifacts_dir }}/arkime-deps"
+        state: directory
+        mode: '0755'
+
+    - name: Download all Arkime runtime deps via apt dep resolution
+      ansible.builtin.shell: |
+        apt-get update -qq
+        apt-get install -y --download-only \
+          -o Dir::Cache::Archives={{ artifacts_dir }}/arkime-deps \
+          {{ artifacts_dir }}/arkime_{{ arkime_version }}.deb
+      changed_when: true
+
+    - name: Create Arkime deps tarball
+      ansible.builtin.shell: |
+        tar -czf {{ artifacts_dir }}/arkime-deps.tar.gz \
+          -C {{ artifacts_dir }} arkime-deps/
+      changed_when: true
+
+    # ── RITA Docker images ────────────────────────────────────────────────────
+    # RITA v5 is Docker-based (docker-compose stack, not a binary).
+    # Extract the docker-compose.yml from the installer tarball, discover
+    # all image references, pull and push to local registry.
+
+    - name: Extract RITA installer for image discovery
+      ansible.builtin.shell: |
+        tar -xzf {{ artifacts_dir }}/rita-{{ rita_version }}.tar.gz -C /tmp
+      changed_when: false
+
+    - name: Pull and cache all RITA Docker images
+      ansible.builtin.shell: |
+        set -e
+        COMPOSE="/tmp/rita-{{ rita_version }}-installer/files/opt/docker-compose.yml"
+        echo "=== RITA docker-compose.yml ==="
+        cat "$COMPOSE"
+        echo ""
+        echo "=== Pulling images ==="
+        grep 'image:' "$COMPOSE" | awk '{print $2}' | sort -u | while read img; do
+          echo "Pulling: $img"
+          docker pull "$img"
+          LOCAL=$(echo "$img" | awk -F/ '{print $NF}')
+          docker tag "$img" "localhost:5000/rita/${LOCAL}"
+          docker push "localhost:5000/rita/${LOCAL}"
+          echo "Cached: localhost:5000/rita/${LOCAL}"
+        done
+      changed_when: true
+      register: rita_image_cache
+
+    - name: Show RITA image cache results
+      ansible.builtin.debug:
+        msg: "{{ rita_image_cache.stdout_lines }}"
+
     # ── Suricata rules ─────────────────────────────────────────────────────────
 
     - name: Download Suricata rules via container
@@ -323,6 +381,7 @@
         - "zeek-debs.tar.gz"
         - "suricata-debs.tar.gz"
         - "suricata-rules.tar.gz"
+        - "arkime-deps.tar.gz"
         - "zeek-release.key"
       loop_control:
         label: "{{ item }}"

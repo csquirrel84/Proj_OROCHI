@@ -51,6 +51,12 @@ echo ""
 # ── 1. Bare metal services ────────────────────────────────────────────────────
 echo -e "${YELLOW}[1/7] Stopping bare metal services...${NC}"
 
+# RITA runs as a docker-compose stack — tear it down first
+if [ -f /opt/rita/docker-compose.yml ]; then
+    info "Stopping RITA docker-compose stack"
+    docker compose -f /opt/rita/docker-compose.yml down -v 2>/dev/null || true
+fi
+
 for svc in suricata zeek; do
     if systemctl is-active --quiet "$svc" 2>/dev/null; then
         info "Stopping $svc"
@@ -108,6 +114,7 @@ echo -e "${YELLOW}[4/7] Removing data directories...${NC}"
 
 for path in \
     /opt/orochi \
+    /opt/rita \
     /var/log/suricata \
     /var/lib/suricata \
     /etc/suricata \
@@ -118,7 +125,11 @@ for path in \
     /tmp/suricata-debs.tar.gz \
     /tmp/zeek-debs \
     /tmp/zeek-debs.tar.gz \
-    /tmp/suricata-rules.tar.gz
+    /tmp/suricata-rules.tar.gz \
+    /tmp/arkime-deps \
+    /tmp/arkime-deps.tar.gz \
+    /tmp/rita-installer.tar.gz \
+    /tmp/rita_patch_images.py
 do
     if [ -e "$path" ]; then
         info "Removing $path"
