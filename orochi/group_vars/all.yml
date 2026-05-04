@@ -109,24 +109,12 @@ resources:
 
 
 # ==============================================
-# NETWORK INTERFACES
-# MAC-addressed to survive kernel renames
-# ==============================================
-analyst_nic_mac: "88:ae:dd:0f:d9:0e"
-target_nic_mac: "98:e7:43:22:5b:91"
-nic_wg_bearer: wlo1
-
-# capture_interface set after USB NIC is procured
-# capture_nic_present: false
-
-
-# ==============================================
 # SURICATA / ZEEK / ARKIME CAPTURE INTERFACE
-# Discovered at runtime from target_nic_mac by bootstrap_node.
-# capture_interface is set as a fact — do not hardcode here.
+# Set at runtime by the environment role via interactive selection.
+# Default here is a safe fallback only — never used in normal runs.
 # ==============================================
 suricata:
-  interface: "{{ capture_interface }}"
+  interface: "eth0"
   home_net: "192.168.0.0/16"
 
 

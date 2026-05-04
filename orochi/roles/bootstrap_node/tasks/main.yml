@@ -31,32 +31,3 @@
     owner: root
     group: root
 
-# ── NIC discovery — resolve interface names from MAC addresses ─────────────────
-# Interface kernel names change between hardware and kernel versions.
-# We discover them once here from MACs and cache them as facts for all roles.
-
-- name: Discover analyst NIC name from MAC
-  ansible.builtin.shell: |
-    ip link | grep -B1 '{{ analyst_nic_mac }}' | head -1 | awk -F': ' '{print $2}' | tr -d ' '
-  register: _discovered_analyst_nic
-  changed_when: false
-  failed_when: _discovered_analyst_nic.stdout | length == 0
-
-- name: Discover capture NIC name from MAC
-  ansible.builtin.shell: |
-    ip link | grep -B1 '{{ target_nic_mac }}' | head -1 | awk -F': ' '{print $2}' | tr -d ' '
-  register: _discovered_capture_nic
-  changed_when: false
-  failed_when: _discovered_capture_nic.stdout | length == 0
-
-- name: Set NIC facts for use by all roles
-  ansible.builtin.set_fact:
-    nic_analyst: "{{ _discovered_analyst_nic.stdout | trim }}"
-    capture_interface: "{{ _discovered_capture_nic.stdout | trim }}"
-    cacheable: true
-
-- name: Report discovered interfaces
-  ansible.builtin.debug:
-    msg:
-      - "Analyst NIC:   {{ nic_analyst }}  (MAC {{ analyst_nic_mac }})"
-      - "Capture NIC:   {{ capture_interface }}  (MAC {{ target_nic_mac }})"
