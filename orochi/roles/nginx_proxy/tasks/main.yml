@@ -346,11 +346,23 @@
                   </div>
                   <div class="arrow">&#8594;</div>
               </a>
+
+              <a href="http://{{ orochi_server_ip }}:{{ ports.timesketch }}" class="service-card" target="_blank">
+                  <div class="service-icon">
+                      <img src="https://raw.githubusercontent.com/google/timesketch/master/assets/timesketch-color.png" alt="Timesketch">
+                  </div>
+                  <div class="service-info">
+                      <div class="service-name">Timesketch</div>
+                      <div class="service-desc">Timeline Analysis</div>
+                      <div class="service-url">:{{ ports.timesketch }}</div>
+                  </div>
+                  <div class="arrow">&#8594;</div>
+              </a>
           </div>
 
           <div class="status-bar">
               <div class="stat">
-                  <div class="stat-value">6</div>
+                  <div class="stat-value">7</div>
                   <div class="stat-label">Services</div>
               </div>
               <div class="stat">
@@ -358,7 +370,7 @@
                   <div class="stat-label">Online</div>
               </div>
               <div class="stat">
-                  <div class="stat-value">v1.0</div>
+                  <div class="stat-value">v3.0</div>
                   <div class="stat-label">Stack</div>
               </div>
           </div>

@@ -1,14 +1,21 @@
 ---
 # ==============================================
 # RITA ROLE - Network Traffic Analysis (Docker-based)
-# RITA v5 is a docker-compose stack — no standalone binary.
-# MongoDB and all services run as containers.
+# RITA v5 uses docker-compose with ClickHouse backend.
 # All images served from local registry; fully offline.
+# No standalone binary — analysis runs inside containers.
 # ==============================================
 
 - name: Create RITA directory
   ansible.builtin.file:
     path: /opt/rita
+    state: directory
+    mode: '0755'
+  tags: rita
+
+- name: Create RITA log directory
+  ansible.builtin.file:
+    path: /var/log/rita
     state: directory
     mode: '0755'
   tags: rita
@@ -27,15 +34,42 @@
     remote_src: true
   tags: rita
 
-- name: Copy RITA files to /opt/rita
+- name: Show installer file tree
+  ansible.builtin.shell: |
+    find /tmp/rita-{{ rita_version }}-installer -type f | sort
+  changed_when: false
+  register: rita_tree
+  tags: rita
+
+- name: Display installer file tree
+  ansible.builtin.debug:
+    msg: "{{ rita_tree.stdout_lines }}"
+  tags: rita
+
+- name: Copy RITA compose files to /opt/rita
   ansible.builtin.shell: |
     cp -rn /tmp/rita-{{ rita_version }}-installer/files/opt/. /opt/rita/
   changed_when: true
   tags: rita
 
-# ── Patch image refs to use local registry ────────────────────────────────────
-# The prep script stores images as localhost:5000/rita/<last-path-component>.
-# Here we rewrite docker-compose.yml to pull from mgmt_box_ip instead.
+- name: Copy RITA config files to /etc
+  ansible.builtin.shell: |
+    if [ -d "/tmp/rita-{{ rita_version }}-installer/files/etc" ]; then
+      mkdir -p /etc/rita
+      cp -rn /tmp/rita-{{ rita_version }}-installer/files/etc/. /etc/
+      echo "copied"
+    else
+      echo "no /etc files in installer"
+    fi
+  changed_when: "'copied' in rita_etc_copy.stdout"
+  register: rita_etc_copy
+  tags: rita
+
+# ── Patch image refs and strip build directive ────────────────────────────────
+# prep_artefacts stores images as:  mgmt:5000/rita/<last-path-component>
+# docker compose config --images gives the fully-resolved image name;
+# awk -F/ '{print $NF}' strips all registry/org prefixes, keeping name:tag.
+# We also remove any "build:" lines so Docker won't try to build locally.
 
 - name: Write image patcher script
   ansible.builtin.copy:
@@ -45,11 +79,14 @@
       registry = sys.argv[1]
       path = sys.argv[2]
       content = open(path).read()
+      # Rewrite image refs
       def repl(m):
           img = m.group(1).strip()
           local = img.split('/')[-1]
           return 'image: {}/rita/{}'.format(registry, local)
       patched = re.sub(r'image:\s+(\S+)', repl, content)
+      # Strip build: lines (no Dockerfile on orochi node)
+      patched = re.sub(r'^\s*build:.*\n', '', patched, flags=re.MULTILINE)
       open(path, 'w').write(patched)
       print(patched)
     mode: '0755'
@@ -69,12 +106,20 @@
     msg: "{{ rita_compose_patched.stdout_lines }}"
   tags: rita
 
-# ── Launch RITA stack ──────────────────────────────────────────────────────────
+# ── Pull images from local registry then launch ───────────────────────────────
+
+- name: Pull RITA images from local registry
+  ansible.builtin.shell: |
+    cd /opt/rita
+    docker compose pull
+  changed_when: true
+  register: rita_pull
+  tags: rita
 
 - name: Start RITA docker-compose stack
   ansible.builtin.shell: |
     cd /opt/rita
-    docker compose up -d
+    docker compose up -d --no-build
   changed_when: true
   register: rita_compose_up
   tags: rita
@@ -86,7 +131,7 @@
 
 - name: Wait for RITA containers to settle
   ansible.builtin.pause:
-    seconds: 10
+    seconds: 15
   tags: rita
 
 - name: Verify RITA containers are running
@@ -105,8 +150,8 @@
       - "Container status:"
       - "{{ rita_ps.stdout_lines | default([]) }}"
       - ""
-      - "Usage:"
-      - "  cd /opt/rita"
-      - "  docker compose exec rita rita import --database=<name> /zeek/logs/current/*.log.gz"
+      - "Usage (run from /opt/rita):"
+      - "  docker compose exec rita rita import --database=<name> /zeek/logs/current"
       - "  docker compose exec rita rita view <name>"
+      - "  docker compose exec rita rita html-report <name>"
   tags: rita

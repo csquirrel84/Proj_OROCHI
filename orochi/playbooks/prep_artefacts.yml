@@ -261,15 +261,37 @@
         tar -xzf {{ artifacts_dir }}/rita-{{ rita_version }}.tar.gz -C /tmp
       changed_when: false
 
+    - name: Show RITA installer file tree and env
+      ansible.builtin.shell: |
+        echo "=== Installer files ==="
+        find /tmp/rita-{{ rita_version }}-installer -type f | sort
+        echo ""
+        echo "=== .env file ==="
+        cat "/tmp/rita-{{ rita_version }}-installer/files/opt/.env" 2>/dev/null || echo "(no .env found)"
+      changed_when: false
+      register: rita_installer_tree
+
+    - name: Display RITA installer contents
+      ansible.builtin.debug:
+        msg: "{{ rita_installer_tree.stdout_lines }}"
+
     - name: Pull and cache all RITA Docker images
+      # cd to the compose dir so docker compose picks up .env automatically,
+      # resolving CLICKHOUSE_VERSION. Use `docker compose config --images`
+      # which returns one fully-resolved image ref per line.
       ansible.builtin.shell: |
         set -e
-        COMPOSE="/tmp/rita-{{ rita_version }}-installer/files/opt/docker-compose.yml"
-        echo "=== RITA docker-compose.yml ==="
-        cat "$COMPOSE"
+        COMPOSE_DIR="/tmp/rita-{{ rita_version }}-installer/files/opt"
+        cd "$COMPOSE_DIR"
+
+        echo "=== Resolved images ==="
+        IMAGES=$(docker compose config --images)
+        echo "$IMAGES"
         echo ""
-        echo "=== Pulling images ==="
-        grep 'image:' "$COMPOSE" | awk '{print $2}' | sort -u | while read img; do
+
+        echo "=== Pulling and caching ==="
+        echo "$IMAGES" | sort -u | while read img; do
+          [ -z "$img" ] && continue
           echo "Pulling: $img"
           docker pull "$img"
           LOCAL=$(echo "$img" | awk -F/ '{print $NF}')

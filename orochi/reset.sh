@@ -85,6 +85,7 @@ CONTAINERS=(
     mattermost
     postgres-mattermost
     timesketch
+    timesketch-worker
     redis-timesketch
     postgres-timesketch
     nginx-portal
