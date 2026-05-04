@@ -1,8 +1,0 @@
----
-- name: reload iptables
-  ansible.builtin.command: iptables-restore /etc/iptables/rules.v4
-  changed_when: true
-
-- name: reload systemd
-  ansible.builtin.systemd:
-    daemon_reload: true

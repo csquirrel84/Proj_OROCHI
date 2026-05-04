@@ -1,0 +1,6 @@
+---
+- name: restart timesketch
+  community.docker.docker_container:
+    name: timesketch
+    state: started
+    restart: true

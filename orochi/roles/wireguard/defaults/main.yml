@@ -1,8 +1,0 @@
----
-wireguard_port: 51820
-wireguard_interface: wg0
-wireguard_server_ip: 10.99.0.1/24
-
-# Peer is the remote analyst laptop
-# wireguard_peer_pubkey and wireguard_peer_allowed_ip are set at deploy time
-wireguard_peer_ip: 10.99.0.2/32

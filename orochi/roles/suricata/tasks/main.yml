@@ -68,7 +68,10 @@
         port-groups:
           HTTP_PORTS: "80"
           SHELLCODE_PORTS: "!80"
+          ORACLE_PORTS: "1521"
           SSH_PORTS: "22"
+          DNP3_PORTS: "20000"
+          MODBUS_PORTS: "502"
           FILE_DATA_PORTS: "[$HTTP_PORTS,110,143]"
           FTP_PORTS: 21
 
@@ -163,7 +166,7 @@
         - suricata.rules
 
       detect:
-        profile: medium
+        profile: low
         sgh-mpm-context: auto
         inspection-recursion-limit: 3000
 
@@ -239,8 +242,8 @@
     content: |
       [Service]
       ExecStart=
-      ExecStart=/usr/bin/suricata -c /etc/suricata/suricata.yaml --af-packet={{ suricata.interface }} -vvv
-      TimeoutStartSec=300
+      ExecStart=/usr/bin/suricata -c /etc/suricata/suricata.yaml --af-packet={{ suricata.interface }}
+      TimeoutStartSec=900
       Restart=on-failure
       RestartSec=10s
     mode: '0644'

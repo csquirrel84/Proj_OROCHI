@@ -26,11 +26,13 @@
 - name: Install Docker from artifact server
   when: docker_check.rc != 0
   block:
-    - name: Create temp directory for Docker debs
+    - name: Clean any previous Docker deb extraction
       ansible.builtin.file:
-        path: /tmp/docker-debs
-        state: directory
-        mode: '0755'
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /tmp/docker-debs
+        - /tmp/docker-debs.tar.gz
 
     - name: Download Docker debs tarball from artifact server
       ansible.builtin.get_url:
@@ -44,11 +46,26 @@
         dest: /tmp
         remote_src: true
 
+    - name: Find Docker deb files
+      ansible.builtin.find:
+        paths: /tmp/docker-debs
+        patterns: "*.deb"
+        recurse: true
+      register: docker_deb_files
+
     - name: Install Docker packages
       ansible.builtin.shell: |
-        apt-get install -y /tmp/docker-debs/*.deb
+        apt-get install -y {{ docker_deb_files.files | map(attribute='path') | join(' ') }}
       register: docker_install
       changed_when: "'Setting up' in docker_install.stdout"
+      when: docker_deb_files.matched > 0
+
+    - name: Fail if no Docker deb files found
+      ansible.builtin.fail:
+        msg: >
+          No .deb files found in /tmp/docker-debs (searched recursively).
+          Check the docker-debs.tar.gz tarball on the artifact server.
+      when: docker_deb_files.matched == 0
 
 - name: Configure Docker daemon to trust local registry
   ansible.builtin.copy:
@@ -58,13 +75,25 @@
         "insecure-registries": ["{{ mgmt_box_ip }}:{{ mgmt_registry_port }}"]
       }
     mode: '0644'
-  notify: restart docker
 
 - name: Ensure Docker is running
   ansible.builtin.systemd:
     name: docker
     state: started
     enabled: true
+
+- name: Check if Docker daemon has insecure registry active
+  ansible.builtin.shell: |
+    docker info 2>/dev/null | grep -q "{{ mgmt_box_ip }}:{{ mgmt_registry_port }}" && echo "configured" || echo "needs_restart"
+  register: _docker_registry_check
+  changed_when: false
+
+- name: Restart Docker daemon to load insecure registry config
+  ansible.builtin.systemd:
+    name: docker
+    state: restarted
+    daemon_reload: true
+  when: _docker_registry_check.stdout | trim == "needs_restart"
 
 - name: Install Python Docker SDK
   ansible.builtin.apt:

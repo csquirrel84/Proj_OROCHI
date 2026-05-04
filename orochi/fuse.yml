@@ -294,7 +294,7 @@
             prompt: "WARNING: This will remove all Orochi containers and data. Type 'YES' to confirm"
           register: confirm_teardown
 
-        - name: Stop Arkime services (bare metal)
+        - name: Stop bare metal services
           ansible.builtin.systemd:
             name: "{{ item }}"
             state: stopped
@@ -302,6 +302,8 @@
           loop:
             - arkimecapture
             - arkimeviewer
+            - suricata
+            - zeek
           ignore_errors: true
           when: confirm_teardown.user_input == "YES"
 
@@ -311,12 +313,12 @@
             state: absent
           loop:
             - tool-portal
-            - rita
-            - mongodb-rita
+            - timesketch
+            - redis-timesketch
+            - postgres-timesketch
             - mattermost
             - postgres-mattermost
             - cyberchef
-            - suricata
             - velociraptor
             - thehive
             - cassandra

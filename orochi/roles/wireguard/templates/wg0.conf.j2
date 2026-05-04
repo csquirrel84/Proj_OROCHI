@@ -1,9 +1,0 @@
-# Managed by Ansible — do not edit by hand
-[Interface]
-Address = {{ wireguard_server_ip }}
-ListenPort = {{ wireguard_port }}
-PrivateKey = {{ wireguard_server_privkey }}
-
-[Peer]
-PublicKey = {{ wireguard_peer_pubkey }}
-AllowedIPs = {{ wireguard_peer_ip }}

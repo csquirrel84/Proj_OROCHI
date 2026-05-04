@@ -1,40 +1,26 @@
 #!/bin/bash
+# =============================================================================
+# OROCHI RESET — returns the orochi node to a clean pre-deployment state
+# Run as root or with sudo: sudo bash reset.sh
+# =============================================================================
 
-# ==============================================
-# OROCHI SECURITY STACK - RESET SCRIPT
-# ==============================================
-# This script removes ONLY Orochi components
-# It will NOT affect other Docker projects
-# ==============================================
+set -uo pipefail
 
-set -e
-
-# Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+CYAN='\033[0;36m'
+NC='\033[0m'
 
-# Orochi configuration
-OROCHI_BASE_PATH="/opt/orochi"
-OROCHI_NETWORK="orochi-network"
+ok()   { echo -e "  ${GREEN}✓${NC} $*"; }
+info() { echo -e "  ${CYAN}→${NC} $*"; }
+warn() { echo -e "  ${YELLOW}!${NC} $*"; }
 
-# List of Orochi containers
-OROCHI_CONTAINERS=(
-    "elasticsearch"
-    "kibana"
-    "fleet-server"
-    "elasticsearch-hive"
-    "thehive"
-    "cassandra"
-    "velociraptor"
-    "suricata"
-    "arkime"
-    "cyberchef"
-    "mattermost"
-    "postgres-mattermost"
-    "tool-portal"
-)
+# ── Must run as root ──────────────────────────────────────────────────────────
+if [ "$EUID" -ne 0 ]; then
+    echo -e "${RED}Run as root: sudo bash reset.sh${NC}"
+    exit 1
+fi
 
 echo -e "${YELLOW}"
 echo "╔═══════════════════════════════════════════════════════════════╗"
@@ -45,162 +31,167 @@ echo "║    ██    ██ ██████  ██    ██ ██      �
 echo "║    ██    ██ ██   ██ ██    ██ ██      ██   ██ ██               ║"
 echo "║     ██████  ██   ██  ██████   ██████ ██   ██ ██               ║"
 echo "║                                                               ║"
-echo "║                  RESET SCRIPT v1.0                            ║"
+echo "║                  NODE RESET SCRIPT v1.0                       ║"
 echo "║                                                               ║"
 echo "╚═══════════════════════════════════════════════════════════════╝"
 echo -e "${NC}"
-echo ""
-echo -e "${RED}WARNING: This will remove ALL Orochi components:${NC}"
-echo "  - Docker containers: ${OROCHI_CONTAINERS[@]}"
-echo "  - Docker network: ${OROCHI_NETWORK}"
-echo "  - All data in: ${OROCHI_BASE_PATH}"
-echo ""
-echo -e "${YELLOW}This will NOT affect other Docker projects on this system.${NC}"
-echo ""
-read -p "Are you sure you want to continue? Type 'YES' to confirm: " CONFIRM
 
-if [ "$CONFIRM" != "YES" ]; then
-    echo -e "${GREEN}Reset cancelled.${NC}"
-    exit 0
-fi
-
+echo -e "${RED}This will permanently remove:${NC}"
+echo "  • All Orochi Docker containers and data"
+echo "  • Suricata and Zeek packages, configs, and rules"
+echo "  • Docker insecure-registry config"
+echo "  • apt proxy config"
 echo ""
-echo -e "${GREEN}Starting Orochi reset...${NC}"
+echo -e "${YELLOW}Docker itself and OS packages remain intact.${NC}"
+echo ""
+read -rp "Type YES to confirm: " CONFIRM
+[ "$CONFIRM" = "YES" ] || { echo "Cancelled."; exit 0; }
 echo ""
 
-# ==============================================
-# Stop Zeek and Suricata services (if running on bare metal)
-# ==============================================
-echo -e "${YELLOW}[1/5] Stopping bare metal services...${NC}"
+# ── 1. Bare metal services ────────────────────────────────────────────────────
+echo -e "${YELLOW}[1/7] Stopping bare metal services...${NC}"
 
-# Stop Zeek
-if systemctl is-active --quiet zeek 2>/dev/null; then
-    echo "  - Stopping Zeek service"
-    sudo systemctl stop zeek 2>/dev/null || true
-    sudo systemctl disable zeek 2>/dev/null || true
-    echo -e "${GREEN}✓ Zeek service stopped${NC}"
-else
-    echo "  - Zeek service not running (skipping)"
-fi
-
-# Stop Suricata
-if systemctl is-active --quiet suricata 2>/dev/null; then
-    echo "  - Stopping Suricata service"
-    sudo systemctl stop suricata 2>/dev/null || true
-    sudo systemctl disable suricata 2>/dev/null || true
-    echo -e "${GREEN}✓ Suricata service stopped${NC}"
-else
-    echo "  - Suricata service not running (skipping)"
-fi
-
-echo -e "${GREEN}✓ Bare metal services stopped${NC}"
-echo ""
-
-# ==============================================
-# Stop and remove Orochi containers
-# ==============================================
-echo -e "${YELLOW}[2/5] Stopping and removing Orochi containers...${NC}"
-for container in "${OROCHI_CONTAINERS[@]}"; do
-    if docker ps -a --format '{{.Names}}' | grep -q "^${container}$"; then
-        echo "  - Removing container: ${container}"
-        docker stop "${container}" 2>/dev/null || true
-        docker rm -f "${container}" 2>/dev/null || true
-    else
-        echo "  - Container not found (skipping): ${container}"
+for svc in suricata zeek; do
+    if systemctl is-active --quiet "$svc" 2>/dev/null; then
+        info "Stopping $svc"
+        systemctl stop "$svc" 2>/dev/null || true
+    fi
+    if systemctl is-enabled --quiet "$svc" 2>/dev/null; then
+        systemctl disable "$svc" 2>/dev/null || true
     fi
 done
-echo -e "${GREEN}✓ Containers removed${NC}"
+ok "Bare metal services stopped"
+
+# ── 2. Docker containers ──────────────────────────────────────────────────────
 echo ""
+echo -e "${YELLOW}[2/7] Removing Docker containers...${NC}"
 
-# ==============================================
-# Remove Orochi Docker network
-# ==============================================
-echo -e "${YELLOW}[3/5] Removing Orochi Docker network...${NC}"
-if docker network ls --format '{{.Name}}' | grep -q "^${OROCHI_NETWORK}$"; then
-    echo "  - Removing network: ${OROCHI_NETWORK}"
-    docker network rm "${OROCHI_NETWORK}" 2>/dev/null || true
-    echo -e "${GREEN}✓ Network removed${NC}"
-else
-    echo "  - Network not found (skipping): ${OROCHI_NETWORK}"
-    echo -e "${GREEN}✓ Network already removed${NC}"
-fi
-echo ""
+CONTAINERS=(
+    elasticsearch
+    kibana
+    fleet-server
+    elasticsearch-hive
+    thehive
+    cassandra
+    velociraptor
+    arkime
+    cyberchef
+    mattermost
+    postgres-mattermost
+    timesketch
+    redis-timesketch
+    postgres-timesketch
+    nginx-portal
+)
 
-# ==============================================
-# Remove Orochi volumes (optional - only unnamed ones)
-# ==============================================
-echo -e "${YELLOW}[4/5] Cleaning up dangling Docker volumes...${NC}"
-DANGLING_VOLUMES=$(docker volume ls -qf dangling=true)
-if [ -n "$DANGLING_VOLUMES" ]; then
-    echo "  - Removing dangling volumes"
-    docker volume rm $DANGLING_VOLUMES 2>/dev/null || true
-    echo -e "${GREEN}✓ Dangling volumes removed${NC}"
-else
-    echo "  - No dangling volumes found"
-    echo -e "${GREEN}✓ No cleanup needed${NC}"
-fi
-echo ""
-
-# ==============================================
-# Remove Orochi data directories
-# ==============================================
-echo -e "${YELLOW}[5/5] Removing Orochi data directories...${NC}"
-if [ -d "$OROCHI_BASE_PATH" ]; then
-    echo "  - Removing: ${OROCHI_BASE_PATH}"
-    echo "    This includes all subdirectories:"
-    echo "      • certs, elasticsearch, kibana, fleet"
-    echo "      • thehive, thehive-es, cassandra"
-    echo "      • velociraptor, suricata, zeek, arkime"
-    echo "      • mattermost, postgres, tool-portal, logs"
-
-    # Check if we need sudo
-    if [ -w "$OROCHI_BASE_PATH" ]; then
-        rm -rf "$OROCHI_BASE_PATH"
-    else
-        echo "  - Requires sudo privileges..."
-        sudo rm -rf "$OROCHI_BASE_PATH"
+for c in "${CONTAINERS[@]}"; do
+    if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^${c}$"; then
+        info "Removing container: $c"
+        docker rm -f "$c" 2>/dev/null || true
     fi
-    echo -e "${GREEN}✓ Data directories removed${NC}"
-else
-    echo "  - Directory not found (skipping): ${OROCHI_BASE_PATH}"
-    echo -e "${GREEN}✓ Directory already removed${NC}"
-fi
+done
+ok "Containers removed"
 
-# Remove Zeek logs
-if [ -d "/opt/zeek/logs" ]; then
-    echo "  - Removing Zeek logs: /opt/zeek/logs"
-    if [ -w "/opt/zeek/logs" ]; then
-        rm -rf /opt/zeek/logs
-    else
-        sudo rm -rf /opt/zeek/logs
-    fi
-    echo -e "${GREEN}✓ Zeek logs removed${NC}"
-fi
-
-# Remove Suricata logs
-if [ -d "/var/log/suricata" ]; then
-    echo "  - Removing Suricata logs: /var/log/suricata"
-    if [ -w "/var/log/suricata" ]; then
-        rm -rf /var/log/suricata
-    else
-        sudo rm -rf /var/log/suricata
-    fi
-    echo -e "${GREEN}✓ Suricata logs removed${NC}"
-fi
+# ── 3. Docker network ─────────────────────────────────────────────────────────
 echo ""
+echo -e "${YELLOW}[3/7] Removing Docker network...${NC}"
 
-# ==============================================
-# Summary
-# ==============================================
+if docker network ls --format '{{.Name}}' 2>/dev/null | grep -q "^orochi-network$"; then
+    info "Removing orochi-network"
+    docker network rm orochi-network 2>/dev/null || true
+fi
+ok "Network removed"
+
+# ── 4. Data directories ───────────────────────────────────────────────────────
+echo ""
+echo -e "${YELLOW}[4/7] Removing data directories...${NC}"
+
+for path in \
+    /opt/orochi \
+    /var/log/suricata \
+    /var/lib/suricata \
+    /etc/suricata \
+    /opt/zeek/logs \
+    /tmp/docker-debs \
+    /tmp/docker-debs.tar.gz \
+    /tmp/suricata-debs \
+    /tmp/suricata-debs.tar.gz \
+    /tmp/zeek-debs \
+    /tmp/zeek-debs.tar.gz \
+    /tmp/suricata-rules.tar.gz
+do
+    if [ -e "$path" ]; then
+        info "Removing $path"
+        rm -rf "$path"
+    fi
+done
+ok "Data directories removed"
+
+# ── 5. Bare metal packages ────────────────────────────────────────────────────
+echo ""
+echo -e "${YELLOW}[5/7] Removing bare metal packages...${NC}"
+
+if dpkg -l suricata &>/dev/null; then
+    info "Purging suricata"
+    apt-get purge -y suricata 2>/dev/null || true
+    apt-get autoremove -y 2>/dev/null || true
+fi
+
+if dpkg -l zeek &>/dev/null; then
+    info "Purging zeek"
+    apt-get purge -y zeek 2>/dev/null || true
+    apt-get autoremove -y 2>/dev/null || true
+fi
+ok "Packages removed"
+
+# ── 6. Suricata systemd override ──────────────────────────────────────────────
+echo ""
+echo -e "${YELLOW}[6/7] Removing systemd overrides...${NC}"
+
+for override in \
+    /etc/systemd/system/suricata.service.d \
+    /etc/systemd/system/zeek.service.d
+do
+    if [ -d "$override" ]; then
+        info "Removing $override"
+        rm -rf "$override"
+    fi
+done
+systemctl daemon-reload 2>/dev/null || true
+ok "Systemd overrides removed"
+
+# ── 7. Node configuration ─────────────────────────────────────────────────────
+echo ""
+echo -e "${YELLOW}[7/7] Removing node configuration...${NC}"
+
+# apt proxy
+if [ -f /etc/apt/apt.conf.d/01orochi-proxy ]; then
+    info "Removing apt proxy config"
+    rm -f /etc/apt/apt.conf.d/01orochi-proxy
+fi
+
+# Docker insecure registry
+if [ -f /etc/docker/daemon.json ]; then
+    info "Removing Docker insecure-registry config"
+    rm -f /etc/docker/daemon.json
+    systemctl restart docker 2>/dev/null || true
+fi
+
+# Dangling Docker volumes
+DANGLING=$(docker volume ls -qf dangling=true 2>/dev/null)
+if [ -n "$DANGLING" ]; then
+    info "Removing dangling Docker volumes"
+    docker volume rm $DANGLING 2>/dev/null || true
+fi
+
+ok "Node configuration cleaned"
+
+# ── Done ──────────────────────────────────────────────────────────────────────
+echo ""
 echo -e "${GREEN}"
 echo "╔═══════════════════════════════════════════════════════════════╗"
 echo "║                     RESET COMPLETE                            ║"
+echo "║                                                               ║"
+echo "║  Node is clean. Run fuse.yml to redeploy.                     ║"
 echo "╚═══════════════════════════════════════════════════════════════╝"
 echo -e "${NC}"
-echo ""
-echo "Orochi has been completely removed from this system."
-echo "Other Docker projects and images remain untouched."
-echo ""
-echo "To redeploy Orochi, run:"
-echo "  ansible-playbook fuse.yml"
-echo ""

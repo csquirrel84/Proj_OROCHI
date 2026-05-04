@@ -328,6 +328,10 @@
         memory: "2g"
       mattermost:
         memory: "1g"
+      timesketch:
+        memory: "2g"
+      redis:
+        memory: "256m"
 
   when: not (skip_env_prompts | default(false))
   no_log: true

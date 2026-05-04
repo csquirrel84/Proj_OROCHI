@@ -45,6 +45,10 @@
         local: "gchq/cyberchef:{{ cyberchef_version }}"
       - src: "nginx:{{ portal_version }}"
         local: "nginx:{{ portal_version }}"
+      - src: "us-docker.pkg.dev/osdfir-registry/timesketch/timesketch:{{ timesketch_version }}"
+        local: "timesketch/timesketch:{{ timesketch_version }}"
+      - src: "redis:{{ redis_version }}"
+        local: "redis:{{ redis_version }}"
 
     binary_artifacts:
       - url: "https://github.com/arkime/arkime/releases/download/v{{ arkime_version }}/arkime_{{ arkime_version }}-1.ubuntu2404_amd64.deb"
@@ -165,7 +169,7 @@
     - name: Download Docker .deb packages
       ansible.builtin.shell: |
         apt-get update -qq
-        apt-get install -y --download-only \
+        apt-get install -y --reinstall --download-only \
           -o Dir::Cache::Archives={{ artifacts_dir }}/docker-debs \
           docker-ce docker-ce-cli containerd.io \
           docker-buildx-plugin docker-compose-plugin
@@ -195,7 +199,7 @@
     - name: Download Zeek .deb packages
       ansible.builtin.shell: |
         apt-get update -qq
-        apt-get install -y --download-only \
+        apt-get install -y --reinstall --download-only \
           -o Dir::Cache::Archives={{ artifacts_dir }}/zeek-debs \
           zeek
       changed_when: true
@@ -211,7 +215,7 @@
     - name: Download Suricata .deb packages
       ansible.builtin.shell: |
         apt-get update -qq
-        apt-get install -y --download-only \
+        apt-get install -y --reinstall --download-only \
           -o Dir::Cache::Archives={{ artifacts_dir }}/suricata-debs \
           suricata jq
       changed_when: true
@@ -301,6 +305,8 @@
         - "postgres"
         - "gchq/cyberchef"
         - "nginx"
+        - "timesketch/timesketch"
+        - "redis"
       loop_control:
         label: "{{ item }}"
 
