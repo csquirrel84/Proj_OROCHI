@@ -1,74 +1,157 @@
 ---
 # ==============================================
-# RITA ROLE - Network Traffic Analysis (Bare Metal)
+# RITA ROLE - Network Traffic Analysis (Docker-based)
+# RITA v5 uses docker-compose with ClickHouse backend.
+# All images served from local registry; fully offline.
+# No standalone binary — analysis runs inside containers.
 # ==============================================
 
-- name: Remove old broken RITA installation
+- name: Create RITA directory
   ansible.builtin.file:
-    path: "{{ item }}"
-    state: absent
-  loop:
-    - /usr/local/bin/rita
-    - /root/.rita
-    - /home/{{ ansible_user }}/.rita
-    - /opt/rita
-  ignore_errors: true
+    path: /opt/rita
+    state: directory
+    mode: '0755'
   tags: rita
 
-- name: Download RITA installer tarball
+- name: Create RITA log directory
+  ansible.builtin.file:
+    path: /var/log/rita
+    state: directory
+    mode: '0755'
+  tags: rita
+
+- name: Download RITA installer tarball from artifact server
   ansible.builtin.get_url:
-    url: "https://github.com/activecm/rita/releases/download/{{ rita_version }}/rita-{{ rita_version }}.tar.gz"
-    dest: "/tmp/rita-{{ rita_version }}.tar.gz"
+    url: "{{ artifact_base_url }}/rita-{{ rita_version }}.tar.gz"
+    dest: /tmp/rita-installer.tar.gz
     mode: '0644'
   tags: rita
 
 - name: Extract RITA installer
   ansible.builtin.unarchive:
-    src: "/tmp/rita-{{ rita_version }}.tar.gz"
+    src: /tmp/rita-installer.tar.gz
     dest: /tmp
     remote_src: true
   tags: rita
 
-- name: Patch RITA installer for Ubuntu 25
-  ansible.builtin.lineinfile:
-    path: "/tmp/rita-{{ rita_version }}-installer/install_pre.yml"
-    regexp: "ansible_distribution_major_version not in \\['22', '24'\\]"
-    line: "          (ansible_distribution == 'Ubuntu'    and ansible_distribution_major_version not in ['22', '24', '25']) or"
-  tags: rita
-
-- name: Run RITA pre-checks playbook
-  ansible.builtin.command:
-    cmd: ansible-playbook install_pre.yml
-    chdir: "/tmp/rita-{{ rita_version }}-installer"
-  environment:
-    ANSIBLE_LOCALHOST_WARNING: 'false'
-  tags: rita
-
-- name: Run RITA installation playbook
-  ansible.builtin.command:
-    cmd: ansible-playbook install_rita.yml
-    chdir: "/tmp/rita-{{ rita_version }}-installer"
-  environment:
-    ANSIBLE_LOCALHOST_WARNING: 'false'
-  tags: rita
-
-- name: Verify RITA installation
-  ansible.builtin.command: rita --version
-  register: rita_version_check
+- name: Show installer file tree
+  ansible.builtin.shell: |
+    find /tmp/rita-{{ rita_version }}-installer -type f | sort
   changed_when: false
-  failed_when: false
+  register: rita_tree
+  tags: rita
+
+- name: Display installer file tree
+  ansible.builtin.debug:
+    msg: "{{ rita_tree.stdout_lines }}"
+  tags: rita
+
+- name: Copy RITA compose files to /opt/rita
+  ansible.builtin.shell: |
+    cp -rn /tmp/rita-{{ rita_version }}-installer/files/opt/. /opt/rita/
+  changed_when: true
+  tags: rita
+
+- name: Copy RITA config files to /etc
+  ansible.builtin.shell: |
+    if [ -d "/tmp/rita-{{ rita_version }}-installer/files/etc" ]; then
+      mkdir -p /etc/rita
+      cp -rn /tmp/rita-{{ rita_version }}-installer/files/etc/. /etc/
+      echo "copied"
+    else
+      echo "no /etc files in installer"
+    fi
+  changed_when: "'copied' in rita_etc_copy.stdout"
+  register: rita_etc_copy
+  tags: rita
+
+# ── Patch image refs and strip build directive ────────────────────────────────
+# prep_artefacts stores images as:  mgmt:5000/rita/<last-path-component>
+# docker compose config --images gives the fully-resolved image name;
+# awk -F/ '{print $NF}' strips all registry/org prefixes, keeping name:tag.
+# We also remove any "build:" lines so Docker won't try to build locally.
+
+- name: Write image patcher script
+  ansible.builtin.copy:
+    dest: /tmp/rita_patch_images.py
+    content: |
+      import re, sys
+      registry = sys.argv[1]
+      path = sys.argv[2]
+      content = open(path).read()
+      # Rewrite image refs
+      def repl(m):
+          img = m.group(1).strip()
+          local = img.split('/')[-1]
+          return 'image: {}/rita/{}'.format(registry, local)
+      patched = re.sub(r'image:\s+(\S+)', repl, content)
+      # Strip build: lines (no Dockerfile on orochi node)
+      patched = re.sub(r'^\s*build:.*\n', '', patched, flags=re.MULTILINE)
+      open(path, 'w').write(patched)
+      print(patched)
+    mode: '0755'
+  tags: rita
+
+- name: Patch docker-compose.yml to use local registry
+  ansible.builtin.command: >
+    python3 /tmp/rita_patch_images.py
+    "{{ mgmt_box_ip }}:{{ mgmt_registry_port }}"
+    /opt/rita/docker-compose.yml
+  changed_when: true
+  register: rita_compose_patched
+  tags: rita
+
+- name: Display patched docker-compose.yml
+  ansible.builtin.debug:
+    msg: "{{ rita_compose_patched.stdout_lines }}"
+  tags: rita
+
+# ── Pull images from local registry then launch ───────────────────────────────
+
+- name: Pull RITA images from local registry
+  ansible.builtin.shell: |
+    cd /opt/rita
+    docker compose pull
+  changed_when: true
+  register: rita_pull
+  tags: rita
+
+- name: Start RITA docker-compose stack
+  ansible.builtin.shell: |
+    cd /opt/rita
+    docker compose up -d --no-build
+  changed_when: true
+  register: rita_compose_up
+  tags: rita
+
+- name: Show docker compose up output
+  ansible.builtin.debug:
+    msg: "{{ rita_compose_up.stdout_lines | default([]) + rita_compose_up.stderr_lines | default([]) }}"
+  tags: rita
+
+- name: Wait for RITA containers to settle
+  ansible.builtin.pause:
+    seconds: 15
+  tags: rita
+
+- name: Verify RITA containers are running
+  ansible.builtin.shell: |
+    cd /opt/rita
+    docker compose ps
+  changed_when: false
+  register: rita_ps
   tags: rita
 
 - name: Display RITA status
   ansible.builtin.debug:
     msg:
-      - "RITA {{ rita_version }} installed!"
+      - "RITA {{ rita_version }} deployed (Docker stack)!"
       - ""
-      - "Binary: /usr/local/bin/rita"
+      - "Container status:"
+      - "{{ rita_ps.stdout_lines | default([]) }}"
       - ""
-      - "Usage:"
-      - "  rita import --database=my-dataset --logs=/path  # Import logs"
-      - "  rita view my-dataset                            # View analysis"
-      - ""
-      - "Version: {{ rita_version_check.stdout | default('Check with: rita --version') }}"
+      - "Usage (run from /opt/rita):"
+      - "  docker compose exec rita rita import --database=<name> /zeek/logs/current"
+      - "  docker compose exec rita rita view <name>"
+      - "  docker compose exec rita rita html-report <name>"
   tags: rita

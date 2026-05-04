@@ -1,0 +1,311 @@
+---
+# ==============================================
+# TIMESKETCH ROLE - Timeline Analysis
+# Dependencies: elasticsearch-hive (ES 7.x)
+# Deploys its own postgres and redis.
+# ==============================================
+
+- name: Create Timesketch directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - "{{ directories.timesketch }}"
+    - "{{ directories.timesketch }}/config"
+    - "{{ directories.timesketch }}/logs"
+    - "{{ directories.timesketch }}/data"
+    - "{{ directories.postgres_timesketch }}"
+  tags: timesketch
+
+# ── Elasticsearch 7 (shared with TheHive, start if not running) ───────────────
+
+- name: Ensure elasticsearch-hive data directory exists
+  ansible.builtin.file:
+    path: "{{ directories.thehive_es }}"
+    state: directory
+    mode: '0777'
+    owner: 1000
+    group: 1000
+  tags: timesketch
+
+- name: Ensure elasticsearch-hive is running
+  community.docker.docker_container:
+    name: elasticsearch-hive
+    image: "{{ images.elasticsearch_hive }}"
+    state: started
+    restart_policy: unless-stopped
+    hostname: elasticsearch-hive
+    networks:
+      - name: "{{ orochi_network_name }}"
+    volumes:
+      - "{{ directories.thehive_es }}:/usr/share/elasticsearch/data"
+    env:
+      discovery.type: "single-node"
+      xpack.security.enabled: "false"
+      cluster.name: "hive"
+      ES_JAVA_OPTS: "-Xms{{ resources.elasticsearch_hive.heap }} -Xmx{{ resources.elasticsearch_hive.heap }}"
+    memory: "{{ resources.elasticsearch_hive.memory }}"
+  tags: timesketch
+
+- name: Wait for elasticsearch-hive to be ready
+  ansible.builtin.shell: |
+    docker exec elasticsearch-hive curl -s http://localhost:9200/_cluster/health
+  register: ts_es_health
+  until: ts_es_health.rc == 0
+  retries: 20
+  delay: 5
+  changed_when: false
+  tags: timesketch
+
+# ── PostgreSQL for Timesketch ──────────────────────────────────────────────────
+
+- name: Pull PostgreSQL image
+  community.docker.docker_image:
+    name: "{{ images.postgres }}"
+    source: pull
+  tags: timesketch
+
+- name: Start PostgreSQL for Timesketch
+  community.docker.docker_container:
+    name: postgres-timesketch
+    image: "{{ images.postgres }}"
+    state: started
+    restart_policy: unless-stopped
+    hostname: postgres-timesketch
+    networks:
+      - name: "{{ orochi_network_name }}"
+    volumes:
+      - "{{ directories.postgres_timesketch }}:/var/lib/postgresql/data"
+    env:
+      POSTGRES_USER: "timesketch"
+      POSTGRES_PASSWORD: "{{ timesketch_password }}"
+      POSTGRES_DB: "timesketch"
+  tags: timesketch
+
+- name: Wait for PostgreSQL to be ready
+  ansible.builtin.pause:
+    seconds: 15
+  tags: timesketch
+
+# ── Redis ──────────────────────────────────────────────────────────────────────
+
+- name: Pull Redis image
+  community.docker.docker_image:
+    name: "{{ images.redis }}"
+    source: pull
+  tags: timesketch
+
+- name: Start Redis for Timesketch
+  community.docker.docker_container:
+    name: redis-timesketch
+    image: "{{ images.redis }}"
+    state: started
+    restart_policy: unless-stopped
+    hostname: redis-timesketch
+    networks:
+      - name: "{{ orochi_network_name }}"
+    memory: "{{ resources.redis.memory }}"
+  tags: timesketch
+
+# ── Timesketch configuration ───────────────────────────────────────────────────
+
+- name: Generate Timesketch secret key
+  ansible.builtin.shell: |
+    echo -n "ts-{{ common_password }}-orochi" | sha256sum | awk '{print $1}'
+  register: ts_secret_key
+  changed_when: false
+  no_log: true
+  tags: timesketch
+
+- name: Remove timesketch.conf if it was created as a directory by a previous interrupted run
+  ansible.builtin.shell: |
+    [ -d "{{ directories.timesketch }}/config/timesketch.conf" ] && rm -rf "{{ directories.timesketch }}/config/timesketch.conf" || true
+  changed_when: false
+  tags: timesketch
+
+- name: Write timesketch.conf
+  ansible.builtin.copy:
+    dest: "{{ directories.timesketch }}/config/timesketch.conf"
+    content: |
+      SECRET_KEY = '{{ ts_secret_key.stdout }}'
+
+      SQLALCHEMY_DATABASE_URI = 'postgresql+psycopg2://timesketch:{{ timesketch_password }}@postgres-timesketch/timesketch'
+
+      ELASTIC_HOST = 'elasticsearch-hive'
+      ELASTIC_PORT = 9200
+
+      UPLOAD_ENABLED = False
+      UPLOAD_FOLDER = '/tmp/timesketch_upload'
+
+      REDIS_URL = 'redis://redis-timesketch:6379'
+
+      CSRF_ENABLED = True
+      WTF_CSRF_ENABLED = True
+
+      SIGMA_RULES_FOLDERS = ['/etc/timesketch/sigma/rules/']
+      SIGMA_CONFIG_FILE = '/etc/timesketch/sigma_config.yaml'
+    mode: '0640'
+    owner: root
+    group: root
+  tags: timesketch
+
+# ── Timesketch container ───────────────────────────────────────────────────────
+
+- name: Pull Timesketch image
+  community.docker.docker_image:
+    name: "{{ images.timesketch }}"
+    source: pull
+  tags: timesketch
+
+- name: Start Timesketch web
+  community.docker.docker_container:
+    name: timesketch
+    image: "{{ images.timesketch }}"
+    state: started
+    restart_policy: unless-stopped
+    command: timesketch-web
+    hostname: timesketch
+    networks:
+      - name: "{{ orochi_network_name }}"
+    ports:
+      - "{{ ports.timesketch }}:5000"
+    volumes:
+      - "{{ directories.timesketch }}/config/timesketch.conf:/etc/timesketch/timesketch.conf:ro"
+      - "{{ directories.timesketch }}/logs:/var/log/timesketch"
+      - "{{ directories.timesketch }}/data:/usr/share/timesketch/data"
+    memory: "{{ resources.timesketch.memory }}"
+  tags: timesketch
+
+- name: Start Timesketch worker
+  community.docker.docker_container:
+    name: timesketch-worker
+    image: "{{ images.timesketch }}"
+    state: started
+    restart_policy: unless-stopped
+    command: timesketch-worker
+    hostname: timesketch-worker
+    networks:
+      - name: "{{ orochi_network_name }}"
+    volumes:
+      - "{{ directories.timesketch }}/config/timesketch.conf:/etc/timesketch/timesketch.conf:ro"
+      - "{{ directories.timesketch }}/logs:/var/log/timesketch"
+      - "{{ directories.timesketch }}/data:/usr/share/timesketch/data"
+    env:
+      WORKER_LOG_LEVEL: "info"
+    memory: "{{ resources.timesketch.memory }}"
+  tags: timesketch
+
+- name: Wait for Timesketch container to be stable (not restarting)
+  ansible.builtin.shell: |
+    STATE=$(docker inspect timesketch 2>/dev/null \
+      | python3 -c "import json,sys; d=json.load(sys.stdin); print(d[0]['State']['Status'])" 2>/dev/null \
+      || echo "missing")
+    echo "$STATE"
+    [ "$STATE" = "running" ]
+  register: ts_container_state
+  until: ts_container_state.rc == 0
+  retries: 36
+  delay: 5
+  changed_when: false
+  tags: timesketch
+
+- name: Fetch Timesketch startup logs on crash loop
+  ansible.builtin.shell: |
+    docker logs timesketch --tail=80 2>&1
+  register: ts_startup_logs
+  changed_when: false
+  failed_when: false
+  when: ts_container_state is failed
+  tags: timesketch
+
+- name: Display Timesketch crash logs
+  ansible.builtin.debug:
+    msg: "{{ ts_startup_logs.stdout_lines | default([]) }}"
+  when: ts_container_state is failed
+  tags: timesketch
+
+- name: Fail — Timesketch is in a restart loop
+  ansible.builtin.fail:
+    msg: "Timesketch container never reached 'running' state. Check logs above."
+  when: ts_container_state is failed
+  tags: timesketch
+
+# ── Database init and admin user ───────────────────────────────────────────────
+
+- name: Check if Timesketch database is already initialised
+  ansible.builtin.shell: |
+    docker exec timesketch tsctl db current 2>&1
+  register: ts_db_check
+  changed_when: false
+  failed_when: false
+  tags: timesketch
+
+- name: Initialise Timesketch database
+  ansible.builtin.shell: |
+    docker exec timesketch tsctl db init
+  register: ts_db_init
+  changed_when: true
+  failed_when:
+    - ts_db_init.rc != 0
+    - "'already' not in (ts_db_init.stdout | default('') + ts_db_init.stderr | default(''))"
+  when: ts_db_check.rc != 0
+  tags: timesketch
+
+- name: Upgrade Timesketch database schema
+  ansible.builtin.shell: |
+    docker exec timesketch tsctl db upgrade
+  register: ts_db_upgrade
+  changed_when: true
+  # Non-fatal: db init already creates tables from current models.
+  # db upgrade fails on fresh installs due to SQLAlchemy 2.x / Alembic env.py
+  # incompatibility (get_engine() removed). Schema is already correct.
+  failed_when: false
+  tags: timesketch
+
+- name: Warn if db upgrade failed
+  ansible.builtin.debug:
+    msg: "WARNING: tsctl db upgrade failed (rc={{ ts_db_upgrade.rc }}) — schema was created by db init, this is expected on fresh installs with SQLAlchemy 2.x"
+  when: ts_db_upgrade.rc != 0
+  tags: timesketch
+
+- name: Create Timesketch admin user
+  ansible.builtin.shell: |
+    docker exec timesketch tsctl create-user \
+      "{{ orochi_admin_user }}" \
+      --password "{{ timesketch_password }}"
+  register: ts_user_create
+  changed_when: "'already exists' not in (ts_user_create.stdout | default('') + ts_user_create.stderr | default(''))"
+  failed_when:
+    - ts_user_create.rc != 0
+    - "'already exists' not in (ts_user_create.stdout | default('') + ts_user_create.stderr | default(''))"
+  no_log: true
+  tags: timesketch
+
+- name: Grant admin role to Timesketch user
+  ansible.builtin.shell: |
+    docker exec timesketch tsctl make-admin "{{ orochi_admin_user }}"
+  register: ts_make_admin
+  changed_when: true
+  failed_when:
+    - ts_make_admin.rc != 0
+    - "'already' not in (ts_make_admin.stdout | default('') + ts_make_admin.stderr | default(''))"
+  tags: timesketch
+
+- name: Wait for Timesketch web interface
+  ansible.builtin.uri:
+    url: "http://localhost:{{ ports.timesketch }}"
+    status_code: [200, 302]
+  register: ts_health
+  until: ts_health.status in [200, 302]
+  retries: 30
+  delay: 5
+  tags: timesketch
+
+- name: Display Timesketch status
+  ansible.builtin.debug:
+    msg:
+      - "Timesketch is running!"
+      - "URL: http://{{ orochi_server_ip }}:{{ ports.timesketch }}"
+      - "Username: {{ orochi_admin_user }}"
+  tags: timesketch

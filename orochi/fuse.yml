@@ -5,12 +5,15 @@
 # ==============================================
 
 - name: Orochi Security Stack Deployer
-  hosts: orochi_servers
+  hosts: orochi_node
   become: true
   gather_facts: true
-  
-  vars_files:
-    - vars/secrets.yml
+
+  vars_prompt:
+    - name: common_password
+      prompt: "Engagement password (used across all services)"
+      private: true
+      confirm: true
 
   vars:
     menu_options:
@@ -24,12 +27,18 @@
       "8": "Deploy CyberChef (Data Analysis)"
       "9": "Deploy Mattermost (Team Communication)"
       "10": "Deploy RITA (Network Traffic Analysis)"
-      "11": "Deploy Tool Portal (Dashboard)"
-      "12": "Show Current Status"
-      "13": "Teardown (Remove All)"
+      "11": "Deploy Timesketch (Timeline Analysis)"
+      "12": "Deploy Tool Portal (Dashboard)"
+      "13": "Show Current Status"
+      "14": "Teardown (Remove All)"
       "0": "Exit"
 
   pre_tasks:
+    - name: Bootstrap node to use management box artefacts
+      ansible.builtin.include_role:
+        name: bootstrap_node
+      tags: always
+
     - name: Display Orochi Banner
       ansible.builtin.debug:
         msg: |
@@ -69,9 +78,10 @@
           │  8. Deploy CyberChef                    │
           │  9. Deploy Mattermost                   │
           │ 10. Deploy RITA                         │
-          │ 11. Deploy Tool Portal                  │
-          │ 12. Show Status                         │
-          │ 13. Teardown All                        │
+          │ 11. Deploy Timesketch                   │
+          │ 12. Deploy Tool Portal                  │
+          │ 13. Show Status                         │
+          │ 14. Teardown All                        │
           │  0. Exit                                │
           └─────────────────────────────────────────┘
           
@@ -80,7 +90,7 @@
 
     - name: Prompt for selection
       ansible.builtin.pause:
-        prompt: "Enter your choice [1-13, 0 to exit]"
+        prompt: "Enter your choice [1-14, 0 to exit]"
       register: user_input
       when: menu_choice is not defined
       tags: always
@@ -128,6 +138,8 @@
             name: mattermost
         - ansible.builtin.include_role:
             name: rita
+        - ansible.builtin.include_role:
+            name: timesketch
         - ansible.builtin.include_role:
             name: nginx_proxy
 
@@ -238,9 +250,18 @@
         - ansible.builtin.include_role:
             name: rita
 
-    # Option 11: Tool Portal
-    - name: Deploy Tool Portal
+    # Option 11: Timesketch
+    - name: Deploy Timesketch
       when: menu_choice == "11"
+      block:
+        - ansible.builtin.include_role:
+            name: common
+        - ansible.builtin.include_role:
+            name: timesketch
+
+    # Option 12: Tool Portal
+    - name: Deploy Tool Portal
+      when: menu_choice == "12"
       block:
         - ansible.builtin.include_role:
             name: common
@@ -251,9 +272,9 @@
         - ansible.builtin.include_role:
             name: nginx_proxy
 
-    # Option 12: Status
+    # Option 13: Status
     - name: Show Status
-      when: menu_choice == "12"
+      when: menu_choice == "13"
       block:
         - name: Get running containers
           ansible.builtin.command: docker ps --format "table {% raw %}{{.Names}}\t{{.Status}}\t{{.Ports}}{% endraw %}"
@@ -264,16 +285,16 @@
           ansible.builtin.debug:
             msg: "{{ container_status.stdout_lines }}"
 
-    # Option 13: Teardown
+    # Option 14: Teardown
     - name: Teardown All
-      when: menu_choice == "13"
+      when: menu_choice == "14"
       block:
         - name: Confirm teardown
           ansible.builtin.pause:
             prompt: "WARNING: This will remove all Orochi containers and data. Type 'YES' to confirm"
           register: confirm_teardown
 
-        - name: Stop Arkime services (bare metal)
+        - name: Stop bare metal services
           ansible.builtin.systemd:
             name: "{{ item }}"
             state: stopped
@@ -281,6 +302,8 @@
           loop:
             - arkimecapture
             - arkimeviewer
+            - suricata
+            - zeek
           ignore_errors: true
           when: confirm_teardown.user_input == "YES"
 
@@ -290,12 +313,12 @@
             state: absent
           loop:
             - tool-portal
-            - rita
-            - mongodb-rita
+            - timesketch
+            - redis-timesketch
+            - postgres-timesketch
             - mattermost
             - postgres-mattermost
             - cyberchef
-            - suricata
             - velociraptor
             - thehive
             - cassandra
@@ -332,5 +355,5 @@
           ║  • Velociraptor:  https://<IP>:8889                           ║
           ╚═══════════════════════════════════════════════════════════════╝
           
-      when: menu_choice not in ["0", "11", "12"]
+      when: menu_choice not in ["0", "13", "14"]
       tags: always

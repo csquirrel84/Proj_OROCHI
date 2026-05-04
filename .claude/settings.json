@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rsync --version)",
+      "PowerShell(scp -r \"E:\\\\Projects\\\\Proj_OROCHI\" mgmt:~/orochi 2>&1)",
+      "PowerShell(& \"e:\\\\Projects\\\\Proj_OROCHI\\\\orochi\\\\push_to_mgmt.ps1\" -IP 192.168.0.24 -User orochiman)"
+    ]
+  }
+}

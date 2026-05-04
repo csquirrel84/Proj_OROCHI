@@ -1,0 +1,423 @@
+---
+# prep_artefacts.yml
+# Run on the management box BEFORE going on-site.
+# Requires internet. Downloads and caches everything needed for offline deployment.
+#
+# Usage:
+#   ansible-playbook playbooks/prep_artefacts.yml
+#
+# Override mgmt_box_ip for dev:
+#   ansible-playbook playbooks/prep_artefacts.yml -e mgmt_box_ip=192.168.0.24
+
+- name: Pre-cache all Orochi deployment artefacts
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: true
+
+  vars_files:
+    - "{{ playbook_dir }}/../group_vars/all.yml"
+
+  vars:
+    artifacts_dir: /opt/orochi/artifacts
+    registry_data_dir: /opt/orochi/registry
+
+    docker_images:
+      - src: "docker.elastic.co/elasticsearch/elasticsearch:{{ stack_version }}"
+        local: "elasticsearch/elasticsearch:{{ stack_version }}"
+      - src: "docker.elastic.co/kibana/kibana:{{ stack_version }}"
+        local: "kibana/kibana:{{ stack_version }}"
+      - src: "docker.elastic.co/elastic-agent/elastic-agent:{{ stack_version }}"
+        local: "elastic-agent/elastic-agent:{{ stack_version }}"
+      - src: "docker.elastic.co/elasticsearch/elasticsearch:{{ elasticsearch_hive_version }}"
+        local: "elasticsearch/elasticsearch:{{ elasticsearch_hive_version }}"
+      - src: "cassandra:{{ cassandra_version }}"
+        local: "cassandra:{{ cassandra_version }}"
+      - src: "thehiveproject/thehive4:{{ thehive_version }}"
+        local: "thehiveproject/thehive4:{{ thehive_version }}"
+      - src: "debian:bookworm-slim"
+        local: "debian:bookworm-slim"
+      - src: "mattermost/mattermost-team-edition:{{ mattermost_version }}"
+        local: "mattermost/mattermost-team-edition:{{ mattermost_version }}"
+      - src: "postgres:{{ postgres_version }}"
+        local: "postgres:{{ postgres_version }}"
+      - src: "ghcr.io/gchq/cyberchef:{{ cyberchef_version }}"
+        local: "gchq/cyberchef:{{ cyberchef_version }}"
+      - src: "nginx:{{ portal_version }}"
+        local: "nginx:{{ portal_version }}"
+      - src: "us-docker.pkg.dev/osdfir-registry/timesketch/timesketch:{{ timesketch_version }}"
+        local: "timesketch/timesketch:{{ timesketch_version }}"
+      - src: "redis:{{ redis_version }}"
+        local: "redis:{{ redis_version }}"
+
+    binary_artifacts:
+      - url: "https://github.com/arkime/arkime/releases/download/v{{ arkime_version }}/arkime_{{ arkime_version }}-1.ubuntu2404_amd64.deb"
+        dest: "arkime_{{ arkime_version }}.deb"
+      - url: "https://github.com/activecm/rita/releases/download/{{ rita_version }}/rita-{{ rita_version }}.tar.gz"
+        dest: "rita-{{ rita_version }}.tar.gz"
+      - url: "https://download.opensuse.org/repositories/security:/zeek/xUbuntu_24.04/Release.key"
+        dest: "zeek-release.key"
+
+  tasks:
+
+    - name: Create artifact directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ artifacts_dir }}"
+        - "{{ artifacts_dir }}/docker-debs"
+        - "{{ artifacts_dir }}/zeek-debs"
+        - "{{ artifacts_dir }}/suricata-debs"
+        - "{{ registry_data_dir }}"
+
+    # ── Local Docker registry ──────────────────────────────────────────────────
+
+    - name: Ensure local Docker registry is running
+      community.docker.docker_container:
+        name: orochi-registry
+        image: registry:2
+        state: started
+        restart_policy: unless-stopped
+        ports:
+          - "5000:5000"
+        volumes:
+          - "{{ registry_data_dir }}:/var/lib/registry"
+
+    - name: Wait for registry to be ready
+      ansible.builtin.uri:
+        url: http://localhost:5000/v2/
+        status_code: 200
+      register: registry_ready
+      until: registry_ready.status == 200
+      retries: 10
+      delay: 3
+
+    # ── Docker images ──────────────────────────────────────────────────────────
+
+    - name: Pull Docker image
+      community.docker.docker_image:
+        name: "{{ item.src }}"
+        source: pull
+        force_source: true
+      loop: "{{ docker_images }}"
+      loop_control:
+        label: "{{ item.src }}"
+
+    - name: Tag and push to local registry
+      ansible.builtin.shell: |
+        docker tag "{{ item.src }}" "localhost:5000/{{ item.local }}"
+        docker push "localhost:5000/{{ item.local }}"
+      loop: "{{ docker_images }}"
+      loop_control:
+        label: "{{ item.local }}"
+      changed_when: true
+
+    # ── Binary artifacts ───────────────────────────────────────────────────────
+
+    - name: Download binary artifacts
+      ansible.builtin.get_url:
+        url: "{{ item.url }}"
+        dest: "{{ artifacts_dir }}/{{ item.dest }}"
+        mode: '0755'
+      loop: "{{ binary_artifacts }}"
+      loop_control:
+        label: "{{ item.dest }}"
+
+    # ── Velociraptor — resolve latest release from GitHub API ─────────────────
+
+    - name: Get latest Velociraptor release from GitHub
+      ansible.builtin.uri:
+        url: https://api.github.com/repos/Velocidex/velociraptor/releases/latest
+        return_content: true
+      register: velox_release
+
+    - name: Parse Velociraptor download URL
+      ansible.builtin.set_fact:
+        velox_download_url: >-
+          {{
+            velox_release.json.assets
+            | selectattr('name', 'search', 'linux-amd64')
+            | rejectattr('name', 'search', 'sig')
+            | rejectattr('name', 'search', 'musl')
+            | map(attribute='browser_download_url')
+            | first
+          }}
+
+    - name: Download Velociraptor binary
+      ansible.builtin.get_url:
+        url: "{{ velox_download_url }}"
+        dest: "{{ artifacts_dir }}/velociraptor-linux-amd64"
+        mode: '0755'
+        force: false
+
+    # ── Docker .deb packages ───────────────────────────────────────────────────
+
+    - name: Add Docker GPG key
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        dest: /etc/apt/keyrings/docker.asc
+        mode: '0644'
+
+    - name: Add Docker apt repository
+      ansible.builtin.apt_repository:
+        repo: "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+        state: present
+        filename: docker
+
+    - name: Download Docker .deb packages
+      ansible.builtin.shell: |
+        apt-get update -qq
+        apt-get install -y --reinstall --download-only \
+          -o Dir::Cache::Archives={{ artifacts_dir }}/docker-debs \
+          docker-ce docker-ce-cli containerd.io \
+          docker-buildx-plugin docker-compose-plugin
+      changed_when: true
+
+    - name: Create Docker debs tarball
+      ansible.builtin.shell: |
+        tar -czf {{ artifacts_dir }}/docker-debs.tar.gz \
+          -C {{ artifacts_dir }} docker-debs/
+      changed_when: true
+
+    # ── Zeek .deb packages ─────────────────────────────────────────────────────
+
+    - name: Add Zeek GPG key
+      ansible.builtin.shell: |
+        gpg --dearmor < {{ artifacts_dir }}/zeek-release.key \
+          > /etc/apt/keyrings/zeek-archive-keyring.gpg
+      args:
+        creates: /etc/apt/keyrings/zeek-archive-keyring.gpg
+
+    - name: Add Zeek apt repository
+      ansible.builtin.apt_repository:
+        repo: "deb [signed-by=/etc/apt/keyrings/zeek-archive-keyring.gpg] http://download.opensuse.org/repositories/security:/zeek/xUbuntu_24.04/ /"
+        state: present
+        filename: zeek
+
+    - name: Download Zeek .deb packages
+      ansible.builtin.shell: |
+        apt-get update -qq
+        apt-get install -y --reinstall --download-only \
+          -o Dir::Cache::Archives={{ artifacts_dir }}/zeek-debs \
+          zeek
+      changed_when: true
+
+    - name: Create Zeek debs tarball
+      ansible.builtin.shell: |
+        tar -czf {{ artifacts_dir }}/zeek-debs.tar.gz \
+          -C {{ artifacts_dir }} zeek-debs/
+      changed_when: true
+
+    # ── Suricata .deb packages — Ubuntu default repos ─────────────────────────
+
+    - name: Download Suricata .deb packages
+      ansible.builtin.shell: |
+        apt-get update -qq
+        apt-get install -y --reinstall --download-only \
+          -o Dir::Cache::Archives={{ artifacts_dir }}/suricata-debs \
+          suricata jq
+      changed_when: true
+
+    - name: Create Suricata debs tarball
+      ansible.builtin.shell: |
+        tar -czf {{ artifacts_dir }}/suricata-debs.tar.gz \
+          -C {{ artifacts_dir }} suricata-debs/
+      changed_when: true
+
+    # ── Arkime runtime dependencies ───────────────────────────────────────────
+    # Let apt resolve the full transitive dep tree from the actual .deb so
+    # nothing is missed. The .deb was already downloaded above as a binary
+    # artifact; we reuse that path here.
+
+    - name: Create Arkime deps directory
+      ansible.builtin.file:
+        path: "{{ artifacts_dir }}/arkime-deps"
+        state: directory
+        mode: '0755'
+
+    - name: Download all Arkime runtime deps via apt dep resolution
+      ansible.builtin.shell: |
+        apt-get update -qq
+        apt-get install -y --download-only \
+          -o Dir::Cache::Archives={{ artifacts_dir }}/arkime-deps \
+          {{ artifacts_dir }}/arkime_{{ arkime_version }}.deb
+      changed_when: true
+
+    - name: Create Arkime deps tarball
+      ansible.builtin.shell: |
+        tar -czf {{ artifacts_dir }}/arkime-deps.tar.gz \
+          -C {{ artifacts_dir }} arkime-deps/
+      changed_when: true
+
+    # ── RITA Docker images ────────────────────────────────────────────────────
+    # RITA v5 is Docker-based (docker-compose stack, not a binary).
+    # Extract the docker-compose.yml from the installer tarball, discover
+    # all image references, pull and push to local registry.
+
+    - name: Extract RITA installer for image discovery
+      ansible.builtin.shell: |
+        tar -xzf {{ artifacts_dir }}/rita-{{ rita_version }}.tar.gz -C /tmp
+      changed_when: false
+
+    - name: Show RITA installer file tree and env
+      ansible.builtin.shell: |
+        echo "=== Installer files ==="
+        find /tmp/rita-{{ rita_version }}-installer -type f | sort
+        echo ""
+        echo "=== .env file ==="
+        cat "/tmp/rita-{{ rita_version }}-installer/files/opt/.env" 2>/dev/null || echo "(no .env found)"
+      changed_when: false
+      register: rita_installer_tree
+
+    - name: Display RITA installer contents
+      ansible.builtin.debug:
+        msg: "{{ rita_installer_tree.stdout_lines }}"
+
+    - name: Pull and cache all RITA Docker images
+      # cd to the compose dir so docker compose picks up .env automatically,
+      # resolving CLICKHOUSE_VERSION. Use `docker compose config --images`
+      # which returns one fully-resolved image ref per line.
+      ansible.builtin.shell: |
+        set -e
+        COMPOSE_DIR="/tmp/rita-{{ rita_version }}-installer/files/opt"
+        cd "$COMPOSE_DIR"
+
+        echo "=== Resolved images ==="
+        IMAGES=$(docker compose config --images)
+        echo "$IMAGES"
+        echo ""
+
+        echo "=== Pulling and caching ==="
+        echo "$IMAGES" | sort -u | while read img; do
+          [ -z "$img" ] && continue
+          echo "Pulling: $img"
+          docker pull "$img"
+          LOCAL=$(echo "$img" | awk -F/ '{print $NF}')
+          docker tag "$img" "localhost:5000/rita/${LOCAL}"
+          docker push "localhost:5000/rita/${LOCAL}"
+          echo "Cached: localhost:5000/rita/${LOCAL}"
+        done
+      changed_when: true
+      register: rita_image_cache
+
+    - name: Show RITA image cache results
+      ansible.builtin.debug:
+        msg: "{{ rita_image_cache.stdout_lines }}"
+
+    # ── Suricata rules ─────────────────────────────────────────────────────────
+
+    - name: Download Suricata rules via container
+      community.docker.docker_container:
+        name: suricata-rules-downloader
+        image: "localhost:5000/gchq/cyberchef:{{ cyberchef_version }}"
+        state: absent
+      ignore_errors: true
+
+    - name: Download Suricata rules
+      ansible.builtin.shell: |
+        docker run --rm \
+          -v {{ artifacts_dir }}:/output \
+          ubuntu:noble \
+          bash -c "
+            apt-get update -qq &&
+            DEBIAN_FRONTEND=noninteractive apt-get install -y -qq suricata suricata-update &&
+            suricata-update --no-reload --no-test &&
+            tar -czf /output/suricata-rules.tar.gz -C /var/lib/suricata rules/
+          "
+      changed_when: true
+      register: rules_result
+      failed_when: rules_result.rc != 0
+
+    # ── Warm apt-cacher-ng with standard packages ──────────────────────────────
+
+    - name: Configure management box apt to use local proxy for warming
+      ansible.builtin.copy:
+        dest: /etc/apt/apt.conf.d/99orochi-cacher
+        content: |
+          Acquire::http::Proxy "http://localhost:{{ mgmt_apt_proxy_port }}";
+        mode: '0644'
+
+    - name: Warm apt cache with standard Orochi packages
+      ansible.builtin.shell: |
+        apt-get update -qq
+        apt-get install -y --download-only \
+          iptables iptables-persistent netfilter-persistent \
+          wireguard \
+          python3-docker python3-requests python3-urllib3 \
+          software-properties-common apt-transport-https gnupg \
+          ca-certificates curl
+      changed_when: true
+      failed_when: false
+
+    - name: Remove proxy warming config
+      ansible.builtin.file:
+        path: /etc/apt/apt.conf.d/99orochi-cacher
+        state: absent
+
+    # ── Nginx artifact server ──────────────────────────────────────────────────
+
+    - name: Start nginx artifact server
+      community.docker.docker_container:
+        name: orochi-artifacts
+        image: "nginx:{{ portal_version }}"
+        state: started
+        restart_policy: unless-stopped
+        ports:
+          - "{{ mgmt_artifact_port }}:80"
+        volumes:
+          - "{{ artifacts_dir }}:/usr/share/nginx/html:ro"
+
+    # ── Verify ─────────────────────────────────────────────────────────────────
+
+    - name: Verify registry has expected images
+      ansible.builtin.uri:
+        url: "http://localhost:5000/v2/{{ item }}/tags/list"
+        status_code: 200
+      loop:
+        - "elasticsearch/elasticsearch"
+        - "kibana/kibana"
+        - "elastic-agent/elastic-agent"
+        - "cassandra"
+        - "thehiveproject/thehive4"
+        - "mattermost/mattermost-team-edition"
+        - "postgres"
+        - "gchq/cyberchef"
+        - "nginx"
+        - "timesketch/timesketch"
+        - "redis"
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Verify binary artifacts exist
+      ansible.builtin.stat:
+        path: "{{ artifacts_dir }}/{{ item }}"
+      register: artifact_stat
+      failed_when: not artifact_stat.stat.exists
+      loop:
+        - "arkime_{{ arkime_version }}.deb"
+        - "velociraptor-linux-amd64"
+        - "rita-{{ rita_version }}.tar.gz"
+        - "docker-debs.tar.gz"
+        - "zeek-debs.tar.gz"
+        - "suricata-debs.tar.gz"
+        - "suricata-rules.tar.gz"
+        - "arkime-deps.tar.gz"
+        - "zeek-release.key"
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Artefact prep complete
+      ansible.builtin.debug:
+        msg:
+          - "============================================"
+          - "All artefacts downloaded and cached."
+          - ""
+          - "Local registry:    localhost:5000"
+          - "Artifact server:   http://localhost:{{ mgmt_artifact_port }}"
+          - "Apt proxy:         localhost:{{ mgmt_apt_proxy_port }}"
+          - ""
+          - "Management box is ready for offline deployment."
+          - "You can now disconnect from the internet."
+          - "============================================"

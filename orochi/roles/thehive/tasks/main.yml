@@ -20,14 +20,14 @@
 # Elasticsearch 7 for TheHive
 - name: Pull Elasticsearch 7 image
   community.docker.docker_image:
-    name: "docker.elastic.co/elasticsearch/elasticsearch:{{ elasticsearch_hive_version }}"
+    name: "{{ images.elasticsearch_hive }}"
     source: pull
   tags: thehive
 
 - name: Start Elasticsearch 7 for TheHive
   community.docker.docker_container:
     name: elasticsearch-hive
-    image: "docker.elastic.co/elasticsearch/elasticsearch:{{ elasticsearch_hive_version }}"
+    image: "{{ images.elasticsearch_hive }}"
     state: started
     restart_policy: unless-stopped
     hostname: elasticsearch-hive
@@ -46,14 +46,14 @@
 # Cassandra
 - name: Pull Cassandra image
   community.docker.docker_image:
-    name: "cassandra:{{ cassandra_version }}"
+    name: "{{ images.cassandra }}"
     source: pull
   tags: thehive
 
 - name: Start Cassandra
   community.docker.docker_container:
     name: cassandra
-    image: "cassandra:{{ cassandra_version }}"
+    image: "{{ images.cassandra }}"
     state: started
     restart_policy: unless-stopped
     hostname: cassandra
@@ -137,14 +137,14 @@
 # TheHive 4
 - name: Pull TheHive image
   community.docker.docker_image:
-    name: "thehiveproject/thehive4:{{ thehive_version }}"
+    name: "{{ images.thehive }}"
     source: pull
   tags: thehive
 
 - name: Start TheHive 4
   community.docker.docker_container:
     name: thehive
-    image: "thehiveproject/thehive4:{{ thehive_version }}"
+    image: "{{ images.thehive }}"
     state: started
     restart_policy: unless-stopped
     hostname: thehive

@@ -37,14 +37,14 @@
 # PostgreSQL for Mattermost
 - name: Pull PostgreSQL image
   community.docker.docker_image:
-    name: "postgres:{{ postgres_version }}"
+    name: "{{ images.postgres }}"
     source: pull
   tags: mattermost
 
 - name: Start PostgreSQL for Mattermost
   community.docker.docker_container:
     name: postgres-mattermost
-    image: "postgres:{{ postgres_version }}"
+    image: "{{ images.postgres }}"
     state: started
     restart_policy: unless-stopped
     hostname: postgres-mattermost
@@ -66,14 +66,14 @@
 # Mattermost
 - name: Pull Mattermost image
   community.docker.docker_image:
-    name: "mattermost/mattermost-team-edition:{{ mattermost_version }}"
+    name: "{{ images.mattermost }}"
     source: pull
   tags: mattermost
 
 - name: Start Mattermost
   community.docker.docker_container:
     name: mattermost
-    image: "mattermost/mattermost-team-edition:{{ mattermost_version }}"
+    image: "{{ images.mattermost }}"
     state: started
     restart_policy: unless-stopped
     hostname: mattermost

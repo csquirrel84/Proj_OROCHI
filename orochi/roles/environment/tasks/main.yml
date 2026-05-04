@@ -270,7 +270,7 @@
     # =========================
     # CORE STACK VARIABLES
     # =========================
-    stack_version: "{{ stack_version_input.user_input | default('latest', true) }}"
+    stack_version: "{{ stack_version_input.user_input | default(stack_version, true) }}"
     cluster_name: "{{ cluster_name_input.user_input | default('orochi', true) }}"
     license: "{{ license_input.user_input | default('basic', true) }}"
     mem_limit: "{{ mem_limit_input.user_input | default('4g', true) }}"
@@ -328,6 +328,10 @@
         memory: "2g"
       mattermost:
         memory: "1g"
+      timesketch:
+        memory: "2g"
+      redis:
+        memory: "256m"
 
   when: not (skip_env_prompts | default(false))
   no_log: true

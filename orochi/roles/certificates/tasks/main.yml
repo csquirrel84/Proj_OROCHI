@@ -32,7 +32,7 @@
       ansible.builtin.shell: |
         docker run --rm \
           -v {{ directories.certs }}:/usr/share/elasticsearch/config/certs \
-          docker.elastic.co/elasticsearch/elasticsearch:{{ stack_version }} \
+          {{ images.elasticsearch }} \
           bash -c '
             set -euo pipefail
             cd /usr/share/elasticsearch

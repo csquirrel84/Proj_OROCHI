@@ -10,11 +10,43 @@
   failed_when: false
   tags: arkime
 
-- name: Download Arkime .deb package
+- name: Download Arkime .deb package from artifact server
   ansible.builtin.get_url:
-    url: "https://github.com/arkime/arkime/releases/download/v{{ arkime_version }}/arkime_{{ arkime_version }}-1.ubuntu2404_amd64.deb"
+    url: "{{ artifact_base_url }}/arkime_{{ arkime_version }}.deb"
     dest: "/tmp/arkime_{{ arkime_version }}.deb"
     mode: '0644'
+  when: arkime_installed.rc != 0
+  tags: arkime
+
+- name: Create temp directory for Arkime deps
+  ansible.builtin.file:
+    path: /tmp/arkime-deps
+    state: directory
+    mode: '0755'
+  when: arkime_installed.rc != 0
+  tags: arkime
+
+- name: Download Arkime deps tarball from artifact server
+  ansible.builtin.get_url:
+    url: "{{ artifact_base_url }}/arkime-deps.tar.gz"
+    dest: /tmp/arkime-deps.tar.gz
+    mode: '0644'
+  when: arkime_installed.rc != 0
+  tags: arkime
+
+- name: Extract Arkime deps
+  ansible.builtin.unarchive:
+    src: /tmp/arkime-deps.tar.gz
+    dest: /tmp
+    remote_src: true
+  when: arkime_installed.rc != 0
+  tags: arkime
+
+- name: Install Arkime runtime dependencies from pre-cached packages
+  ansible.builtin.shell: |
+    apt-get install -y /tmp/arkime-deps/*.deb
+  register: arkime_deps_install
+  changed_when: "'Setting up' in arkime_deps_install.stdout"
   when: arkime_installed.rc != 0
   tags: arkime
 
