@@ -50,16 +50,9 @@ OROCHI uses exactly two machines:
 
 Every role is idempotent — re-running the same option is safe and will skip already-complete steps while re-applying any changed configuration.
 
-### NIC Discovery by MAC Address
+### Interface Selection
 
-Linux kernel interface names (e.g. `enp89s0`, `enx98e743225b91`) are not stable across hardware or kernel updates. OROCHI never hardcodes interface names. Instead, `bootstrap_node` resolves kernel names at runtime by looking up the MAC addresses stored in `group_vars/all.yml`:
-
-```
-analyst_nic_mac: "88:ae:dd:0f:d9:0e"   →  discovers: nic_analyst (Ansible fact)
-target_nic_mac:  "98:e7:43:22:5b:91"   →  discovers: capture_interface (Ansible fact)
-```
-
-These facts are cached for the duration of the play and used by all roles that need a NIC name (Suricata, Zeek, Arkime). When deploying on different hardware, only the MACs in `group_vars/all.yml` need to change.
+The capture interface (used by Suricata, Zeek, and Arkime) is selected interactively by the `environment` role at the start of each deployment. It lists all non-loopback, non-Docker interfaces on the orochi node and prompts you to pick the one facing the monitored network. The selection is saved to `.env` on the management box and reused on subsequent runs.
 
 ### The Single Password Pattern
 
@@ -104,7 +97,9 @@ This means you only have one credential to manage per engagement. **TheHive is t
                                           │  Suricata IDS                    │
                                           │  Zeek NSM                        │
                                           │  Arkime (PCAP, 8005)             │
-                                          │  RITA (analysis, CLI only)       │
+                                          │                                  │
+                                          │  Docker compose (/opt/rita):     │
+                                          │  RITA + ClickHouse + syslog-ng   │
                                           └─────────────────────────────────┘
 ```
 
@@ -387,14 +382,19 @@ The playbook runs entirely on `localhost` (the management box). It:
 │   ├── zeek-debs.tar.gz            ← tarball of above
 │   ├── suricata-debs/              ← Suricata .deb files (directory)
 │   ├── suricata-debs.tar.gz        ← tarball of above
+│   ├── arkime-deps/                ← Arkime runtime dep .deb files (39 packages)
+│   ├── arkime-deps.tar.gz          ← tarball of above
 │   ├── suricata-rules.tar.gz       ← ET Open rules from suricata-update
 │   ├── arkime_5.8.3.deb
 │   ├── velociraptor-linux-amd64
-│   ├── rita-v5.1.1.tar.gz
+│   ├── rita-v5.1.1.tar.gz          ← RITA installer (docker-compose stack + config)
 │   └── zeek-release.key
 └── registry/                       ← Docker layer blobs
-    └── docker/registry/v2/...
+    ├── docker/registry/v2/...      ← all tool images
+    └── ...rita/...                 ← RITA + ClickHouse + syslog-ng images
 ```
+
+> **RITA images** are stored in the registry under the `rita/` namespace (e.g. `<mgmt-ip>:5000/rita/rita:v5.1.1`, `<mgmt-ip>:5000/rita/clickhouse-server:24.x`). They are discovered automatically from the RITA installer's `docker-compose.yml` during `prep_artefacts.yml`.
 
 ### Verifying the Cache
 
@@ -559,7 +559,7 @@ Deploys everything in order. Use this for a full engagement build from a clean n
 
 **Caveats:**
 - Suricata startup takes up to 15 minutes for rule compilation on first run (see option 6 below for detail)
-- RITA requires internet for MongoDB download (see option 10 below for workarounds)
+- RITA is fully offline — all images pre-cached by `prep_artefacts.yml`
 
 ---
 
@@ -710,14 +710,32 @@ Deploys Mattermost team chat with a dedicated PostgreSQL backend.
 
 Installs RITA (Real Intelligence Threat Analytics) for beaconing and C2 detection from Zeek logs.
 
-**Important — RITA requires internet for MongoDB:** RITA v5's installer downloads MongoDB from `repo.mongodb.org`. If the orochi node has no internet access, this will fail.
+**RITA v5 is fully offline.** It runs as a `docker compose` stack — no bare-metal MongoDB install, no internet required. All images (RITA, ClickHouse, syslog-ng) are pre-cached in the local registry by `prep_artefacts.yml` and served from the management box.
 
-**Options:**
-1. Deploy RITA before going offline (preferred)
-2. Pre-warm apt-cacher-ng with MongoDB packages on the management box: add the MongoDB apt repository to the management box, run `apt-get install -y --download-only mongodb-org` through the local proxy to populate the cache, then the orochi node's apt will pull MongoDB through the proxy
-3. Skip RITA for the engagement
+**What it deploys** (stack at `/opt/rita/`):
+- `rita` container — the RITA analysis engine
+- `rita-clickhouse` container — ClickHouse columnar database (RITA v5 replaced MongoDB with ClickHouse)
+- `rita-syslog-ng` container — log ingestion
 
-**Estimated time:** 10–20 minutes (includes MongoDB installation)
+The role extracts the RITA installer tarball from the artifact server, rewrites all `image:` references in `docker-compose.yml` to point at the local registry, and runs `docker compose up -d`.
+
+**Usage (on the orochi node):**
+```bash
+cd /opt/rita
+
+# Import Zeek logs
+docker compose exec rita rita import --database=<engagement-name> /zeek/logs/current
+
+# View results
+docker compose exec rita rita view <engagement-name>
+
+# Generate HTML report
+docker compose exec rita rita html-report <engagement-name>
+```
+
+> **Zeek logs volume:** RITA's compose file mounts Zeek log directories from the host. Verify the volume paths in `/opt/rita/docker-compose.yml` match your Zeek log location (`/opt/zeek/logs/current/`).
+
+**Estimated time:** 5–10 minutes
 
 ---
 
@@ -728,14 +746,19 @@ Deploys Timesketch timeline analysis platform.
 **What it deploys:**
 - `redis-timesketch` container — Redis 7 for Timesketch task queue
 - `postgres-timesketch` container — PostgreSQL 15 for Timesketch metadata
-- `timesketch` container — Timesketch application
+- `timesketch` container — Timesketch web frontend (gunicorn on port 5000, started with `command: timesketch-web`)
+- `timesketch-worker` container — Celery background worker for async jobs (same image, `command: timesketch-worker`)
+
+The entrypoint script (`/docker-entrypoint.sh`) requires an explicit command argument — without it the container exits immediately with no logs. The role passes `timesketch-web` and `timesketch-worker` respectively.
 
 The Timesketch role also starts `elasticsearch-hive` (ES 7.x) if it's not already running, since Timesketch uses the same ES 7 instance as TheHive for timeline index storage.
 
 After the containers are up, the role:
-1. Waits for PostgreSQL to be ready (15-second pause — increase if startup fails on slow hardware)
-2. Initialises and upgrades the Timesketch database schema
-3. Creates the admin user
+1. Polls until the `timesketch` container reaches `running` state (not `restarting`)
+2. Initialises the database with `tsctl db init`
+3. Skips `tsctl db upgrade` non-fatally — it fails on fresh installs due to a SQLAlchemy 2.x / Alembic incompatibility in the image's `env.py`, but the schema is already correct from `db init`
+4. Creates the admin user: `tsctl create-user <username> --password <password>`
+5. Grants admin role: `tsctl make-admin <username>`
 
 **Credentials:** `admin` / *engagement password*
 
@@ -1137,6 +1160,22 @@ This is expected on re-runs and is harmless. The `failed_when` condition in the 
 
 ---
 
+### Timesketch Container Keeps Restarting
+
+```
+Container f886db... is restarting, wait until the container is running
+```
+
+The most common cause is not passing the required CMD argument. The OSDFIR Timesketch image's entrypoint (`/docker-entrypoint.sh`) exits immediately with code 0 if called without an argument — producing no logs and triggering the restart loop.
+
+The role passes `command: timesketch-web` to the web container and `command: timesketch-worker` to the worker. If the container is still restarting, check the gunicorn log:
+
+```bash
+docker logs timesketch
+# Or check the mounted log file:
+cat /opt/orochi/timesketch/logs/wsgi_error.log
+```
+
 ### Timesketch Database Init Fails
 
 ```
@@ -1153,23 +1192,35 @@ docker logs postgres-timesketch | tail -10
 
 # Manually initialise if needed
 docker exec timesketch tsctl db init
-docker exec timesketch tsctl db upgrade
-docker exec timesketch tsctl create-user --name admin --password <password> --admin
+# db upgrade will fail with SQLAlchemy 2.x — that is expected and non-fatal
+
+# Create user (positional arg, no --admin flag):
+docker exec timesketch tsctl create-user admin --password <password>
+docker exec timesketch tsctl make-admin admin
 ```
+
+### tsctl db upgrade Fails (AttributeError: get_engine)
+
+```
+AttributeError: type object 'BaseModel' has no attribute 'get_engine'
+```
+
+Known incompatibility between the Alembic migration `env.py` baked into the OSDFIR image and SQLAlchemy 2.x. This is **non-fatal on fresh installs** — `tsctl db init` already created the schema from the current models. The role logs a warning and continues. No action required.
 
 ---
 
-### RITA Fails (MongoDB Download Fails)
+### RITA Stack Fails to Start
 
-```
-TASK [Run RITA installer] FAILED
-# E: Failed to fetch https://repo.mongodb.org/...
+```bash
+# Check RITA container status
+cd /opt/rita && docker compose ps
+
+# Check logs
+docker compose logs rita
+docker compose logs rita-clickhouse
 ```
 
-RITA's installer needs internet for MongoDB. Options:
-1. Deploy RITA before going offline
-2. Pre-warm apt-cacher-ng: on the management box, add the MongoDB apt repository and run `apt-get install -y --download-only mongodb-org` through the local proxy. The orochi node will then pull MongoDB through the proxy cache.
-3. Skip RITA for this engagement
+If images are missing from the local registry (pull errors), re-run `prep_artefacts.yml` on the management box to re-cache the RITA images, then re-run option 10.
 
 ---
 
