@@ -11,6 +11,9 @@
 # Ansible retry files
 *.retry
 
+# Install log (per-run, not for version control)
+install.log
+
 # Python bytecode
 __pycache__/
 *.py[cod]

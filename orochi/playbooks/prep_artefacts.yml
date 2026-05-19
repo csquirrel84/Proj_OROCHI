@@ -3,11 +3,8 @@
 # Run on the management box BEFORE going on-site.
 # Requires internet. Downloads and caches everything needed for offline deployment.
 #
-# Usage:
+# Usage (run directly on the management box — no flags needed):
 #   ansible-playbook playbooks/prep_artefacts.yml
-#
-# Override mgmt_box_ip for dev:
-#   ansible-playbook playbooks/prep_artefacts.yml -e mgmt_box_ip=192.168.0.24
 
 - name: Pre-cache all Orochi deployment artefacts
   hosts: localhost
@@ -71,6 +68,79 @@
         - "{{ artifacts_dir }}/zeek-debs"
         - "{{ artifacts_dir }}/suricata-debs"
         - "{{ registry_data_dir }}"
+
+    # ── Elastic Stack version check ────────────────────────────────────────────
+
+    - name: Check latest Elastic Stack version
+      ansible.builtin.uri:
+        url: https://artifacts-api.elastic.co/v1/versions
+        return_content: true
+        timeout: 10
+      register: _elastic_versions_raw
+      failed_when: false
+      changed_when: false
+
+    - name: Parse latest stable Elastic Stack version
+      ansible.builtin.shell: |
+        python3 - <<'EOF'
+        import json, re
+        versions = {{ _elastic_versions_raw.json.versions | to_json }}
+        stable = sorted(
+          [v for v in versions if re.match(r'^[0-9]+\.[0-9]+\.[0-9]+$', v)],
+          key=lambda v: tuple(int(x) for x in v.split('.'))
+        )
+        print(stable[-1] if stable else '')
+        EOF
+      register: _elastic_latest_raw
+      changed_when: false
+      when:
+        - _elastic_versions_raw.status is defined
+        - _elastic_versions_raw.status == 200
+
+    - name: Set latest Elastic Stack version fact
+      ansible.builtin.set_fact:
+        _elastic_latest: "{{ _elastic_latest_raw.stdout | trim }}"
+      when:
+        - _elastic_latest_raw.stdout is defined
+        - _elastic_latest_raw.stdout | trim | length > 0
+
+    - name: Show Elastic Stack version options
+      ansible.builtin.debug:
+        msg:
+          - "Pinned version:   {{ stack_version }}"
+          - "Latest available: {{ _elastic_latest }}"
+      when: _elastic_latest is defined
+
+    - name: Prompt to use latest Elastic Stack version
+      ansible.builtin.pause:
+        prompt: "Download latest ({{ _elastic_latest }}) instead of pinned ({{ stack_version }})? [y/n, Enter for yes]"
+        echo: yes
+      register: _use_latest_input
+      when:
+        - _elastic_latest is defined
+        - _elastic_latest != stack_version
+
+    - name: Update stack_version for this run
+      ansible.builtin.set_fact:
+        stack_version: "{{ _elastic_latest }}"
+      when:
+        - _elastic_latest is defined
+        - _elastic_latest != stack_version
+        - _use_latest_input.user_input | default('y') | lower in ['y', 'yes', '']
+
+    - name: Persist updated stack_version to group_vars/all.yml
+      ansible.builtin.lineinfile:
+        path: "{{ playbook_dir }}/../group_vars/all.yml"
+        regexp: '^stack_version:'
+        line: "stack_version: \"{{ stack_version }}\""
+      when:
+        - _elastic_latest is defined
+        - _elastic_latest != stack_version
+        - _use_latest_input.user_input | default('y') | lower in ['y', 'yes', '']
+
+    - name: Confirm Elastic Stack version in use
+      ansible.builtin.debug:
+        msg: "Using Elastic Stack version: {{ stack_version }}"
 
     # ── Local Docker registry ──────────────────────────────────────────────────
 

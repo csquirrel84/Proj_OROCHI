@@ -44,7 +44,7 @@ OROCHI uses exactly two machines:
 
 `fuse.yml` is the single entry point for all deployments. It:
 
-1. Runs `bootstrap_node` as a pre-task (always, before any menu choice) — this configures the orochi node to use the management box for apt, discovers NIC names from MAC addresses, and verifies the management box is reachable.
+1. Runs `bootstrap_node` as a pre-task (always, before any menu choice) — this resolves the management box IP (prompting on first run, reading `.env` on re-runs), configures the orochi node to use the management box for apt, and verifies the management box is reachable.
 2. Prompts for a single engagement password that flows into every service's authentication.
 3. Presents an interactive menu and runs the selected role chain.
 
@@ -177,9 +177,9 @@ The management box needs sufficient disk to cache all Docker image layers (appro
 
 | NIC | Purpose |
 |-----|---------|
-| Analyst NIC (MAC: `88:ae:dd:0f:d9:0e`) | Management traffic — SSH from management box, Docker pulls, apt |
-| Target NIC (MAC: `98:e7:43:22:5b:91`) | Connected to the target network. Currently also used as the packet capture interface. |
-| Future USB NIC | Dedicated packet capture (promiscuous mode). When procured, update `target_nic_mac` in `group_vars/all.yml` to its MAC. |
+| Analyst NIC | Management traffic — SSH from management box, Docker pulls, apt |
+| Target NIC | Connected to the target network. Currently also used as the packet capture interface. |
+| Future USB NIC | Dedicated packet capture (promiscuous mode). |
 
 ---
 
@@ -192,20 +192,25 @@ Management Box ──ethernet──► Orochi Node
  10.16.255.253                10.16.255.x (DHCP or static)
 ```
 
-The management box uses a dedicated ethernet port at `10.16.255.253` connected directly to the orochi node's analyst NIC. The `mgmt_box_ip` default in `group_vars/all.yml` is set to this address — no override needed for production runs.
+The management box uses a dedicated ethernet port at `10.16.255.253` connected directly to the orochi node's analyst NIC.
 
-### Development / Home Lab
+### Management Box IP Resolution
 
-```
-Management Box ──switch──► Orochi Node
- 192.168.0.24               192.168.0.200
-```
+Because the management box IP can vary (DHCP, Tailscale, different ethernet adapters), `bootstrap_node` resolves it dynamically at the start of every `fuse.yml` run:
 
-Override `mgmt_box_ip` at runtime for all dev runs:
+1. If `MGMT_BOX_IP` exists in `{{ playbook_dir }}/.env`, it is used automatically — no prompt.
+2. Otherwise, `bootstrap_node` lists all non-loopback interfaces on the **management box** (the control node) and asks you to select the one the orochi node can reach. The chosen IP is saved to `.env` and reused on the next run.
 
+To override for a specific run (dev or testing):
 ```bash
-ansible-playbook fuse.yml -e mgmt_box_ip=192.168.0.24
-ansible-playbook playbooks/prep_artefacts.yml -e mgmt_box_ip=192.168.0.24
+ansible-playbook fuse.yml -e mgmt_box_ip=100.99.102.28
+```
+
+The `-e` override takes precedence over `.env` for that run only. `.env` is not modified.
+
+For `prep_artefacts.yml`, which runs on localhost, override the same way:
+```bash
+ansible-playbook playbooks/prep_artefacts.yml -e mgmt_box_ip=100.99.102.28
 ```
 
 ### Ports the Orochi Node Needs to Reach on the Management Box
@@ -236,7 +241,7 @@ Install Ubuntu 25.10 (or 24.04 LTS) on the management laptop. During install:
 **From the Windows development machine:**
 ```powershell
 # Run from E:\Projects\Proj_OROCHI on the Windows machine
-.\orochi\push_to_mgmt.ps1 -IP 192.168.0.24 -User orochiman
+.\orochi\push_to_mgmt.ps1 -IP 100.99.102.28 -User orochiman
 ```
 
 This copies the entire project to `~/orochi/` on the management box via SCP.
@@ -349,7 +354,7 @@ This step downloads everything the orochi node will need during deployment and s
 cd ~/orochi/orochi
 
 # Development (home lab):
-ansible-playbook playbooks/prep_artefacts.yml -e mgmt_box_ip=192.168.0.24
+ansible-playbook playbooks/prep_artefacts.yml -e mgmt_box_ip=100.99.102.28
 
 # Production (management box at 10.16.255.253):
 ansible-playbook playbooks/prep_artefacts.yml
@@ -505,7 +510,7 @@ cd ~/orochi/orochi
 ansible-playbook fuse.yml
 
 # Development (override management box IP):
-ansible-playbook fuse.yml -e mgmt_box_ip=192.168.0.24
+ansible-playbook fuse.yml -e mgmt_box_ip=100.99.102.28
 ```
 
 You will be prompted to enter and confirm the **engagement password**. This password is used for every service's authentication. Choose something strong and record it securely — it cannot be retrieved after the session ends.
@@ -514,9 +519,9 @@ You will be prompted to enter and confirm the **engagement password**. This pass
 
 Before displaying the menu, `fuse.yml` always runs the `bootstrap_node` role as a pre-task. This:
 
-1. **Verifies the management box is reachable** — fails immediately if port 8888 is unreachable.
-2. **Configures apt on the orochi node** to proxy through the management box (`/etc/apt/apt.conf.d/01orochi-proxy`). All subsequent `apt-get` calls on the node go through port 3142 on the management box.
-3. **Discovers NIC names from MAC addresses** — runs `ip link | grep -B1 <mac>` for each MAC defined in `group_vars/all.yml`, sets `nic_analyst` and `capture_interface` as cacheable Ansible facts. These facts are used by Suricata, Zeek, and Arkime roles — you never need to know or specify the kernel interface name.
+1. **Resolves the management box IP** — reads `MGMT_BOX_IP` from `{{ playbook_dir }}/.env` if present. If not, it lists all non-loopback interfaces on the management box (the control node) and prompts you to select the correct one. The selected IP is saved to `.env` for future runs.
+2. **Verifies the management box is reachable** — fails immediately if port 8888 is unreachable at the resolved IP.
+3. **Configures apt on the orochi node** to proxy through the management box (`/etc/apt/apt.conf.d/01orochi-proxy`). All subsequent `apt-get` calls on the node go through port 3142 on the management box.
 
 ### 2.7 The Interactive Menu
 
@@ -958,37 +963,27 @@ sudo rm -rf /opt/orochi/<service-name>/
 
 ## Adapting for Different Hardware
 
-OROCHI is designed to be hardware-agnostic for the orochi node. The only hardware-specific values are the NIC MAC addresses.
+OROCHI is hardware-agnostic for the orochi node. No MAC addresses or interface names are hardcoded — interface selection happens interactively at deploy time.
 
 ### If the Orochi Node Is Different Hardware
 
 1. Boot the new hardware with Ubuntu Server 25.10 installed
-2. Find the MAC addresses of its NICs:
-   ```bash
-   ip link show
-   # Each interface shows link/ether <mac-address>
-   ```
-3. Decide which NIC is the analyst NIC (connected to the management box) and which is the target NIC (connected to the monitored network)
-4. Update `group_vars/all.yml`:
-   ```yaml
-   analyst_nic_mac: "<new-analyst-mac>"
-   target_nic_mac: "<new-target-mac>"
-   ```
-5. Update `inventory/hosts.yml` with the new node's IP
-6. Run `fuse.yml` — NIC names are discovered automatically at runtime
+2. Update `inventory/hosts.yml` with the new node's IP
+3. Run `fuse.yml` — the `environment` role lists available interfaces and prompts you to select the capture interface at runtime
 
-No other changes are required. All roles use `{{ capture_interface }}` which is resolved from the MAC at runtime.
+No other changes are required.
 
 ### If the Management Box Has a Different IP (Production vs Development)
 
-Production default is `10.16.255.253` (set in `group_vars/all.yml`). For development:
+`bootstrap_node` resolves the management box IP dynamically — you don't need to hardcode it. On first run it prompts you to select the interface, saves the result to `.env`, and reuses it on subsequent runs.
 
+To force a specific IP for a single run without changing `.env`:
 ```bash
-ansible-playbook fuse.yml -e mgmt_box_ip=192.168.0.24
-ansible-playbook playbooks/prep_artefacts.yml -e mgmt_box_ip=192.168.0.24
+ansible-playbook fuse.yml -e mgmt_box_ip=100.99.102.28
+ansible-playbook playbooks/prep_artefacts.yml -e mgmt_box_ip=100.99.102.28
 ```
 
-The `-e` override takes precedence over `group_vars/all.yml` for that run only. The file on disk remains unchanged.
+To re-run the IP selection prompt (e.g. the management box IP has changed), delete `MGMT_BOX_IP` from `{{ playbook_dir }}/.env` or remove the file entirely — `bootstrap_node` will prompt again on the next run.
 
 ---
 
@@ -1030,7 +1025,7 @@ ping 10.16.255.253
 **Fixes:**
 - Check the ethernet cable between the two machines
 - Start the nginx container: `docker start orochi-artifacts`
-- Verify the management box IP — if using dev, add `-e mgmt_box_ip=192.168.0.24`
+- Verify the management box IP — if using dev, add `-e mgmt_box_ip=100.99.102.28`
 
 ---
 

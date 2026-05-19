@@ -1,11 +1,11 @@
 ---
 # Sets up a fresh Ubuntu management box with everything needed to deploy Orochi.
 #
-# Bootstrap (run this once on the management box before anything else):
+# Run directly on the management box:
 #   sudo apt update && sudo apt install -y ansible
 #   ansible-playbook ~/orochi/orochi/playbooks/setup_mgmt_box.yml
 #
-# After this runs, the box is ready to run prep_for_battle.yml and Terraform.
+# After this runs, the box is ready to run prep_artefacts.yml.
 
 - name: Set up Orochi management box
   hosts: localhost
@@ -35,28 +35,6 @@
           - python3-jmespath
           - openssh-client
         state: present
-
-    # ── Terraform ──────────────────────────────────────────────────────────────
-
-    - name: Add HashiCorp GPG key
-      get_url:
-        url: https://apt.releases.hashicorp.com/gpg
-        dest: /usr/share/keyrings/hashicorp-archive-keyring.asc
-        mode: '0644'
-
-    - name: Add HashiCorp apt repository
-      apt_repository:
-        repo: >-
-          deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.asc]
-          https://apt.releases.hashicorp.com {{ ansible_distribution_release }} main
-        state: present
-        filename: hashicorp
-
-    - name: Install Terraform
-      apt:
-        name: terraform
-        state: present
-        update_cache: true
 
     # ── Docker (management box needs it to run the local registry) ────────────
 
@@ -161,14 +139,13 @@
 
     - name: Install required Ansible collections
       become: false
-      community.general.ansible_galaxy_install:
-        type: collection
-        name: "{{ item }}"
-      loop:
-        - community.crypto      # SSH key generation
-        - ansible.posix         # authorized_key, sysctl modules
-        - community.general     # misc modules
-        - community.docker      # Docker container management
+      ansible.builtin.shell: |
+        ansible-galaxy collection install \
+          community.crypto \
+          ansible.posix \
+          community.general \
+          community.docker
+      changed_when: false
 
     # ── SSH key ────────────────────────────────────────────────────────────────
 
@@ -180,40 +157,17 @@
         comment: orochi-management
         force: false
 
-    # ── Terraform provider cache dir ───────────────────────────────────────────
-
-    - name: Create Terraform plugin cache directory
-      become: false
-      file:
-        path: ~/.terraform.d/plugin-cache
-        state: directory
-        mode: '0755'
-
-    - name: Configure Terraform plugin cache
-      become: false
-      copy:
-        dest: ~/.terraformrc
-        content: |
-          plugin_cache_dir = "$HOME/.terraform.d/plugin-cache"
-        mode: '0644'
-
     # ── Done ───────────────────────────────────────────────────────────────────
 
-    - name: Print versions
+    - name: Print Ansible version
       become: false
-      command: "{{ item }}"
-      register: versions
-      loop:
-        - ansible --version
-        - terraform --version
+      command: ansible --version
+      register: ansible_ver
       changed_when: false
 
-    - name: Show installed versions
+    - name: Show Ansible version
       debug:
-        msg: "{{ item.stdout_lines[0] }}"
-      loop: "{{ versions.results }}"
-      loop_control:
-        label: "{{ item.item }}"
+        msg: "{{ ansible_ver.stdout_lines[0] }}"
 
     - name: Management box is ready
       debug:

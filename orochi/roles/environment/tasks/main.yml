@@ -52,6 +52,8 @@
     selected_ip: "{{ existing_env.stdout | regex_search('SELECTED_IP=(.+)', '\\1') | first | default('127.0.0.1', true) }}"
     arkime_password_secret: "{{ existing_env.stdout | regex_search('ARKIME_PASSWORD_SECRET=(.+)', '\\1') | first }}"
     kibana_encryption_key: "{{ existing_env.stdout | regex_search('KIBANA_ENCRYPTION_KEY=(.+)', '\\1') | first | default('', true) }}"
+    mgmt_box_ip: "{{ existing_env.stdout | regex_search('MGMT_BOX_IP=(.+)', '\\1') | first | default(mgmt_box_ip, true) }}"
+    orochi_node_ip: "{{ existing_env.stdout | regex_search('OROCHI_NODE_IP=(.+)', '\\1') | first | default(ansible_host, true) }}"
     skip_env_prompts: true
   when:
     - env_file_exists.stat.exists
@@ -368,6 +370,8 @@
       FLEET_SERVER_HOST={{ selected_ip }}
       LOCAL_KBN_URL={{ local_kbn_url }}
       SELECTED_IP={{ selected_ip }}
+      MGMT_BOX_IP={{ mgmt_box_ip }}
+      OROCHI_NODE_IP={{ ansible_host }}
       DEFAULT_TIMEOUT=300
     dest: "{{ playbook_dir }}/.env"
     mode: '0600'

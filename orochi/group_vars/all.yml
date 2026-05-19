@@ -17,7 +17,7 @@ elasticsearch:
 # MANAGEMENT BOX
 # ==============================================
 # Production: direct ethernet link 10.16.255.253
-# Override via -e mgmt_box_ip=192.168.0.24 for dev
+# Override via -e mgmt_box_ip=100.99.102.28 for dev
 mgmt_box_ip: "10.16.255.253"
 mgmt_registry_port: 5000
 mgmt_apt_proxy_port: 3142
