@@ -90,9 +90,15 @@ During install:
 
 ---
 
-### Step 3 — Copy the SSH key to the orochi node
+### Step 3 — Generate and copy the SSH key to the orochi node
 
-From the management box:
+From the management box, generate a key if you don't already have one:
+
+```bash
+ssh-keygen -t ed25519 -f ~/.ssh/orochi_id_ed25519 -C "orochi-mgmt"
+```
+
+Then copy it to the orochi node:
 
 ```bash
 ssh-copy-id -i ~/.ssh/orochi_id_ed25519.pub orochi@<node-ip>
@@ -173,6 +179,7 @@ You will be asked a few questions about the deployment. Press Enter to accept th
 - **HOME_NET CIDR** — the target network subnet, e.g. `10.0.0.0/8`
 - **IP for analyst access** — select the NIC analysts connect to
 - Velociraptor server URL — press Enter
+- **Arkime Docker tag** — select from the list of available tags (choose `v6-latest`)
 
 **f) Deployment runs**
 

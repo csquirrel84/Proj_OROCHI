@@ -346,10 +346,16 @@
             state: stopped
             enabled: no
           loop:
-            - arkimecapture
-            - arkimeviewer
             - suricata
             - zeek
+          ignore_errors: true
+          when: confirm_teardown.user_input == "YES"
+
+        - name: Tear down RITA docker-compose stack
+          ansible.builtin.shell: |
+            if [ -f /opt/rita/docker-compose.yml ]; then
+              docker compose -f /opt/rita/docker-compose.yml down -v
+            fi
           ignore_errors: true
           when: confirm_teardown.user_input == "YES"
 
@@ -360,18 +366,23 @@
           loop:
             - tool-portal
             - timesketch
+            - timesketch-worker
             - redis-timesketch
             - postgres-timesketch
             - mattermost
             - postgres-mattermost
             - cyberchef
             - velociraptor
+            - arkimecapture
+            - arkimeviewer
             - thehive
             - cassandra
             - elasticsearch-hive
             - fleet-server
             - kibana
             - elasticsearch
+            - rita-syslog-ng
+            - rita-clickhouse
           ignore_errors: true
           when: confirm_teardown.user_input == "YES"
 

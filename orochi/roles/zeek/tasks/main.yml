@@ -25,6 +25,85 @@
     creates: /etc/apt/keyrings/zeek-archive-keyring.gpg
   tags: zeek
 
+# ── Pre-create all Zeek directories and config files ──────────────────────────
+# Done before package install so dpkg can never fail on missing paths.
+# Uses facts already set by the environment role (suricata.interface etc).
+
+- name: Create Zeek directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - /opt/zeek/etc
+    - /opt/zeek/logs
+    - /opt/zeek/spool
+    - /opt/zeek/share/zeek/site
+  tags: zeek
+
+- name: Configure Zeek node.cfg
+  ansible.builtin.copy:
+    dest: /opt/zeek/etc/node.cfg
+    mode: '0644'
+    content: |
+      [zeek]
+      type=standalone
+      host=localhost
+      interface={{ suricata.interface }}
+  tags: zeek
+
+- name: Configure Zeek networks.cfg
+  ansible.builtin.copy:
+    dest: /opt/zeek/etc/networks.cfg
+    mode: '0644'
+    content: |
+      {{ suricata.home_net }}   Monitored network
+      10.0.0.0/8          Private IP space
+      172.16.0.0/12       Private IP space
+      192.168.0.0/16      Private IP space
+  tags: zeek
+
+- name: Configure zeekctl.cfg
+  ansible.builtin.copy:
+    dest: /opt/zeek/etc/zeekctl.cfg
+    mode: '0644'
+    content: |
+      MailTo = root@localhost
+      MailFrom = Zeek <zeek@localhost>
+      LogRotationInterval = 3600
+      LogExpireInterval = 0
+      StatsLogEnable = 1
+      StatsLogExpireInterval = 0
+      StatusCmdShowAll = 0
+      LogDir = /opt/zeek/logs
+      SpoolDir = /opt/zeek/spool
+      PolicyDir = /opt/zeek/share/zeek
+      SitePolicyScripts = local.zeek
+  tags: zeek
+
+- name: Create Zeek local site policy
+  ansible.builtin.copy:
+    dest: /opt/zeek/share/zeek/site/local.zeek
+    mode: '0644'
+    content: |
+      @load base/frameworks/software
+      @load base/protocols/conn
+      @load base/protocols/dns
+      @load base/protocols/http
+      @load base/protocols/ssl
+      @load base/protocols/ssh
+      @load base/protocols/ftp
+      @load base/protocols/smtp
+      @load policy/tuning/json-logs
+      @load policy/protocols/conn/known-hosts
+      @load policy/protocols/conn/known-services
+      @load policy/protocols/ssl/known-certs
+      @load frameworks/files/hash-all-files
+      redef LogAscii::use_json = T;
+  tags: zeek
+
+# ── Install ────────────────────────────────────────────────────────────────────
+
 - name: Create temp directory for Zeek debs
   ansible.builtin.file:
     path: /tmp/zeek-debs
@@ -48,9 +127,13 @@
 
 - name: Install Zeek from pre-cached packages
   ansible.builtin.shell: |
-    apt-get install -y /tmp/zeek-debs/*.deb
+    trap 'rm -f /usr/sbin/policy-rc.d' EXIT
+    echo 'exit 101' > /usr/sbin/policy-rc.d
+    chmod +x /usr/sbin/policy-rc.d
+    DEBIAN_FRONTEND=noninteractive dpkg -i --force-confold /tmp/zeek-debs/*.deb || true
   register: zeek_install
   changed_when: "'Setting up' in zeek_install.stdout"
+  failed_when: "'Setting up zeek-core' not in zeek_install.stdout"
   tags: zeek
 
 - name: Add Zeek to system PATH
@@ -61,65 +144,7 @@
     mode: '0644'
   tags: zeek
 
-- name: Configure Zeek node.cfg
-  ansible.builtin.copy:
-    dest: /opt/zeek/etc/node.cfg
-    content: |
-      [zeek]
-      type=standalone
-      host=localhost
-      interface={{ suricata.interface }}
-    mode: '0644'
-  tags: zeek
-
-- name: Configure Zeek networks.cfg
-  ansible.builtin.copy:
-    dest: /opt/zeek/etc/networks.cfg
-    content: |
-      10.0.0.0/8          Private IP space
-      172.16.0.0/12       Private IP space
-      192.168.0.0/16      Private IP space
-    mode: '0644'
-  tags: zeek
-
-- name: Configure zeekctl.cfg
-  ansible.builtin.lineinfile:
-    path: /opt/zeek/etc/zeekctl.cfg
-    regexp: "{{ item.regexp }}"
-    line: "{{ item.line }}"
-    state: present
-  loop:
-    - { regexp: '^#?\s*MailTo', line: 'MailTo = root@localhost' }
-    - { regexp: '^#?\s*LogRotationInterval', line: 'LogRotationInterval = 3600' }
-  tags: zeek
-
-- name: Create Zeek local site policy
-  ansible.builtin.copy:
-    dest: /opt/zeek/share/zeek/site/local.zeek
-    content: |
-      @load base/frameworks/software
-      @load base/protocols/conn
-      @load base/protocols/dns
-      @load base/protocols/http
-      @load base/protocols/ssl
-      @load base/protocols/ssh
-      @load base/protocols/ftp
-      @load base/protocols/smtp
-      @load policy/tuning/json-logs
-      @load policy/protocols/conn/known-hosts
-      @load policy/protocols/conn/known-services
-      @load policy/protocols/ssl/known-certs
-      @load frameworks/files/hash-all-files
-      redef LogAscii::use_json = T;
-    mode: '0644'
-  tags: zeek
-
-- name: Create Zeek log directory
-  ansible.builtin.file:
-    path: /opt/zeek/logs
-    state: directory
-    mode: '0755'
-  tags: zeek
+# ── Deploy ─────────────────────────────────────────────────────────────────────
 
 - name: Install Zeek configuration
   ansible.builtin.shell: /opt/zeek/bin/zeekctl install
@@ -138,6 +163,7 @@
 - name: Create Zeek systemd service
   ansible.builtin.copy:
     dest: /etc/systemd/system/zeek.service
+    mode: '0644'
     content: |
       [Unit]
       Description=Zeek Network Security Monitor
@@ -155,7 +181,6 @@
 
       [Install]
       WantedBy=multi-user.target
-    mode: '0644'
   tags: zeek
 
 - name: Enable and start Zeek service
@@ -179,6 +204,6 @@
   ansible.builtin.debug:
     msg:
       - "Zeek installed and running on {{ suricata.interface }}"
-      - "Logs: /var/log/zeek"
+      - "Logs: /opt/zeek/logs"
       - "{{ zeek_status.stdout_lines }}"
   tags: zeek

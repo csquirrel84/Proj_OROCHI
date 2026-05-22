@@ -12,9 +12,24 @@
   become: false
   tags: environment
 
+- name: Read existing .env for display
+  ansible.builtin.command: cat {{ playbook_dir }}/.env
+  register: _env_preview
+  delegate_to: localhost
+  become: false
+  changed_when: false
+  when: env_file_exists.stat.exists
+  tags: environment
+
+- name: Display existing configuration
+  ansible.builtin.debug:
+    msg: "{{ _env_preview.stdout_lines }}"
+  when: env_file_exists.stat.exists
+  tags: environment
+
 - name: Prompt to use existing config
   ansible.builtin.pause:
-    prompt: "Existing configuration found. Use it? (y/n) [y]"
+    prompt: "Use this configuration? (y/n) [y]"
     echo: yes
   register: use_existing_env
   when: env_file_exists.stat.exists
@@ -54,6 +69,7 @@
     kibana_encryption_key: "{{ existing_env.stdout | regex_search('KIBANA_ENCRYPTION_KEY=(.+)', '\\1') | first | default('', true) }}"
     mgmt_box_ip: "{{ existing_env.stdout | regex_search('MGMT_BOX_IP=(.+)', '\\1') | first | default(mgmt_box_ip, true) }}"
     orochi_node_ip: "{{ existing_env.stdout | regex_search('OROCHI_NODE_IP=(.+)', '\\1') | first | default(ansible_host, true) }}"
+    arkime_version: "{{ existing_env.stdout | regex_search('ARKIME_VERSION=(.+)', '\\1') | first | default(arkime_version, true) }}"
     skip_env_prompts: true
   when:
     - env_file_exists.stat.exists
@@ -94,9 +110,51 @@
   tags: environment
 
 # 3. INTERACTIVE PROMPTS (Skipped if using existing .env)
+- name: List available Elastic Stack versions from local registry
+  ansible.builtin.shell: |
+    python3 - <<'EOF'
+    import urllib.request, json, re, sys
+    try:
+        url = "http://{{ mgmt_box_ip }}:{{ mgmt_registry_port }}/v2/elasticsearch/elasticsearch/tags/list"
+        with urllib.request.urlopen(url, timeout=5) as r:
+            data = json.loads(r.read())
+        tags = data.get('tags', [])
+        stable = sorted(
+            [t for t in tags if re.match(r'^\d+\.\d+\.\d+$', t)],
+            key=lambda v: tuple(int(x) for x in v.split('.'))
+        )
+        for t in stable:
+            print(t)
+    except Exception as e:
+        sys.stderr.write("Could not query registry: " + str(e) + "\n")
+    EOF
+  register: _es_available_versions
+  changed_when: false
+  failed_when: false
+  delegate_to: localhost
+  become: false
+  when: not (skip_env_prompts | default(false))
+  tags: environment
+
+- name: Set suggested Elastic Stack version from registry
+  ansible.builtin.set_fact:
+    _es_suggested: "{{ _es_available_versions.stdout_lines | last }}"
+  when:
+    - not (skip_env_prompts | default(false))
+    - _es_available_versions.stdout_lines | default([]) | length > 0
+  tags: environment
+
+- name: Display available Elastic Stack versions
+  ansible.builtin.debug:
+    msg: "Available in registry: {{ _es_available_versions.stdout_lines }} — suggested: {{ _es_suggested | default(stack_version) }}"
+  when:
+    - not (skip_env_prompts | default(false))
+    - _es_available_versions.stdout_lines | default([]) | length > 0
+  tags: environment
+
 - name: Prompt for Elastic Stack version
   ansible.builtin.pause:
-    prompt: "Enter Elastic Stack version [latest]"
+    prompt: "Enter Elastic Stack version [{{ _es_suggested | default(stack_version) }}]"
     echo: yes
   register: stack_version_input
   when: not (skip_env_prompts | default(false))
@@ -123,6 +181,100 @@
     prompt: "Enter memory limit [8g]"
     echo: yes
   register: mem_limit_input
+  when: not (skip_env_prompts | default(false))
+  tags: environment
+
+- name: List available Arkime Docker tags from local registry
+  ansible.builtin.shell: |
+    python3 - <<'EOF'
+    import urllib.request, json, sys
+    try:
+        url = "http://{{ mgmt_box_ip }}:{{ mgmt_registry_port }}/v2/arkime/arkime/tags/list"
+        with urllib.request.urlopen(url, timeout=5) as r:
+            data = json.loads(r.read())
+        for t in data.get('tags', []):
+            print(t)
+    except Exception as e:
+        sys.stderr.write("Could not query registry: " + str(e) + "\n")
+    EOF
+  register: _arkime_available_tags
+  changed_when: false
+  failed_when: false
+  delegate_to: localhost
+  become: false
+  when: not (skip_env_prompts | default(false))
+  tags: environment
+
+- name: Set suggested Arkime tag from registry
+  ansible.builtin.set_fact:
+    _arkime_suggested: "{{ _arkime_available_tags.stdout_lines | last }}"
+  when:
+    - not (skip_env_prompts | default(false))
+    - _arkime_available_tags.stdout_lines | default([]) | length > 0
+  tags: environment
+
+- name: Display available Arkime Docker tags
+  ansible.builtin.debug:
+    msg: "Arkime tags in registry: {{ _arkime_available_tags.stdout_lines }} — suggested: {{ _arkime_suggested | default(arkime_version) }}"
+  when:
+    - not (skip_env_prompts | default(false))
+    - _arkime_available_tags.stdout_lines | default([]) | length > 0
+  tags: environment
+
+- name: Prompt for Arkime Docker tag
+  ansible.builtin.pause:
+    prompt: "Enter Arkime Docker tag [{{ _arkime_suggested | default(arkime_version) }}]"
+    echo: yes
+  register: arkime_version_input
+  when: not (skip_env_prompts | default(false))
+  tags: environment
+
+- name: Get Velociraptor version from artifact server
+  ansible.builtin.uri:
+    url: "http://{{ mgmt_box_ip }}:{{ mgmt_artifact_port }}/velociraptor-version.txt"
+    return_content: true
+    timeout: 5
+  register: _velox_version_file
+  failed_when: false
+  changed_when: false
+  delegate_to: localhost
+  become: false
+  when: not (skip_env_prompts | default(false))
+  tags: environment
+
+- name: Get Suricata version from artifact server
+  ansible.builtin.uri:
+    url: "http://{{ mgmt_box_ip }}:{{ mgmt_artifact_port }}/suricata-version.txt"
+    return_content: true
+    timeout: 5
+  register: _suricata_version_file
+  failed_when: false
+  changed_when: false
+  delegate_to: localhost
+  become: false
+  when: not (skip_env_prompts | default(false))
+  tags: environment
+
+- name: Get Zeek version from artifact server
+  ansible.builtin.uri:
+    url: "http://{{ mgmt_box_ip }}:{{ mgmt_artifact_port }}/zeek-version.txt"
+    return_content: true
+    timeout: 5
+  register: _zeek_version_file
+  failed_when: false
+  changed_when: false
+  delegate_to: localhost
+  become: false
+  when: not (skip_env_prompts | default(false))
+  tags: environment
+
+- name: Display bare-metal tool versions cached for deployment
+  ansible.builtin.debug:
+    msg:
+      - "Bare-metal tools cached for deployment:"
+      - "  Velociraptor: {{ _velox_version_file.content | default('unknown') | trim }}"
+      - "  Suricata:     {{ _suricata_version_file.content | default('unknown') | trim }}"
+      - "  Zeek:         {{ _zeek_version_file.content | default('unknown') | trim }}"
   when: not (skip_env_prompts | default(false))
   tags: environment
 
@@ -272,7 +424,8 @@
     # =========================
     # CORE STACK VARIABLES
     # =========================
-    stack_version: "{{ stack_version_input.user_input | default(stack_version, true) }}"
+    stack_version: "{{ stack_version_input.user_input | default(_es_suggested | default(stack_version), true) }}"
+    arkime_version: "{{ arkime_version_input.user_input | default(_arkime_suggested | default(arkime_version), true) }}"
     cluster_name: "{{ cluster_name_input.user_input | default('orochi', true) }}"
     license: "{{ license_input.user_input | default('basic', true) }}"
     mem_limit: "{{ mem_limit_input.user_input | default('4g', true) }}"
@@ -372,6 +525,7 @@
       SELECTED_IP={{ selected_ip }}
       MGMT_BOX_IP={{ mgmt_box_ip }}
       OROCHI_NODE_IP={{ ansible_host }}
+      ARKIME_VERSION={{ arkime_version }}
       DEFAULT_TIMEOUT=300
     dest: "{{ playbook_dir }}/.env"
     mode: '0600'

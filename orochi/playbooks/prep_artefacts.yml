@@ -46,10 +46,10 @@
         local: "timesketch/timesketch:{{ timesketch_version }}"
       - src: "redis:{{ redis_version }}"
         local: "redis:{{ redis_version }}"
+      - src: "ghcr.io/arkime/arkime/arkime:{{ arkime_version }}"
+        local: "arkime/arkime:{{ arkime_version }}"
 
     binary_artifacts:
-      - url: "https://github.com/arkime/arkime/releases/download/v{{ arkime_version }}/arkime_{{ arkime_version }}-1.ubuntu2404_amd64.deb"
-        dest: "arkime_{{ arkime_version }}.deb"
       - url: "https://github.com/activecm/rita/releases/download/{{ rita_version }}/rita-{{ rita_version }}.tar.gz"
         dest: "rita-{{ rita_version }}.tar.gz"
       - url: "https://download.opensuse.org/repositories/security:/zeek/xUbuntu_24.04/Release.key"
@@ -69,7 +69,7 @@
         - "{{ artifacts_dir }}/suricata-debs"
         - "{{ registry_data_dir }}"
 
-    # ── Elastic Stack version check ────────────────────────────────────────────
+    # ── Elastic Stack version selection ───────────────────────────────────────
 
     - name: Check latest Elastic Stack version
       ansible.builtin.uri:
@@ -104,43 +104,55 @@
         - _elastic_latest_raw.stdout is defined
         - _elastic_latest_raw.stdout | trim | length > 0
 
-    - name: Show Elastic Stack version options
+    - name: Warn if version detection failed
       ansible.builtin.debug:
-        msg:
-          - "Pinned version:   {{ stack_version }}"
-          - "Latest available: {{ _elastic_latest }}"
-      when: _elastic_latest is defined
+        msg: "WARNING: Could not detect latest Elastic Stack version from API — you will be prompted."
+      when: _elastic_latest is not defined
 
-    - name: Prompt to use latest Elastic Stack version
+    - name: Prompt — use detected latest version?
       ansible.builtin.pause:
-        prompt: "Download latest ({{ _elastic_latest }}) instead of pinned ({{ stack_version }})? [y/n, Enter for yes]"
+        prompt: "Found latest Elastic Stack {{ _elastic_latest }}. Use this? [Y/n]"
         echo: yes
       register: _use_latest_input
-      when:
-        - _elastic_latest is defined
-        - _elastic_latest != stack_version
+      when: _elastic_latest is defined
 
-    - name: Update stack_version for this run
+    - name: Prompt — enter Elastic Stack version manually
+      ansible.builtin.pause:
+        prompt: "Enter Elastic Stack version to download [{{ stack_version }}]"
+        echo: yes
+      register: _manual_version_input
+      when: >-
+        (_elastic_latest is not defined) or
+        ((_use_latest_input | default({})).user_input | default('') | lower in ['n', 'no'])
+
+    - name: Set final Elastic Stack version
       ansible.builtin.set_fact:
-        stack_version: "{{ _elastic_latest }}"
-      when:
-        - _elastic_latest is defined
-        - _elastic_latest != stack_version
-        - _use_latest_input.user_input | default('y') | lower in ['y', 'yes', '']
+        stack_version: >-
+          {%- set _decline = (_use_latest_input | default({})).user_input | default('') | lower in ['n', 'no'] -%}
+          {%- set _manual  = (_manual_version_input | default({})).user_input | default('') | trim -%}
+          {%- if _elastic_latest is defined and not _decline -%}
+            {{ _elastic_latest }}
+          {%- elif _manual | length > 0 -%}
+            {{ _manual }}
+          {%- else -%}
+            {{ stack_version }}
+          {%- endif -%}
 
-    - name: Persist updated stack_version to group_vars/all.yml
+    - name: Persist stack_version to group_vars/all.yml
       ansible.builtin.lineinfile:
         path: "{{ playbook_dir }}/../group_vars/all.yml"
         regexp: '^stack_version:'
         line: "stack_version: \"{{ stack_version }}\""
-      when:
-        - _elastic_latest is defined
-        - _elastic_latest != stack_version
-        - _use_latest_input.user_input | default('y') | lower in ['y', 'yes', '']
 
     - name: Confirm Elastic Stack version in use
       ansible.builtin.debug:
         msg: "Using Elastic Stack version: {{ stack_version }}"
+
+    # ── Arkime Docker image tag ────────────────────────────────────────────────
+
+    - name: Confirm Arkime Docker image tag in use
+      ansible.builtin.debug:
+        msg: "Arkime Docker image: ghcr.io/arkime/arkime/arkime:{{ arkime_version }}"
 
     # ── Local Docker registry ──────────────────────────────────────────────────
 
@@ -215,12 +227,22 @@
             | first
           }}
 
+    - name: Extract Velociraptor version from release tag
+      ansible.builtin.set_fact:
+        velox_version: "{{ velox_release.json.tag_name | regex_replace('^v', '') }}"
+
     - name: Download Velociraptor binary
       ansible.builtin.get_url:
         url: "{{ velox_download_url }}"
         dest: "{{ artifacts_dir }}/velociraptor-linux-amd64"
         mode: '0755'
         force: false
+
+    - name: Write Velociraptor version file
+      ansible.builtin.copy:
+        content: "{{ velox_version }}\n"
+        dest: "{{ artifacts_dir }}/velociraptor-version.txt"
+        mode: '0644'
 
     # ── Docker .deb packages ───────────────────────────────────────────────────
 
@@ -271,8 +293,23 @@
         apt-get update -qq
         apt-get install -y --reinstall --download-only \
           -o Dir::Cache::Archives={{ artifacts_dir }}/zeek-debs \
-          zeek
+          zeek-core zeekctl zeek-client zeek-btest zeek-btest-data
       changed_when: true
+
+    - name: Detect downloaded Zeek version
+      ansible.builtin.shell: |
+        FILE=$(ls {{ artifacts_dir }}/zeek-debs/zeek-core_*.deb 2>/dev/null | head -1)
+        [ -n "$FILE" ] && dpkg-deb -f "$FILE" Version || echo ""
+      register: _zeek_version_raw
+      changed_when: false
+      failed_when: false
+
+    - name: Write Zeek version file
+      ansible.builtin.copy:
+        content: "{{ _zeek_version_raw.stdout | trim }}\n"
+        dest: "{{ artifacts_dir }}/zeek-version.txt"
+        mode: '0644'
+      when: _zeek_version_raw.stdout | trim | length > 0
 
     - name: Create Zeek debs tarball
       ansible.builtin.shell: |
@@ -287,38 +324,29 @@
         apt-get update -qq
         apt-get install -y --reinstall --download-only \
           -o Dir::Cache::Archives={{ artifacts_dir }}/suricata-debs \
-          suricata jq
+          suricata jq \
+          libevent-2.1-7t64 libevent-core-2.1-7t64 libevent-pthreads-2.1-7t64
       changed_when: true
+
+    - name: Detect downloaded Suricata version
+      ansible.builtin.shell: |
+        FILE=$(ls {{ artifacts_dir }}/suricata-debs/suricata_*.deb 2>/dev/null | head -1)
+        [ -n "$FILE" ] && dpkg-deb -f "$FILE" Version || echo ""
+      register: _suricata_version_raw
+      changed_when: false
+      failed_when: false
+
+    - name: Write Suricata version file
+      ansible.builtin.copy:
+        content: "{{ _suricata_version_raw.stdout | trim }}\n"
+        dest: "{{ artifacts_dir }}/suricata-version.txt"
+        mode: '0644'
+      when: _suricata_version_raw.stdout | trim | length > 0
 
     - name: Create Suricata debs tarball
       ansible.builtin.shell: |
         tar -czf {{ artifacts_dir }}/suricata-debs.tar.gz \
           -C {{ artifacts_dir }} suricata-debs/
-      changed_when: true
-
-    # ── Arkime runtime dependencies ───────────────────────────────────────────
-    # Let apt resolve the full transitive dep tree from the actual .deb so
-    # nothing is missed. The .deb was already downloaded above as a binary
-    # artifact; we reuse that path here.
-
-    - name: Create Arkime deps directory
-      ansible.builtin.file:
-        path: "{{ artifacts_dir }}/arkime-deps"
-        state: directory
-        mode: '0755'
-
-    - name: Download all Arkime runtime deps via apt dep resolution
-      ansible.builtin.shell: |
-        apt-get update -qq
-        apt-get install -y --download-only \
-          -o Dir::Cache::Archives={{ artifacts_dir }}/arkime-deps \
-          {{ artifacts_dir }}/arkime_{{ arkime_version }}.deb
-      changed_when: true
-
-    - name: Create Arkime deps tarball
-      ansible.builtin.shell: |
-        tar -czf {{ artifacts_dir }}/arkime-deps.tar.gz \
-          -C {{ artifacts_dir }} arkime-deps/
       changed_when: true
 
     # ── RITA Docker images ────────────────────────────────────────────────────
@@ -457,6 +485,7 @@
         - "nginx"
         - "timesketch/timesketch"
         - "redis"
+        - "arkime/arkime"
       loop_control:
         label: "{{ item }}"
 
@@ -466,14 +495,15 @@
       register: artifact_stat
       failed_when: not artifact_stat.stat.exists
       loop:
-        - "arkime_{{ arkime_version }}.deb"
         - "velociraptor-linux-amd64"
+        - "velociraptor-version.txt"
+        - "zeek-version.txt"
+        - "suricata-version.txt"
         - "rita-{{ rita_version }}.tar.gz"
         - "docker-debs.tar.gz"
         - "zeek-debs.tar.gz"
         - "suricata-debs.tar.gz"
         - "suricata-rules.tar.gz"
-        - "arkime-deps.tar.gz"
         - "zeek-release.key"
       loop_control:
         label: "{{ item }}"

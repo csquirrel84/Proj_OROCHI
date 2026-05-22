@@ -38,7 +38,7 @@ mattermost_version: "latest"
 postgres_version: "15-alpine"
 portal_version: "alpine"
 rita_version: "v5.1.1"
-arkime_version: "5.8.3"
+arkime_version: "v6-latest"
 timesketch_version: "latest"
 redis_version: "7-alpine"
 
@@ -61,6 +61,7 @@ images:
   nginx:              "{{ mgmt_box_ip }}:{{ mgmt_registry_port }}/nginx:{{ portal_version }}"
   timesketch:         "{{ mgmt_box_ip }}:{{ mgmt_registry_port }}/timesketch/timesketch:{{ timesketch_version }}"
   redis:              "{{ mgmt_box_ip }}:{{ mgmt_registry_port }}/redis:{{ redis_version }}"
+  arkime:             "{{ mgmt_box_ip }}:{{ mgmt_registry_port }}/arkime/arkime:{{ arkime_version }}"
 
 
 # ==============================================
@@ -75,6 +76,7 @@ ports:
   velociraptor_frontend: 8000
   velociraptor_api: 8001
   arkime: 8005
+  arkime_capture: 8006
   cyberchef: 8080
   mattermost: 8065
   timesketch: 5000

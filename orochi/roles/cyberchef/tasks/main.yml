@@ -19,7 +19,7 @@
     networks:
       - name: "{{ orochi_network_name }}"
     ports:
-      - "{{ ports.cyberchef }}:80"
+      - "{{ ports.cyberchef }}:{{ ports.cyberchef }}"
   tags: cyberchef
 
 - name: Display CyberChef status
