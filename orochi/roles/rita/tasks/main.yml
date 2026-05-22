@@ -52,17 +52,42 @@
   changed_when: true
   tags: rita
 
-- name: Copy RITA config files to /etc
-  ansible.builtin.shell: |
-    if [ -d "/tmp/rita-{{ rita_version }}-installer/files/etc" ]; then
-      mkdir -p /etc/rita
-      cp -rn /tmp/rita-{{ rita_version }}-installer/files/etc/. /etc/
-      echo "copied"
-    else
-      echo "no /etc files in installer"
-    fi
-  changed_when: "'copied' in rita_etc_copy.stdout"
-  register: rita_etc_copy
+- name: Create RITA config directory
+  ansible.builtin.file:
+    path: /etc/rita
+    state: directory
+    mode: '0755'
+  tags: rita
+
+- name: Remove any misplaced config directories
+  ansible.builtin.file:
+    path: "/etc/rita/{{ item }}"
+    state: absent
+  loop:
+    - config.hjson
+    - config.xml
+    - http_extensions_list.csv
+    - syslog-ng.conf
+  tags: rita
+
+- name: Copy RITA config files to /etc/rita
+  ansible.builtin.copy:
+    src: "/tmp/rita-{{ rita_version }}-installer/files/etc/{{ item }}"
+    dest: "/etc/rita/{{ item }}"
+    remote_src: true
+    mode: '0644'
+  loop:
+    - config.hjson
+    - config.xml
+    - http_extensions_list.csv
+    - syslog-ng.conf
+  tags: rita
+
+- name: Copy RITA threat intel feeds directory
+  ansible.builtin.copy:
+    src: "/tmp/rita-{{ rita_version }}-installer/files/etc/threat_intel_feeds"
+    dest: /etc/rita/
+    remote_src: true
   tags: rita
 
 # ── Patch image refs and strip build directive ────────────────────────────────
@@ -87,6 +112,10 @@
       patched = re.sub(r'image:\s+(\S+)', repl, content)
       # Strip build: lines (no Dockerfile on orochi node)
       patched = re.sub(r'^\s*build:.*\n', '', patched, flags=re.MULTILINE)
+      # Add pull_policy: never so containers never attempt to reach the registry at runtime
+      def add_pull_policy(m):
+          return m.group(0) + '\n' + m.group(1) + 'pull_policy: never'
+      patched = re.sub(r'^( +)image: .+$', add_pull_policy, patched, flags=re.MULTILINE)
       open(path, 'w').write(patched)
       print(patched)
     mode: '0755'
@@ -114,6 +143,38 @@
     docker compose pull
   changed_when: true
   register: rita_pull
+  tags: rita
+
+- name: Install rita wrapper at /usr/local/bin/rita
+  ansible.builtin.copy:
+    dest: /usr/local/bin/rita
+    mode: '0755'
+    content: |
+      #!/bin/bash
+      set -e
+      COMPOSE="/opt/rita/docker-compose.yml"
+      LOGS=""
+      DOCKER_ARGS=("--rm")
+      RITA_ARGS=()
+
+      # Parse --logs/-l from args, mount the directory into the container
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          -l|--logs)
+            LOGS=$(realpath "$2"); shift 2
+            RITA_ARGS+=("--logs=/tmp/zeek_logs")
+            ;;
+          -l=*|--logs=*)
+            LOGS=$(realpath "${1#*=}"); shift
+            RITA_ARGS+=("--logs=/tmp/zeek_logs")
+            ;;
+          *) RITA_ARGS+=("$1"); shift ;;
+        esac
+      done
+
+      [[ -n "$LOGS" ]] && DOCKER_ARGS+=("--volume" "$LOGS:/tmp/zeek_logs")
+
+      exec docker compose -f "$COMPOSE" run "${DOCKER_ARGS[@]}" rita "${RITA_ARGS[@]}"
   tags: rita
 
 - name: Start RITA docker-compose stack
@@ -150,8 +211,8 @@
       - "Container status:"
       - "{{ rita_ps.stdout_lines | default([]) }}"
       - ""
-      - "Usage (run from /opt/rita):"
-      - "  docker compose exec rita rita import --database=<name> /zeek/logs/current"
-      - "  docker compose exec rita rita view <name>"
-      - "  docker compose exec rita rita html-report <name>"
+      - "Usage:"
+      - "  rita import --database=<name> /opt/zeek/logs/current"
+      - "  rita view <name>"
+      - "  rita html-report <name>"
   tags: rita
