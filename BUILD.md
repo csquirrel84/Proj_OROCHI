@@ -35,7 +35,7 @@ OROCHI uses exactly two machines:
 **Management box** (your laptop) — the Ansible control node. Before going on-site, it downloads every Docker image, every `.deb` package, every binary, and every Suricata rule file. On-site, it runs three server processes that the orochi node uses as its sole source for all software:
 
 - **Docker registry** (port 5000) — serves all Docker images locally. Every image the orochi node pulls comes from here, not the internet.
-- **Nginx artifact server** (port 8888) — serves binary files: Velociraptor executable, Arkime `.deb`, RITA tarball, Suricata and Zeek `.deb` tarballs, Zeek GPG key, Suricata rules archive.
+- **Nginx artifact server** (port 8888) — serves binary files: Velociraptor executable, RITA tarball, Suricata and Zeek `.deb` tarballs, Zeek GPG key, Suricata rules archive.
 - **apt-cacher-ng** (port 3142) — transparent apt proxy. When the orochi node runs `apt-get install`, it routes through the management box cache instead of hitting the internet.
 
 **Orochi node** (the deployment target) — a bare-metal Ubuntu Server that pulls everything from the management box and runs the full security stack. It requires zero internet access during or after deployment.
@@ -44,7 +44,7 @@ OROCHI uses exactly two machines:
 
 `fuse.yml` is the single entry point for all deployments. It:
 
-1. Runs `bootstrap_node` as a pre-task (always, before any menu choice) — this configures the orochi node to use the management box for apt, discovers NIC names from MAC addresses, and verifies the management box is reachable.
+1. Runs `bootstrap_node` as a pre-task (always, before any menu choice) — this resolves the management box IP (prompting on first run, reading `.env` on re-runs), configures the orochi node to use the management box for apt, and verifies the management box is reachable.
 2. Prompts for a single engagement password that flows into every service's authentication.
 3. Presents an interactive menu and runs the selected role chain.
 
@@ -91,12 +91,12 @@ This means you only have one credential to manage per engagement. **TheHive is t
 │  └─────────────────────────┘   │       │  Timesketch (5000)               │
 │                                 │       │  Redis (Timesketch)              │
 │  Ansible control node           │       │  PostgreSQL (Timesketch)         │
-│  Runs all playbooks against     │       │  nginx-portal (80)               │
-│  the orochi node via SSH        │       │                                  │
-└─────────────────────────────────┘       │  Bare metal (systemd):           │
+│  Runs all playbooks against     │       │  Arkime capture + viewer (8005)  │
+│  the orochi node via SSH        │       │  nginx-portal (80)               │
+└─────────────────────────────────┘       │                                  │
+                                          │  Bare metal (systemd):           │
                                           │  Suricata IDS                    │
                                           │  Zeek NSM                        │
-                                          │  Arkime (PCAP, 8005)             │
                                           │                                  │
                                           │  Docker compose (/opt/rita):     │
                                           │  RITA + ClickHouse + syslog-ng   │
@@ -105,7 +105,9 @@ This means you only have one credential to manage per engagement. **TheHive is t
 
 ### Docker Network
 
-All containers share a single bridge network named `orochi-network`. This allows containers to reach each other by container name (e.g. Arkime refers to Elasticsearch as `elasticsearch:9200`). The network is created by the `common` role before any containers are started.
+All containers share a single bridge network named `orochi-network`. This allows containers to reach each other by container name (e.g. Kibana reaches Elasticsearch as `elasticsearch:9200`). The network is created by the `common` role before any containers are started.
+
+> **Arkime exception:** Arkime's capture and viewer containers run with `--network host` rather than on `orochi-network`. Host networking is required so the capture container can see all physical interfaces on the node in promiscuous mode. Arkime reaches Elasticsearch at `localhost:9200`.
 
 ### Data Persistence
 
@@ -170,16 +172,16 @@ The management box needs sufficient disk to cache all Docker image layers (appro
 - Mattermost + PostgreSQL: ~1.5 GB
 - Suricata (bare metal): ~1–2 GB (scales with rule count)
 - Zeek (bare metal): ~512 MB
-- Arkime (bare metal): ~1 GB
+- Arkime capture + viewer (Docker): ~1 GB
 - **Total:** approximately 20–22 GB active use. 32 GB is the practical minimum; 64 GB is comfortable.
 
 **NIC roles:**
 
 | NIC | Purpose |
 |-----|---------|
-| Analyst NIC (MAC: `88:ae:dd:0f:d9:0e`) | Management traffic — SSH from management box, Docker pulls, apt |
-| Target NIC (MAC: `98:e7:43:22:5b:91`) | Connected to the target network. Currently also used as the packet capture interface. |
-| Future USB NIC | Dedicated packet capture (promiscuous mode). When procured, update `target_nic_mac` in `group_vars/all.yml` to its MAC. |
+| Analyst NIC | Management traffic — SSH from management box, Docker pulls, apt |
+| Target NIC | Connected to the target network. Currently also used as the packet capture interface. |
+| Future USB NIC | Dedicated packet capture (promiscuous mode). |
 
 ---
 
@@ -192,20 +194,25 @@ Management Box ──ethernet──► Orochi Node
  10.16.255.253                10.16.255.x (DHCP or static)
 ```
 
-The management box uses a dedicated ethernet port at `10.16.255.253` connected directly to the orochi node's analyst NIC. The `mgmt_box_ip` default in `group_vars/all.yml` is set to this address — no override needed for production runs.
+The management box uses a dedicated ethernet port at `10.16.255.253` connected directly to the orochi node's analyst NIC.
 
-### Development / Home Lab
+### Management Box IP Resolution
 
-```
-Management Box ──switch──► Orochi Node
- 192.168.0.24               192.168.0.200
-```
+Because the management box IP can vary (DHCP, Tailscale, different ethernet adapters), `bootstrap_node` resolves it dynamically at the start of every `fuse.yml` run:
 
-Override `mgmt_box_ip` at runtime for all dev runs:
+1. If `MGMT_BOX_IP` exists in `{{ playbook_dir }}/.env`, it is used automatically — no prompt.
+2. Otherwise, `bootstrap_node` lists all non-loopback interfaces on the **management box** (the control node) and asks you to select the one the orochi node can reach. The chosen IP is saved to `.env` and reused on the next run.
 
+To override for a specific run (dev or testing):
 ```bash
-ansible-playbook fuse.yml -e mgmt_box_ip=192.168.0.24
-ansible-playbook playbooks/prep_artefacts.yml -e mgmt_box_ip=192.168.0.24
+ansible-playbook fuse.yml -e mgmt_box_ip=100.99.102.28
+```
+
+The `-e` override takes precedence over `.env` for that run only. `.env` is not modified.
+
+For `prep_artefacts.yml`, which runs on localhost, override the same way:
+```bash
+ansible-playbook playbooks/prep_artefacts.yml -e mgmt_box_ip=100.99.102.28
 ```
 
 ### Ports the Orochi Node Needs to Reach on the Management Box
@@ -214,7 +221,7 @@ ansible-playbook playbooks/prep_artefacts.yml -e mgmt_box_ip=192.168.0.24
 |------|---------|----------|
 | 3142 | apt-cacher-ng | All `apt-get install` calls on the orochi node |
 | 5000 | Docker registry | All Docker image pulls |
-| 8888 | nginx artifact server | Binary files (.deb tarballs, Velociraptor, RITA, Arkime, rules) |
+| 8888 | nginx artifact server | Binary files (.deb tarballs, Velociraptor, RITA, rules) |
 
 If any of these three are unreachable, deployment will fail. `bootstrap_node` checks port 8888 at the start of every fuse.yml run.
 
@@ -236,7 +243,7 @@ Install Ubuntu 25.10 (or 24.04 LTS) on the management laptop. During install:
 **From the Windows development machine:**
 ```powershell
 # Run from E:\Projects\Proj_OROCHI on the Windows machine
-.\orochi\push_to_mgmt.ps1 -IP 192.168.0.24 -User orochiman
+.\orochi\push_to_mgmt.ps1 -IP 100.99.102.28 -User orochiman
 ```
 
 This copies the entire project to `~/orochi/` on the management box via SCP.
@@ -349,7 +356,7 @@ This step downloads everything the orochi node will need during deployment and s
 cd ~/orochi/orochi
 
 # Development (home lab):
-ansible-playbook playbooks/prep_artefacts.yml -e mgmt_box_ip=192.168.0.24
+ansible-playbook playbooks/prep_artefacts.yml -e mgmt_box_ip=100.99.102.28
 
 # Production (management box at 10.16.255.253):
 ansible-playbook playbooks/prep_artefacts.yml
@@ -361,7 +368,7 @@ The playbook runs entirely on `localhost` (the management box). It:
 
 1. **Starts the local Docker registry** at `localhost:5000` (or confirms it's running).
 2. **Pulls Docker images** from their upstream sources (docker.elastic.co, Docker Hub, GitHub Container Registry, Google Artifact Registry) and pushes them all into the local registry under the paths `group_vars/all.yml` references. The orochi node never contacts any upstream registry — it only talks to the management box registry.
-3. **Downloads binary artefacts** (Arkime `.deb`, RITA tarball, Zeek signing key) via direct URL.
+3. **Downloads binary artefacts** (RITA tarball, Zeek signing key) via direct URL.
 4. **Resolves the latest Velociraptor release** from the GitHub API and downloads the `linux-amd64` binary.
 5. **Downloads Docker CE `.deb` packages** using `apt-get --download-only --reinstall` (the `--reinstall` flag is required — without it, apt skips packages that are already installed at the current version, and nothing gets downloaded).
 6. **Downloads Zeek `.deb` packages** the same way, after adding the Zeek OpenSUSE apt repository.
@@ -382,19 +389,19 @@ The playbook runs entirely on `localhost` (the management box). It:
 │   ├── zeek-debs.tar.gz            ← tarball of above
 │   ├── suricata-debs/              ← Suricata .deb files (directory)
 │   ├── suricata-debs.tar.gz        ← tarball of above
-│   ├── arkime-deps/                ← Arkime runtime dep .deb files (39 packages)
-│   ├── arkime-deps.tar.gz          ← tarball of above
 │   ├── suricata-rules.tar.gz       ← ET Open rules from suricata-update
-│   ├── arkime_5.8.3.deb
 │   ├── velociraptor-linux-amd64
 │   ├── rita-v5.1.1.tar.gz          ← RITA installer (docker-compose stack + config)
 │   └── zeek-release.key
 └── registry/                       ← Docker layer blobs
     ├── docker/registry/v2/...      ← all tool images
+    ├── ...arkime/...               ← Arkime capture + viewer image (arkime/arkime:v6-latest)
     └── ...rita/...                 ← RITA + ClickHouse + syslog-ng images
 ```
 
 > **RITA images** are stored in the registry under the `rita/` namespace (e.g. `<mgmt-ip>:5000/rita/rita:v5.1.1`, `<mgmt-ip>:5000/rita/clickhouse-server:24.x`). They are discovered automatically from the RITA installer's `docker-compose.yml` during `prep_artefacts.yml`.
+
+> **Arkime image** is pulled from `ghcr.io/arkime/arkime/arkime:v6-latest` (GitHub Container Registry) and stored locally as `<mgmt-ip>:5000/arkime/arkime:v6-latest`. A single image is used for both the capture and viewer containers — the behaviour is selected by passing `capture` or `viewer` as the container command.
 
 ### Verifying the Cache
 
@@ -432,7 +439,7 @@ stack_version: "9.3.4"          # Elasticsearch + Kibana + Fleet Agent
 elasticsearch_hive_version: "7.17.9"   # ES for TheHive (must stay 7.x)
 thehive_version: "4.1.19"
 cassandra_version: "4.0"
-arkime_version: "5.8.3"
+arkime_version: "v6-latest"
 rita_version: "v5.1.1"
 postgres_version: "15-alpine"
 redis_version: "7-alpine"
@@ -505,7 +512,7 @@ cd ~/orochi/orochi
 ansible-playbook fuse.yml
 
 # Development (override management box IP):
-ansible-playbook fuse.yml -e mgmt_box_ip=192.168.0.24
+ansible-playbook fuse.yml -e mgmt_box_ip=100.99.102.28
 ```
 
 You will be prompted to enter and confirm the **engagement password**. This password is used for every service's authentication. Choose something strong and record it securely — it cannot be retrieved after the session ends.
@@ -514,9 +521,9 @@ You will be prompted to enter and confirm the **engagement password**. This pass
 
 Before displaying the menu, `fuse.yml` always runs the `bootstrap_node` role as a pre-task. This:
 
-1. **Verifies the management box is reachable** — fails immediately if port 8888 is unreachable.
-2. **Configures apt on the orochi node** to proxy through the management box (`/etc/apt/apt.conf.d/01orochi-proxy`). All subsequent `apt-get` calls on the node go through port 3142 on the management box.
-3. **Discovers NIC names from MAC addresses** — runs `ip link | grep -B1 <mac>` for each MAC defined in `group_vars/all.yml`, sets `nic_analyst` and `capture_interface` as cacheable Ansible facts. These facts are used by Suricata, Zeek, and Arkime roles — you never need to know or specify the kernel interface name.
+1. **Resolves the management box IP** — reads `MGMT_BOX_IP` from `{{ playbook_dir }}/.env` if present. If not, it lists all non-loopback interfaces on the management box (the control node) and prompts you to select the correct one. The selected IP is saved to `.env` for future runs.
+2. **Verifies the management box is reachable** — fails immediately if port 8888 is unreachable at the resolved IP.
+3. **Configures apt on the orochi node** to proxy through the management box (`/etc/apt/apt.conf.d/01orochi-proxy`). All subsequent `apt-get` calls on the node go through port 3142 on the management box.
 
 ### 2.7 The Interactive Menu
 
@@ -663,22 +670,33 @@ Once you see `Engine started.`, Suricata is live. Subsequent restarts are fast (
 
 ### Option 7 — Deploy Arkime
 
-Installs Arkime full packet capture on bare metal.
+Deploys Arkime full packet capture as Docker containers (official `arkime/arkime` image).
 
-**What it deploys:** Arkime runs as two bare-metal systemd services (`arkimecapture` and `arkimeviewer`). The role:
-1. Downloads `arkime_<version>.deb` from the artifact server and installs
-2. Configures Arkime to capture on `{{ capture_interface }}` and index sessions into Elasticsearch
-3. Creates the Elasticsearch index templates via `arkime_add_aws_config`
-4. Creates the admin user via `arkime_add_user`
-5. Starts both capture and viewer services
+**What it deploys:** Two containers from the same image, both with `--network host` and `NET_ADMIN`/`NET_RAW` capabilities so they can see host interfaces in promiscuous mode:
+- `arkimecapture` — captures packets on `{{ capture_interface }}` and indexes session metadata into Elasticsearch
+- `arkimeviewer` — web UI for searching sessions and retrieving PCAP (port 8005)
 
-**Elasticsearch dependency:** Arkime stores session metadata in the main Elasticsearch 9.x instance. Elastic Stack (option 2) must be running before deploying Arkime, or use option 7 which automatically includes it.
+The role:
+1. Creates the PCAP directory (`/opt/orochi/arkime/raw/`) owned by `nobody:daemon`
+2. Waits for Elasticsearch to be healthy
+3. Initialises Arkime's Elasticsearch index templates via a one-shot `docker run --rm` call to `db.pl init`
+4. Configures index lifecycle management (1-day rotation, 30-day retention)
+5. Creates the admin user via `arkime_add_user.sh`
+6. Applies a priority-600 Elasticsearch index template to ensure `firstPacket`/`lastPacket` are mapped as `date` (not `long`) on ES 9.x
+7. Starts the `arkimecapture` and `arkimeviewer` containers
+8. Waits for the viewer to respond on port 8005; prints container logs if it fails
 
-**GeoIP note:** Arkime's GeoIP database enrichment (`geoipupdate`) requires internet. The deployment sets `failed_when: false` for this step so offline deployment succeeds, but sessions will not have country or ASN information.
+**Elasticsearch dependency:** Arkime indexes session metadata into the main Elasticsearch 9.x instance. Elastic Stack (option 2) must be running before deploying Arkime. Option 7 in `fuse.yml` automatically includes Elastic Stack in its role chain.
 
 **PCAP storage:** `/opt/orochi/arkime/raw/`
 
 **Credentials:** `admin` / *engagement password*
+
+**Logs:**
+```bash
+docker logs -f arkimecapture    # packet capture activity
+docker logs -f arkimeviewer     # web UI / query logs
+```
 
 **Estimated time:** 10 minutes
 
@@ -780,18 +798,18 @@ Deploys the Orochi landing page — an nginx-served HTML dashboard with links to
 
 ### Option 13 — Show Status
 
-Runs `docker ps` on the orochi node and prints a formatted table of all running containers with their state and port mappings. Also check systemd services:
+Runs `docker ps` on the orochi node and prints a formatted table of all running containers with their state and port mappings. Also check bare-metal services on the node:
 
 ```bash
-# Bare metal services
-ssh orochi@<node-ip> systemctl status suricata zeek arkimecapture arkimeviewer
+# Bare metal services (Suricata and Zeek only — Arkime runs as Docker containers)
+ssh orochi@<node-ip> systemctl status suricata zeek
 ```
 
 ---
 
 ### Option 14 — Teardown All
 
-Stops and removes all Orochi Docker containers and bare-metal services (Suricata, Zeek, Arkime). Removes the `orochi-network` Docker bridge.
+Stops and removes all Orochi Docker containers (including `arkimecapture` and `arkimeviewer`) and bare-metal services (Suricata and Zeek). Removes the `orochi-network` Docker bridge.
 
 **Does NOT delete** data under `/opt/orochi/` — redeploy after a teardown picks up existing data.
 
@@ -852,7 +870,8 @@ Replace `<node-ip>` with the orochi node's IP address.
 | Suricata stats | `/var/log/suricata/stats.log` | Performance counters |
 | Zeek logs | `/opt/zeek/logs/current/` | conn.log, dns.log, http.log, ssl.log, etc. |
 | Arkime PCAP | `/opt/orochi/arkime/raw/` | Raw capture files |
-| Arkime logs | `/opt/arkime/logs/` | Capture and viewer logs |
+| Arkime capture logs | `docker logs arkimecapture` | Packet capture activity |
+| Arkime viewer logs | `docker logs arkimeviewer` | Web UI / query activity |
 | Docker logs | `docker logs <container-name>` | All containerised services |
 
 ---
@@ -889,17 +908,27 @@ curl -o /dev/null -w "%{http_code}\n" http://<node-ip>:5000/
 ### Bare Metal Services (on the Orochi Node)
 
 ```bash
-# All four services should show "active (running)"
-systemctl status suricata zeek arkimecapture arkimeviewer
+# Bare metal services — should show "active (running)"
+systemctl status suricata zeek
 
 # Suricata is producing alerts
 tail -f /var/log/suricata/fast.log
 
 # Zeek is logging connections
 ls -la /opt/zeek/logs/current/
+```
+
+### Arkime (Docker Containers)
+
+```bash
+# Both containers should show "Up"
+docker ps --filter name=arkime
 
 # Arkime is capturing — directory should contain .pcap files
 ls /opt/orochi/arkime/raw/
+
+# Live capture log
+docker logs -f arkimecapture
 ```
 
 ### Container Status (Option 13)
@@ -958,37 +987,27 @@ sudo rm -rf /opt/orochi/<service-name>/
 
 ## Adapting for Different Hardware
 
-OROCHI is designed to be hardware-agnostic for the orochi node. The only hardware-specific values are the NIC MAC addresses.
+OROCHI is hardware-agnostic for the orochi node. No MAC addresses or interface names are hardcoded — interface selection happens interactively at deploy time.
 
 ### If the Orochi Node Is Different Hardware
 
 1. Boot the new hardware with Ubuntu Server 25.10 installed
-2. Find the MAC addresses of its NICs:
-   ```bash
-   ip link show
-   # Each interface shows link/ether <mac-address>
-   ```
-3. Decide which NIC is the analyst NIC (connected to the management box) and which is the target NIC (connected to the monitored network)
-4. Update `group_vars/all.yml`:
-   ```yaml
-   analyst_nic_mac: "<new-analyst-mac>"
-   target_nic_mac: "<new-target-mac>"
-   ```
-5. Update `inventory/hosts.yml` with the new node's IP
-6. Run `fuse.yml` — NIC names are discovered automatically at runtime
+2. Update `inventory/hosts.yml` with the new node's IP
+3. Run `fuse.yml` — the `environment` role lists available interfaces and prompts you to select the capture interface at runtime
 
-No other changes are required. All roles use `{{ capture_interface }}` which is resolved from the MAC at runtime.
+No other changes are required.
 
 ### If the Management Box Has a Different IP (Production vs Development)
 
-Production default is `10.16.255.253` (set in `group_vars/all.yml`). For development:
+`bootstrap_node` resolves the management box IP dynamically — you don't need to hardcode it. On first run it prompts you to select the interface, saves the result to `.env`, and reuses it on subsequent runs.
 
+To force a specific IP for a single run without changing `.env`:
 ```bash
-ansible-playbook fuse.yml -e mgmt_box_ip=192.168.0.24
-ansible-playbook playbooks/prep_artefacts.yml -e mgmt_box_ip=192.168.0.24
+ansible-playbook fuse.yml -e mgmt_box_ip=100.99.102.28
+ansible-playbook playbooks/prep_artefacts.yml -e mgmt_box_ip=100.99.102.28
 ```
 
-The `-e` override takes precedence over `group_vars/all.yml` for that run only. The file on disk remains unchanged.
+To re-run the IP selection prompt (e.g. the management box IP has changed), delete `MGMT_BOX_IP` from `{{ playbook_dir }}/.env` or remove the file entirely — `bootstrap_node` will prompt again on the next run.
 
 ---
 
@@ -1030,7 +1049,7 @@ ping 10.16.255.253
 **Fixes:**
 - Check the ethernet cable between the two machines
 - Start the nginx container: `docker start orochi-artifacts`
-- Verify the management box IP — if using dev, add `-e mgmt_box_ip=192.168.0.24`
+- Verify the management box IP — if using dev, add `-e mgmt_box_ip=100.99.102.28`
 
 ---
 

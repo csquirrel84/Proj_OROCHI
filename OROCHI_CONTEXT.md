@@ -147,7 +147,7 @@ Passive Capture
 
 ## Current State
 
-- Management box is up at `192.168.0.24` (Ubuntu 25.10, user: orochiman)
+- Management box is up at `100.99.102.28` (Ubuntu 25.10, user: orochiman)
 - Orochi node (NUC) is at `100.70.2.104` (Tailscale) / `192.168.0.200` (LAN) — intermittently unstable, suspected hardware limitations under load
 - Proxmox and Terraform work has been abandoned in favour of bare metal Ubuntu + Ansible approach
 - Existing Ansible roles exist in `orochi/` for most Docker services — written against an older model, need review for the new single-node bare metal architecture

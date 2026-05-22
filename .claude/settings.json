@@ -3,7 +3,23 @@
     "allow": [
       "Bash(rsync --version)",
       "PowerShell(scp -r \"E:\\\\Projects\\\\Proj_OROCHI\" mgmt:~/orochi 2>&1)",
-      "PowerShell(& \"e:\\\\Projects\\\\Proj_OROCHI\\\\orochi\\\\push_to_mgmt.ps1\" -IP 192.168.0.24 -User orochiman)"
+      "PowerShell(& \"e:\\\\Projects\\\\Proj_OROCHI\\\\orochi\\\\push_to_mgmt.ps1\" -IP 100.99.102.28 -User orochiman)",
+      "WebFetch(domain:arkime.com)",
+      "WebFetch(domain:hub.docker.com)",
+      "WebFetch(domain:github.com)",
+      "WebSearch",
+      "WebFetch(domain:gist.github.com)",
+      "Bash(Remove-Item \"e:\\\\Projects\\\\Proj_OROCHI\\\\orochi\\\\roles\\\\arkime\\\\templates\\\\config.ini.j2\" -Force)",
+      "Bash(ssh -V)",
+      "Bash(python3 -c \"import paramiko; print\\('paramiko ok'\\)\")",
+      "Bash(python -c \"import paramiko; print\\('paramiko ok'\\)\")",
+      "Bash(ssh-keygen -t ed25519 -f __TRACKED_VAR__/.ssh/orochi_diag -N '' -C orochi-diag)",
+      "Bash(ssh -i __TRACKED_VAR__/.ssh/orochi_diag -o StrictHostKeyChecking=no -o ConnectTimeout=10 robbo@192.168.0.2 'echo '\\\\''MGT CONNECTED'\\\\''; uname -a; uptime')",
+      "Bash(ssh -i __TRACKED_VAR__/.ssh/orochi_diag -o StrictHostKeyChecking=no -o ConnectTimeout=10 orochi@100.95.19.118 'echo '\\\\''OROCHI CONNECTED'\\\\''; uname -a; uptime')",
+      "Bash(ssh -i __TRACKED_VAR__/.ssh/orochi_diag -o StrictHostKeyChecking=no robbo@192.168.0.2 ' *)",
+      "Bash(ssh -i __TRACKED_VAR__/.ssh/orochi_diag -o StrictHostKeyChecking=no orochi@100.95.19.118 ' *)",
+      "PowerShell(cd \"E:\\\\Projects\\\\Proj_OROCHI\\\\orochi\" && pwsh push_to_mgmt.ps1 -IP 192.168.0.2 -User robbo)",
+      "Bash(ssh -i __TRACKED_VAR__/.ssh/orochi_diag -o StrictHostKeyChecking=no robbo@192.168.0.2 'ls ~/orochi/ 2>/dev/null || echo '\\\\''Does not exist'\\\\''')"
     ]
   }
 }

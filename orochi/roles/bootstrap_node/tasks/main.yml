@@ -3,6 +3,91 @@
 # artifact source before any packages or images are installed.
 # Must run before any other role.
 
+# ── Management box IP ─────────────────────────────────────────────────────────
+# The orochi node uses this IP for apt proxy, Docker registry, and artifact
+# server. Under DHCP or Tailscale the IP changes between sessions, so we
+# resolve it here and persist it in .env for re-runs.
+
+- name: Read MGMT_BOX_IP from .env if present
+  ansible.builtin.shell: |
+    grep '^MGMT_BOX_IP=' {{ playbook_dir }}/.env 2>/dev/null | cut -d= -f2 || true
+  register: _saved_mgmt_ip
+  delegate_to: localhost
+  become: false
+  changed_when: false
+
+- name: Use saved mgmt_box_ip from .env
+  ansible.builtin.set_fact:
+    mgmt_box_ip: "{{ _saved_mgmt_ip.stdout | trim }}"
+  when: _saved_mgmt_ip.stdout | trim | length > 0
+
+- name: List management box network addresses
+  ansible.builtin.shell: |
+    counter=1
+    ip -o -4 addr show | while read line; do
+      iface=$(echo "$line" | awk '{print $2}')
+      ip=$(echo "$line" | awk '{print $4}' | cut -d'/' -f1)
+      case "$iface" in
+        lo|docker*|br-*|veth*) continue ;;
+      esac
+      echo "${counter}. ${iface}  ${ip}"
+      counter=$((counter + 1))
+    done
+  register: _mgmt_iface_display
+  delegate_to: localhost
+  become: false
+  changed_when: false
+  when: _saved_mgmt_ip.stdout | trim | length == 0
+
+- name: Build management box IP lookup table
+  ansible.builtin.shell: |
+    ip -o -4 addr show | while read line; do
+      iface=$(echo "$line" | awk '{print $2}')
+      ip=$(echo "$line" | awk '{print $4}' | cut -d'/' -f1)
+      case "$iface" in
+        lo|docker*|br-*|veth*) continue ;;
+      esac
+      echo "$ip"
+    done
+  register: _mgmt_ip_list
+  delegate_to: localhost
+  become: false
+  changed_when: false
+  when: _saved_mgmt_ip.stdout | trim | length == 0
+
+- name: Show management box addresses
+  ansible.builtin.debug:
+    msg:
+      - "Select the IP address the orochi node should use to reach this management box:"
+      - "{{ _mgmt_iface_display.stdout_lines | default([]) }}"
+  when: _saved_mgmt_ip.stdout | trim | length == 0
+
+- name: Prompt for management box IP
+  ansible.builtin.pause:
+    prompt: "Enter number or IP address [{{ mgmt_box_ip }}]"
+    echo: yes
+  register: _mgmt_ip_input
+  when: _saved_mgmt_ip.stdout | trim | length == 0
+
+- name: Set mgmt_box_ip from selection
+  ansible.builtin.set_fact:
+    mgmt_box_ip: >-
+      {%- set inp = _mgmt_ip_input.user_input | default('') | trim -%}
+      {%- if inp | regex_search('^[0-9]+$') -%}
+        {{ _mgmt_ip_list.stdout_lines[inp | int - 1] | default(mgmt_box_ip) }}
+      {%- elif inp | length > 0 -%}
+        {{ inp }}
+      {%- else -%}
+        {{ mgmt_box_ip }}
+      {%- endif -%}
+  when: _saved_mgmt_ip.stdout | trim | length == 0
+
+- name: Confirm selected management box IP
+  ansible.builtin.debug:
+    msg: "Management box: {{ mgmt_box_ip }}"
+
+# ── Verify reachability ───────────────────────────────────────────────────────
+
 - name: Verify management box is reachable
   ansible.builtin.wait_for:
     host: "{{ mgmt_box_ip }}"
@@ -30,4 +115,3 @@
     mode: '0644'
     owner: root
     group: root
-

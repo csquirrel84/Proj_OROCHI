@@ -11,46 +11,26 @@
     mode: '0755'
   tags: suricata
 
-- name: Create temp directory for Suricata debs
+# ── Pre-create all Suricata directories and config files ──────────────────────
+# Done before package install so dpkg can never fail on missing paths.
+# Uses facts already set by the environment role (suricata.interface etc).
+
+- name: Create Suricata directories
   ansible.builtin.file:
-    path: /tmp/suricata-debs
+    path: "{{ item }}"
     state: directory
     mode: '0755'
-  tags: suricata
-
-- name: Download Suricata debs tarball from artifact server
-  ansible.builtin.get_url:
-    url: "{{ artifact_base_url }}/suricata-debs.tar.gz"
-    dest: /tmp/suricata-debs.tar.gz
-    mode: '0644'
-  tags: suricata
-
-- name: Extract Suricata debs
-  ansible.builtin.unarchive:
-    src: /tmp/suricata-debs.tar.gz
-    dest: /tmp
-    remote_src: true
-  tags: suricata
-
-- name: Install Suricata from pre-cached packages
-  ansible.builtin.shell: |
-    apt-get install -y /tmp/suricata-debs/*.deb
-  register: suricata_install
-  changed_when: "'Setting up' in suricata_install.stdout"
-  tags: suricata
-
-- name: Create Suricata log directory
-  ansible.builtin.file:
-    path: /var/log/suricata
-    state: directory
-    mode: '0755'
-    owner: root
-    group: root
+  loop:
+    - /etc/suricata
+    - /var/log/suricata
+    - /var/lib/suricata/rules
   tags: suricata
 
 - name: Configure Suricata YAML
   ansible.builtin.copy:
     dest: /etc/suricata/suricata.yaml
+    mode: '0644'
+    backup: yes
     content: |
       %YAML 1.1
       ---
@@ -190,28 +170,51 @@
       stats:
         enabled: yes
         interval: 8
-    mode: '0644'
-    backup: yes
-  notify: restart suricata
   tags: suricata
 
 - name: Configure Suricata interface in /etc/default/suricata
-  ansible.builtin.lineinfile:
-    path: /etc/default/suricata
-    regexp: '^IFACE='
-    line: 'IFACE={{ suricata.interface }}'
-    create: yes
+  ansible.builtin.copy:
+    dest: /etc/default/suricata
+    content: |
+      IFACE={{ suricata.interface }}
     mode: '0644'
   tags: suricata
 
-# ── Rules — use pre-downloaded tarball ────────────────────────────────────────
+# ── Install ────────────────────────────────────────────────────────────────────
 
-- name: Create Suricata rules directory
+- name: Create temp directory for Suricata debs
   ansible.builtin.file:
-    path: /var/lib/suricata/rules
+    path: /tmp/suricata-debs
     state: directory
     mode: '0755'
   tags: suricata
+
+- name: Download Suricata debs tarball from artifact server
+  ansible.builtin.get_url:
+    url: "{{ artifact_base_url }}/suricata-debs.tar.gz"
+    dest: /tmp/suricata-debs.tar.gz
+    mode: '0644'
+  tags: suricata
+
+- name: Extract Suricata debs
+  ansible.builtin.unarchive:
+    src: /tmp/suricata-debs.tar.gz
+    dest: /tmp
+    remote_src: true
+  tags: suricata
+
+- name: Install Suricata from pre-cached packages
+  ansible.builtin.shell: |
+    set -e
+    trap 'rm -f /usr/sbin/policy-rc.d' EXIT
+    echo 'exit 101' > /usr/sbin/policy-rc.d
+    chmod +x /usr/sbin/policy-rc.d
+    DEBIAN_FRONTEND=noninteractive dpkg -i --force-confold /tmp/suricata-debs/*.deb
+  register: suricata_install
+  changed_when: "'Setting up' in suricata_install.stdout"
+  tags: suricata
+
+# ── Rules — use pre-downloaded tarball ────────────────────────────────────────
 
 - name: Download pre-cached Suricata rules from artifact server
   ansible.builtin.get_url:
@@ -250,18 +253,23 @@
   notify: reload systemd
   tags: suricata
 
-- name: Enable and start Suricata
+- name: Enable Suricata service
   ansible.builtin.systemd:
     name: suricata
     enabled: true
-    state: started
     daemon_reload: true
+  tags: suricata
+
+- name: Start Suricata in background
+  ansible.builtin.command: systemctl restart --no-block suricata
+  changed_when: true
   tags: suricata
 
 - name: Display Suricata status
   ansible.builtin.debug:
     msg:
-      - "Suricata running on {{ suricata.interface }}"
+      - "Suricata starting on {{ suricata.interface }} (rule compilation runs in background)"
+      - "Check status: systemctl status suricata"
       - "Logs: /var/log/suricata/eve.json"
       - "Rules: /var/lib/suricata/rules"
   tags: suricata

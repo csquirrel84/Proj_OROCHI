@@ -7,9 +7,14 @@
 # Ansible vault password file
 .vault_pass
 .vault_password
+.claude*
+
 
 # Ansible retry files
 *.retry
+
+# Install log (per-run, not for version control)
+install.log
 
 # Python bytecode
 __pycache__/

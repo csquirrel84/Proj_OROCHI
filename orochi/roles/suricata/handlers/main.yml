@@ -8,6 +8,5 @@
     daemon_reload: yes
 
 - name: restart suricata
-  ansible.builtin.systemd:
-    name: suricata
-    state: restarted
+  ansible.builtin.command: systemctl restart --no-block suricata
+  changed_when: true

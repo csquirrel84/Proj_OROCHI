@@ -1,0 +1,77 @@
+Starting capture
+WARNING - Config file '/opt/arkime/etc/config.ini' not found
+May 20 08:49:07 main.c:295 parse_args(): WARNING: gethostname doesn't return a fully qualified name and getdomainname failed, this may cause issues when viewing pcaps, use the --host option - oriochdev
+May 20 08:49:07 config.c:1060 arkime_config_load(): Couldn't load config file (/opt/arkime/etc/config.ini) No such file or directory
+May 20 08:49:07 main.c:1040 arkime_mlockall_init(): WARNING: memlock in limits.conf must be unlimited or at least 4000000, currently 8192
+May 20 08:49:07 http.c:1161 arkime_http_create_server(): WARNING - Using insecure mode for https://localhost:9200
+May 20 08:49:07 http.c:326 arkime_http_send_sync(): 1/1 SYNC 404 https://localhost:9200/arkime_sequence/_doc/fn-oriochdev 0/67 0ms 0ms
+May 20 08:49:07 db.c:2923 arkime_db_init(): WARNING - No Geo Country file could be loaded, see https://arkime.com/settings#geolite2country
+May 20 08:49:07 db.c:2934 arkime_db_init(): WARNING - No Geo ASN file could be loaded, see https://arkime.com/settings#geolite2asn
+May 20 08:49:07 parsers.c:707 arkime_parsers_load(): Error with ./parsers: Error opening directory “./parsers”: No such file or directory
+May 20 08:49:07 http.c:683 arkime_http_curl_close_callback(): Couldn't connect https://localhost:9200 (9, 13) 
+May 20 08:49:07 http.c:623 arkime_http_curl_watch_open_callback(): Connected 1/0 - https://localhost:9200   42462->127.0.0.1:9200 - fd:9
+May 20 08:49:07 db.c:1948 arkime_db_health_check_cb(): WARNING - Elasticsearch is yellow and took 28ms to query health, this may cause issues.  See FAQ.
+May 20 08:49:08 http.c:683 arkime_http_curl_close_callback(): Couldn't connect https://localhost:9200 (11, 25) 
+May 20 08:49:08 http.c:623 arkime_http_curl_watch_open_callback(): Connected 2/1 - https://localhost:9200   42476->127.0.0.1:9200 - fd:11
+May 20 08:49:08 http.c:683 arkime_http_curl_close_callback(): Couldn't connect https://localhost:9200 (10, 33) 
+May 20 08:49:08 http.c:683 arkime_http_curl_close_callback(): Couldn't connect https://localhost:9200 (12, 37) 
+May 20 08:49:08 http.c:623 arkime_http_curl_watch_open_callback(): Connected 4/2 - https://localhost:9200   42490->127.0.0.1:9200 - fd:10
+May 20 08:49:08 http.c:623 arkime_http_curl_watch_open_callback(): Connected 4/3 - https://localhost:9200   42506->127.0.0.1:9200 - fd:12
+May 20 08:49:08 http.c:414 arkime_http_curlm_check_multi_info(): 4/4 ASYNC 409 https://localhost:9200/arkime_stats/_doc/oriochdev?version_type=external&version=36061 802/499 0ms 2ms
+May 20 08:49:08 http.c:452 arkime_http_curlm_check_multi_info(): See the FAQ - https://arkime.com/faq#version-conflict
+May 20 08:49:08 http.c:454 arkime_http_curlm_check_multi_info(): Response length=499 :>
+{"error":{"root_cause":[{"type":"version_conflict_engine_exception","reason":"[oriochdev]: version conflict, current version [36061] is higher or equal to the one provided [36061]","index_uuid":"eoy_NI2vRVKVFXaLDNn_0Q","shard":"0","index":"arkime_stats"}],"type":"version_conflict_engine_exception","reason":"[oriochdev]: version conflict, current version [36061] is higher or equal to the one provided [36061]","index_uuid":"eoy_NI2vRVKVFXaLDNn_0Q","shard":"0","index":"arkime_stats"},"status":409}
+May 20 08:49:09 packet.c:1615 arkime_packet_batch(): Initial Packet = 1779266949 Initial Dropped = 0
+May 20 08:49:10 http.c:414 arkime_http_curlm_check_multi_info(): 1/4 ASYNC 409 https://localhost:9200/arkime_stats/_doc/oriochdev?version_type=external&version=36062 804/499 0ms 2ms
+May 20 08:49:10 http.c:452 arkime_http_curlm_check_multi_info(): See the FAQ - https://arkime.com/faq#version-conflict
+May 20 08:49:10 http.c:454 arkime_http_curlm_check_multi_info(): Response length=499 :>
+{"error":{"root_cause":[{"type":"version_conflict_engine_exception","reason":"[oriochdev]: version conflict, current version [36062] is higher or equal to the one provided [36062]","index_uuid":"eoy_NI2vRVKVFXaLDNn_0Q","shard":"0","index":"arkime_stats"}],"type":"version_conflict_engine_exception","reason":"[oriochdev]: version conflict, current version [36062] is higher or equal to the one provided [36062]","index_uuid":"eoy_NI2vRVKVFXaLDNn_0Q","shard":"0","index":"arkime_stats"},"status":409}
+May 20 08:49:12 http.c:414 arkime_http_curlm_check_multi_info(): 1/4 ASYNC 409 https://localhost:9200/arkime_stats/_doc/oriochdev?version_type=external&version=36063 805/499 0ms 2ms
+May 20 08:49:12 http.c:452 arkime_http_curlm_check_multi_info(): See the FAQ - https://arkime.com/faq#version-conflict
+May 20 08:49:12 http.c:454 arkime_http_curlm_check_multi_info(): Response length=499 :>
+{"error":{"root_cause":[{"type":"version_conflict_engine_exception","reason":"[oriochdev]: version conflict, current version [36063] is higher or equal to the one provided [36063]","index_uuid":"eoy_NI2vRVKVFXaLDNn_0Q","shard":"0","index":"arkime_stats"}],"type":"version_conflict_engine_exception","reason":"[oriochdev]: version conflict, current version [36063] is higher or equal to the one provided [36063]","index_uuid":"eoy_NI2vRVKVFXaLDNn_0Q","shard":"0","index":"arkime_stats"},"status":409}
+May 20 08:49:14 http.c:414 arkime_http_curlm_check_multi_info(): 1/4 ASYNC 409 https://localhost:9200/arkime_stats/_doc/oriochdev?version_type=external&version=36064 805/499 0ms 2ms
+May 20 08:49:14 http.c:452 arkime_http_curlm_check_multi_info(): See the FAQ - https://arkime.com/faq#version-conflict
+May 20 08:49:14 http.c:454 arkime_http_curlm_check_multi_info(): Response length=499 :>
+{"error":{"root_cause":[{"type":"version_conflict_engine_exception","reason":"[oriochdev]: version conflict, current version [36064] is higher or equal to the one provided [36064]","index_uuid":"eoy_NI2vRVKVFXaLDNn_0Q","shard":"0","index":"arkime_stats"}],"type":"version_conflict_engine_exception","reason":"[oriochdev]: version conflict, current version [36064] is higher or equal to the one provided [36064]","index_uuid":"eoy_NI2vRVKVFXaLDNn_0Q","shard":"0","index":"arkime_stats"},"status":409}
+May 20 08:49:16 http.c:414 arkime_http_curlm_check_multi_info(): 1/4 ASYNC 409 https://localhost:9200/arkime_stats/_doc/oriochdev?version_type=external&version=36065 801/499 0ms 1ms
+May 20 08:49:16 http.c:452 arkime_http_curlm_check_multi_info(): See the FAQ - https://arkime.com/faq#version-conflict
+May 20 08:49:16 http.c:454 arkime_http_curlm_check_multi_info(): Response length=499 :>
+{"error":{"root_cause":[{"type":"version_conflict_engine_exception","reason":"[oriochdev]: version conflict, current version [36065] is higher or equal to the one provided [36065]","index_uuid":"eoy_NI2vRVKVFXaLDNn_0Q","shard":"0","index":"arkime_stats"}],"type":"version_conflict_engine_exception","reason":"[oriochdev]: version conflict, current version [36065] is higher or equal to the one provided [36065]","index_uuid":"eoy_NI2vRVKVFXaLDNn_0Q","shard":"0","index":"arkime_stats"},"status":409}
+May 20 08:49:18 http.c:414 arkime_http_curlm_check_multi_info(): 2/4 ASYNC 409 https://localhost:9200/arkime_stats/_doc/oriochdev?version_type=external&version=36066 805/499 0ms 1ms
+May 20 08:49:18 http.c:452 arkime_http_curlm_check_multi_info(): See the FAQ - https://arkime.com/faq#version-conflict
+May 20 08:49:18 http.c:454 arkime_http_curlm_check_multi_info(): Response length=499 :>
+{"error":{"root_cause":[{"type":"version_conflict_engine_exception","reason":"[oriochdev]: version conflict, current version [36066] is higher or equal to the one provided [36066]","index_uuid":"eoy_NI2vRVKVFXaLDNn_0Q","shard":"0","index":"arkime_stats"}],"type":"version_conflict_engine_exception","reason":"[oriochdev]: version conflict, current version [36066] is higher or equal to the one provided [36066]","index_uuid":"eoy_NI2vRVKVFXaLDNn_0Q","shard":"0","index":"arkime_stats"},"status":409}
+May 20 08:49:20 http.c:414 arkime_http_curlm_check_multi_info(): 1/4 ASYNC 409 https://localhost:9200/arkime_stats/_doc/oriochdev?version_type=external&version=36067 801/499 0ms 1ms
+May 20 08:49:20 http.c:452 arkime_http_curlm_check_multi_info(): See the FAQ - https://arkime.com/faq#version-conflict
+May 20 08:49:20 http.c:454 arkime_http_curlm_check_multi_info(): Response length=499 :>
+{"error":{"root_cause":[{"type":"version_conflict_engine_exception","reason":"[oriochdev]: version conflict, current version [36067] is higher or equal to the one provided [36067]","index_uuid":"eoy_NI2vRVKVFXaLDNn_0Q","shard":"0","index":"arkime_stats"}],"type":"version_conflict_engine_exception","reason":"[oriochdev]: version conflict, current version [36067] is higher or equal to the one provided [36067]","index_uuid":"eoy_NI2vRVKVFXaLDNn_0Q","shard":"0","index":"arkime_stats"},"status":409}
+May 20 08:49:22 http.c:414 arkime_http_curlm_check_multi_info(): 1/4 ASYNC 409 https://localhost:9200/arkime_stats/_doc/oriochdev?version_type=external&version=36068 812/499 0ms 2ms
+May 20 08:49:22 http.c:452 arkime_http_curlm_check_multi_info(): See the FAQ - https://arkime.com/faq#version-conflict
+May 20 08:49:22 http.c:454 arkime_http_curlm_check_multi_info(): Response length=499 :>
+{"error":{"root_cause":[{"type":"version_conflict_engine_exception","reason":"[oriochdev]: version conflict, current version [36068] is higher or equal to the one provided [36068]","index_uuid":"eoy_NI2vRVKVFXaLDNn_0Q","shard":"0","index":"arkime_stats"}],"type":"version_conflict_engine_exception","reason":"[oriochdev]: version conflict, current version [36068] is higher or equal to the one provided [36068]","index_uuid":"eoy_NI2vRVKVFXaLDNn_0Q","shard":"0","index":"arkime_stats"},"status":409}
+May 20 08:49:24 http.c:414 arkime_http_curlm_check_multi_info(): 1/4 ASYNC 409 https://localhost:9200/arkime_stats/_doc/oriochdev?version_type=external&version=36069 809/499 0ms 1ms
+May 20 08:49:24 http.c:452 arkime_http_curlm_check_multi_info(): See the FAQ - https://arkime.com/faq#version-conflict
+May 20 08:49:24 http.c:454 arkime_http_curlm_check_multi_info(): Response length=499 :>
+{"error":{"root_cause":[{"type":"version_conflict_engine_exception","reason":"[oriochdev]: version conflict, current version [36069] is higher or equal to the one provided [36069]","index_uuid":"eoy_NI2vRVKVFXaLDNn_0Q","shard":"0","index":"arkime_stats"}],"type":"version_conflict_engine_exception","reason":"[oriochdev]: version conflict, current version [36069] is higher or equal to the one provided [36069]","index_uuid":"eoy_NI2vRVKVFXaLDNn_0Q","shard":"0","index":"arkime_stats"},"status":409}
+Starting capture
+WARNING - Config file '/opt/arkime/etc/config.ini' not found
+May 20 08:49:26 main.c:295 parse_args(): WARNING: gethostname doesn't return a fully qualified name and getdomainname failed, this may cause issues when viewing pcaps, use the --host option - oriochdev
+May 20 08:49:26 config.c:1060 arkime_config_load(): Couldn't load config file (/opt/arkime/etc/config.ini) No such file or directory
+May 20 08:49:26 main.c:1040 arkime_mlockall_init(): WARNING: memlock in limits.conf must be unlimited or at least 4000000, currently 8192
+May 20 08:49:26 http.c:1161 arkime_http_create_server(): WARNING - Using insecure mode for https://localhost:9200
+May 20 08:49:26 db.c:2923 arkime_db_init(): WARNING - No Geo Country file could be loaded, see https://arkime.com/settings#geolite2country
+May 20 08:49:26 db.c:2934 arkime_db_init(): WARNING - No Geo ASN file could be loaded, see https://arkime.com/settings#geolite2asn
+May 20 08:49:26 parsers.c:707 arkime_parsers_load(): Error with ./parsers: Error opening directory “./parsers”: No such file or directory
+May 20 08:49:26 http.c:683 arkime_http_curl_close_callback(): Couldn't connect https://localhost:9200 (9, 13) 
+May 20 08:49:26 http.c:623 arkime_http_curl_watch_open_callback(): Connected 1/0 - https://localhost:9200   44322->127.0.0.1:9200 - fd:9
+May 20 08:49:26 db.c:1948 arkime_db_health_check_cb(): WARNING - Elasticsearch is yellow and took 39ms to query health, this may cause issues.  See FAQ.
+May 20 08:49:26 http.c:683 arkime_http_curl_close_callback(): Couldn't connect https://localhost:9200 (11, 26) 
+May 20 08:49:26 http.c:623 arkime_http_curl_watch_open_callback(): Connected 3/1 - https://localhost:9200   44386->127.0.0.1:9200 - fd:11
+May 20 08:49:26 http.c:414 arkime_http_curlm_check_multi_info(): 4/2 ASYNC 409 https://localhost:9200/arkime_stats/_doc/oriochdev?version_type=external&version=36070 802/499 0ms 2ms
+May 20 08:49:26 http.c:452 arkime_http_curlm_check_multi_info(): See the FAQ - https://arkime.com/faq#version-conflict
+May 20 08:49:26 http.c:454 arkime_http_curlm_check_multi_info(): Response length=499 :>
+{"error":{"root_cause":[{"type":"version_conflict_engine_exception","reason":"[oriochdev]: version conflict, current version [36070] is higher or equal to the one provided [36070]","index_uuid":"eoy_NI2vRVKVFXaLDNn_0Q","shard":"0","index":"arkime_stats"}],"type":"version_conflict_engine_exception","reason":"[oriochdev]: version conflict, current version [36070] is higher or equal to the one provided [36070]","index_uuid":"eoy_NI2vRVKVFXaLDNn_0Q","shard":"0","index":"arkime_stats"},"status":409}
+May 20 08:49:26 http.c:683 arkime_http_curl_close_callback(): Couldn't connect https://localhost:9200 (12, 33) 
+May 20 08:49:26 http.c:623 arkime_http_curl_watch_open_callback(): Connected 3/2 - https://localhost:9200   44402->127.0.0.1:9200 - fd:10
+May 20 08:49:28 packet.c:1615 arkime_packet_batch(): Initial Packet = 1779266967 Initial Dropped = 0

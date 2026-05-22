@@ -4,6 +4,52 @@
 # OROCHI SECURITY STACK - INTERACTIVE DEPLOYER
 # ==============================================
 
+# ── Play 1: resolve orochi node IP ───────────────────────────────────────────
+# Reads OROCHI_NODE_IP from .env if present. On first run, prompts the analyst.
+# Uses add_host so no static inventory entry is needed.
+
+- name: Resolve orochi node
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: Read OROCHI_NODE_IP from .env if present
+      ansible.builtin.shell: |
+        grep '^OROCHI_NODE_IP=' {{ playbook_dir }}/.env 2>/dev/null | cut -d= -f2 || true
+      register: _saved_node_ip
+      changed_when: false
+
+    - name: Prompt for orochi node IP
+      ansible.builtin.pause:
+        prompt: "Enter the orochi node IP address"
+        echo: yes
+      register: _node_ip_input
+      when: _saved_node_ip.stdout | trim | length == 0
+
+    - name: Set node IP fact
+      ansible.builtin.set_fact:
+        orochi_node_ip: >-
+          {%- if _saved_node_ip.stdout | trim | length > 0 -%}
+            {{ _saved_node_ip.stdout | trim }}
+          {%- else -%}
+            {{ _node_ip_input.user_input | trim }}
+          {%- endif -%}
+
+    - name: Add orochi node to inventory
+      ansible.builtin.add_host:
+        name: orochi
+        groups: orochi_node
+        ansible_host: "{{ orochi_node_ip }}"
+        ansible_user: orochi
+        ansible_ssh_private_key_file: ~/.ssh/orochi_id_ed25519
+
+    - name: Confirm node IP
+      ansible.builtin.debug:
+        msg: "Orochi node: {{ orochi_node_ip }}"
+
+# ── Play 2: deploy ────────────────────────────────────────────────────────────
+
 - name: Orochi Security Stack Deployer
   hosts: orochi_node
   become: true
@@ -51,7 +97,7 @@
           ║    ██    ██ ██   ██ ██    ██ ██      ██   ██ ██               ║
           ║     ██████  ██   ██  ██████   ██████ ██   ██ ██               ║
           ║                                                               ║
-          ║              SECURITY STACK DEPLOYER v1.0                     ║
+          ║              SECURITY STACK DEPLOYER v3.0                     ║
           ║         Based on Project Tiamat by csquirrel84                ║
           ║                                                               ║
           ╚═══════════════════════════════════════════════════════════════╝
@@ -300,10 +346,16 @@
             state: stopped
             enabled: no
           loop:
-            - arkimecapture
-            - arkimeviewer
             - suricata
             - zeek
+          ignore_errors: true
+          when: confirm_teardown.user_input == "YES"
+
+        - name: Tear down RITA docker-compose stack
+          ansible.builtin.shell: |
+            if [ -f /opt/rita/docker-compose.yml ]; then
+              docker compose -f /opt/rita/docker-compose.yml down -v
+            fi
           ignore_errors: true
           when: confirm_teardown.user_input == "YES"
 
@@ -314,18 +366,23 @@
           loop:
             - tool-portal
             - timesketch
+            - timesketch-worker
             - redis-timesketch
             - postgres-timesketch
             - mattermost
             - postgres-mattermost
             - cyberchef
             - velociraptor
+            - arkimecapture
+            - arkimeviewer
             - thehive
             - cassandra
             - elasticsearch-hive
             - fleet-server
             - kibana
             - elasticsearch
+            - rita-syslog-ng
+            - rita-clickhouse
           ignore_errors: true
           when: confirm_teardown.user_input == "YES"
 
@@ -356,4 +413,13 @@
           ╚═══════════════════════════════════════════════════════════════╝
           
       when: menu_choice not in ["0", "13", "14"]
+      tags: always
+
+    - name: Show install log location
+      ansible.builtin.debug:
+        msg:
+          - "Install log: {{ playbook_dir }}/install.log"
+          - "To extract failures: grep -A 20 'FAILED\\|fatal:' {{ playbook_dir }}/install.log"
+      delegate_to: localhost
+      become: false
       tags: always
