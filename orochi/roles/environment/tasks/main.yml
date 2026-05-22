@@ -533,3 +533,34 @@
   become: false
   when: not (skip_env_prompts | default(false))
   tags: environment
+
+- name: Set capture interface to promiscuous mode
+  ansible.builtin.shell: ip link set {{ suricata.interface }} promisc on
+  changed_when: false
+  tags: environment
+
+- name: Create systemd unit for promiscuous mode persistence
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/promisc-{{ suricata.interface }}.service
+    mode: '0644'
+    content: |
+      [Unit]
+      Description=Set {{ suricata.interface }} to promiscuous mode for packet capture
+      After=network.target
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/sbin/ip link set {{ suricata.interface }} promisc on
+      RemainAfterExit=yes
+
+      [Install]
+      WantedBy=multi-user.target
+  tags: environment
+
+- name: Enable promiscuous mode persistence
+  ansible.builtin.systemd:
+    name: promisc-{{ suricata.interface }}
+    enabled: true
+    state: started
+    daemon_reload: true
+  tags: environment

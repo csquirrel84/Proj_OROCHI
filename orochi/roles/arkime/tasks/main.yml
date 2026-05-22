@@ -108,83 +108,6 @@
 
   tags: arkime
 
-- name: Ensure Arkime sessions index template has correct date mapping
-  # Composable templates take precedence over Arkime's legacy _template,
-  # so we must include all three time fields here with default date format.
-  # epoch_millis format must NOT be used — it causes ES to return bare number
-  # strings ("1779447183181") which JavaScript's new Date() cannot parse.
-  # Default format returns ISO strings ("2026-05-22T10:53:03Z") which work.
-  ansible.builtin.uri:
-    url: "https://localhost:{{ ports.elasticsearch }}/_index_template/arkime_date_fix"
-    method: PUT
-    user: elastic
-    password: "{{ elasticsearch_password }}"
-    validate_certs: false
-    body_format: json
-    body:
-      index_patterns: ["arkime_sessions3-*"]
-      priority: 600
-      template:
-        mappings:
-          properties:
-            "@timestamp":
-              type: date
-            firstPacket:
-              type: date
-            lastPacket:
-              type: date
-    status_code: [200, 201]
-
-  tags: arkime
-
-- name: Check and fix firstPacket field mapping in existing sessions indices
-  # ES 9.x blocks wildcard DELETEs — list bad indices explicitly then delete by name.
-  ansible.builtin.shell: |
-    python3 - <<'PYEOF'
-    import urllib.request, json, ssl, sys, base64
-
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-    auth = base64.b64encode(b'elastic:{{ elasticsearch_password }}').decode()
-
-    def es(method, path):
-        req = urllib.request.Request(
-            'https://localhost:{{ ports.elasticsearch }}' + path,
-            method=method,
-            headers={'Authorization': 'Basic ' + auth}
-        )
-        try:
-            return urllib.request.urlopen(req, context=ctx)
-        except urllib.error.HTTPError as e:
-            return e
-
-    r = es('GET', '/arkime_sessions3-*/_mapping')
-    if r.status != 200:
-        print('NO_INDEX')
-        sys.exit(0)
-
-    mapping = json.loads(r.read())
-    deleted = []
-    for idx, body in mapping.items():
-        fp_type = body.get('mappings', {}).get('properties', {}) \
-                      .get('firstPacket', {}).get('type', '')
-        if fp_type == 'long':
-            es('DELETE', '/' + idx)
-            deleted.append(idx)
-
-    print('DELETED:' + ','.join(deleted) if deleted else 'MAPPING_OK')
-    PYEOF
-  register: _mapping_fix
-  changed_when: "'DELETED:' in _mapping_fix.stdout"
-  failed_when: false
-
-  tags: arkime
-
-- name: Report session index mapping status
-  ansible.builtin.debug:
-    msg: "Arkime session index mapping: {{ _mapping_fix.stdout | trim }}"
-  tags: arkime
 
 - name: Remove stale Arkime containers
   community.docker.docker_container:
@@ -236,11 +159,6 @@
   notify: restart arkime
   tags: arkime
 
-- name: Restart capture if bad index was deleted
-  ansible.builtin.command: docker restart arkimecapture
-  changed_when: true
-  when: _mapping_fix.changed
-  tags: arkime
 
 - name: Start Arkime viewer container
   community.docker.docker_container:

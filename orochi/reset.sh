@@ -228,6 +228,14 @@ do
     fi
 done
 
+for unit in /etc/systemd/system/promisc-*.service; do
+    if [ -e "$unit" ]; then
+        info "Removing $unit"
+        systemctl disable "$(basename "$unit")" 2>/dev/null || true
+        rm -f "$unit"
+    fi
+done
+
 if [ -f /etc/profile.d/zeek.sh ]; then
     info "Removing /etc/profile.d/zeek.sh"
     rm -f /etc/profile.d/zeek.sh
