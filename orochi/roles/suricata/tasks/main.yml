@@ -244,9 +244,10 @@
     dest: /etc/systemd/system/suricata.service.d/override.conf
     content: |
       [Service]
+      Type=simple
       ExecStart=
       ExecStart=/usr/bin/suricata -c /etc/suricata/suricata.yaml --af-packet={{ suricata.interface }}
-      TimeoutStartSec=900
+      TimeoutStartSec=120
       Restart=on-failure
       RestartSec=10s
     mode: '0644'
