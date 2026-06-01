@@ -4,34 +4,36 @@
 # OROCHI SECURITY STACK - INTERACTIVE DEPLOYER
 # ==============================================
 
-# ── Play 1: resolve orochi node IP ───────────────────────────────────────────
-# Reads OROCHI_NODE_IP from .env if present. On first run, prompts the analyst.
-# Uses add_host so no static inventory entry is needed.
+# ── Play 1: Resolve config + display menu ─────────────────────────────────────
 
-- name: Resolve orochi node
+- name: Resolve configuration and get deployment selection
   hosts: localhost
   connection: local
   gather_facts: false
 
   tasks:
-    - name: Read OROCHI_NODE_IP from .env if present
-      ansible.builtin.shell: |
-        grep '^OROCHI_NODE_IP=' {{ playbook_dir }}/.env 2>/dev/null | cut -d= -f2 || true
-      register: _saved_node_ip
+    - name: Read .env file
+      ansible.builtin.shell: cat {{ playbook_dir }}/.env 2>/dev/null || true
+      register: _env_content
       changed_when: false
+
+    - name: Parse .env values
+      ansible.builtin.set_fact:
+        _env_node_ip: "{{ _env_content.stdout | regex_search('OROCHI_NODE_IP=(.+)', '\\1') | first | default('') }}"
+      when: _env_content.stdout | trim | length > 0
 
     - name: Prompt for orochi node IP
       ansible.builtin.pause:
         prompt: "Enter the orochi node IP address"
         echo: yes
       register: _node_ip_input
-      when: _saved_node_ip.stdout | trim | length == 0
+      when: _env_node_ip | default('') | trim | length == 0
 
     - name: Set node IP fact
       ansible.builtin.set_fact:
         orochi_node_ip: >-
-          {%- if _saved_node_ip.stdout | trim | length > 0 -%}
-            {{ _saved_node_ip.stdout | trim }}
+          {%- if _env_node_ip | default('') | trim | length > 0 -%}
+            {{ _env_node_ip | trim }}
           {%- else -%}
             {{ _node_ip_input.user_input | trim }}
           {%- endif -%}
@@ -44,51 +46,10 @@
         ansible_user: orochi
         ansible_ssh_private_key_file: ~/.ssh/orochi_id_ed25519
 
-    - name: Confirm node IP
-      ansible.builtin.debug:
-        msg: "Orochi node: {{ orochi_node_ip }}"
-
-# ── Play 2: deploy ────────────────────────────────────────────────────────────
-
-- name: Orochi Security Stack Deployer
-  hosts: orochi_node
-  become: true
-  gather_facts: true
-
-  vars_prompt:
-    - name: common_password
-      prompt: "Engagement password (used across all services)"
-      private: true
-      confirm: true
-
-  vars:
-    menu_options:
-      "1": "Deploy Complete Stack (All Services)"
-      "2": "Deploy Elastic Stack (Elasticsearch + Kibana + Fleet)"
-      "3": "Deploy TheHive 4 (Incident Response)"
-      "4": "Deploy Velociraptor (DFIR & Endpoint Visibility)"
-      "5": "Deploy Zeek (Network Analysis)"
-      "6": "Deploy Suricata (Network IDS)"
-      "7": "Deploy Arkime (Full Packet Capture)"
-      "8": "Deploy CyberChef (Data Analysis)"
-      "9": "Deploy Mattermost (Team Communication)"
-      "10": "Deploy RITA (Network Traffic Analysis)"
-      "11": "Deploy Timesketch (Timeline Analysis)"
-      "12": "Deploy Tool Portal (Dashboard)"
-      "13": "Show Current Status"
-      "14": "Teardown (Remove All)"
-      "0": "Exit"
-
-  pre_tasks:
-    - name: Bootstrap node to use management box artefacts
-      ansible.builtin.include_role:
-        name: bootstrap_node
-      tags: always
-
     - name: Display Orochi Banner
       ansible.builtin.debug:
         msg: |
-          
+
           ╔═══════════════════════════════════════════════════════════════╗
           ║                                                               ║
           ║     ██████  ██████   ██████   ██████ ██   ██ ██               ║
@@ -101,226 +62,126 @@
           ║         Based on Project Tiamat by csquirrel84                ║
           ║                                                               ║
           ╚═══════════════════════════════════════════════════════════════╝
-          
-          Target Host: {{ inventory_hostname }}
-          Server IP: {{ ansible_default_ipv4.address | default('N/A') }}
-          
-      tags: always
 
-    - name: Display Menu
+          Target: {{ orochi_node_ip }}
+
+
+    - name: Display menu
       ansible.builtin.debug:
         msg: |
-          
-          ┌─────────────────────────────────────────┐
-          │           DEPLOYMENT OPTIONS            │
-          ├─────────────────────────────────────────┤
-          │  1. Deploy Complete Stack               │
-          │  2. Deploy Elastic Stack                │
-          │  3. Deploy TheHive 4                    │
-          │  4. Deploy Velociraptor                 │
-          │  5. Deploy Zeek                         │
-          │  6. Deploy Suricata                     │
-          │  7. Deploy Arkime                       │
-          │  8. Deploy CyberChef                    │
-          │  9. Deploy Mattermost                   │
-          │ 10. Deploy RITA                         │
-          │ 11. Deploy Timesketch                   │
-          │ 12. Deploy Tool Portal                  │
-          │ 13. Show Status                         │
-          │ 14. Teardown All                        │
-          │  0. Exit                                │
-          └─────────────────────────────────────────┘
-          
-      when: menu_choice is not defined
-      tags: always
+
+          ┌──────────────────────────────────────────┐
+          │            DEPLOYMENT OPTIONS            │
+          ├──────────────────────────────────────────┤
+          │  [ 1]  Elastic Stack                     │
+          │  [ 2]  TheHive 4                         │
+          │  [ 3]  Velociraptor                      │
+          │  [ 4]  Zeek                              │
+          │  [ 5]  Suricata                          │
+          │  [ 6]  Arkime (Packet Capture)           │
+          │  [ 7]  CyberChef                         │
+          │  [ 8]  Mattermost                        │
+          │  [ 9]  RITA                              │
+          │  [10]  Timesketch                        │
+          │  [11]  Tool Portal                       │
+          │  [12]  Arkime Remote Capture             │
+          ├──────────────────────────────────────────┤
+          │  Space-separated numbers  e.g. 1 4 5 6  │
+          │  'all' to deploy everything              │
+          │  'status' or 'teardown'                  │
+          └──────────────────────────────────────────┘
+
 
     - name: Prompt for selection
       ansible.builtin.pause:
-        prompt: "Enter your choice [1-14, 0 to exit]"
-      register: user_input
+        prompt: "Selection"
+      register: _selection_input
       when: menu_choice is not defined
+
+    - name: Parse deploy selections
+      ansible.builtin.set_fact:
+        deploy_selections: >-
+          {%- set raw = (menu_choice | default(_selection_input.user_input)) | trim | lower -%}
+          {%- if raw == 'all' -%}
+            {{ ['1','2','3','4','5','6','7','8','9','10','11','12'] }}
+          {%- elif raw in ['status', 'teardown'] -%}
+            {{ [raw] }}
+          {%- else -%}
+            {{ raw.split(' ') | map('trim') | select('truthy') | list }}
+          {%- endif -%}
+
+    - name: Prompt for capture target
+      ansible.builtin.pause:
+        prompt: |
+          Arkime Remote Capture target:
+            Press Enter  →  this box (mgmt box / localhost)
+            Enter IP     →  remote host
+
+          Target
+      register: _capture_input
+      when: "'12' in deploy_selections"
+
+    - name: Add localhost as capture target
+      ansible.builtin.add_host:
+        name: localhost
+        groups: capture_targets
+        ansible_connection: local
+      when:
+        - "'12' in deploy_selections"
+        - (_capture_input.user_input | default('') | trim | length == 0) or
+          (_capture_input.user_input | default('') | trim | lower == 'localhost')
+
+    - name: Add remote host as capture target
+      ansible.builtin.add_host:
+        name: "{{ _capture_input.user_input | trim }}"
+        groups: capture_targets
+        ansible_host: "{{ _capture_input.user_input | trim }}"
+        ansible_user: root
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+      when:
+        - "'12' in deploy_selections"
+        - _capture_input.user_input | default('') | trim | length > 0
+        - _capture_input.user_input | default('') | trim | lower != 'localhost'
+
+# ── Play 2: Deploy to orochi node ─────────────────────────────────────────────
+
+- name: Orochi Security Stack Deployer
+  hosts: orochi_node
+  become: true
+  gather_facts: true
+
+  vars_prompt:
+    - name: common_password
+      prompt: "Engagement password (used across all services)"
+      private: true
+      confirm: true
+
+  pre_tasks:
+    - name: Store password for inter-play access
+      ansible.builtin.set_fact:
+        common_password: "{{ common_password }}"
+      no_log: true
+
+    - name: Pull deploy selections from control node
+      ansible.builtin.set_fact:
+        deploy_selections: "{{ hostvars['localhost']['deploy_selections'] }}"
+
+    - name: Bootstrap node to use management box artefacts
+      ansible.builtin.include_role:
+        name: bootstrap_node
       tags: always
 
-    - name: Set menu choice
-      ansible.builtin.set_fact:
-        menu_choice: "{{ user_input.user_input | default(menu_choice) }}"
-      tags: always
+    - name: Fetch CA cert for remote capture
+      ansible.builtin.slurp:
+        src: /opt/orochi/certs/ca/ca.crt
+      register: _ca_cert_b64
+      when: "'12' in deploy_selections"
+      ignore_errors: true
 
   tasks:
-    # Exit
-    - name: Exit if selected
-      ansible.builtin.meta: end_play
-      when: menu_choice == "0"
-
-    # Option 1: Deploy All
-    - name: Deploy Complete Stack
-      when: menu_choice == "1"
-      block:
-        - ansible.builtin.include_role:
-            name: common
-        - ansible.builtin.include_role:
-            name: environment
-        - ansible.builtin.include_role:
-            name: certificates
-        - ansible.builtin.include_role:
-            name: elasticsearch
-        - ansible.builtin.include_role:
-            name: kibana
-        - ansible.builtin.include_role:
-            name: fleet
-        - ansible.builtin.include_role:
-            name: thehive
-        - ansible.builtin.include_role:
-            name: velociraptor
-        - ansible.builtin.include_role:
-            name: suricata
-        - ansible.builtin.include_role:
-            name: zeek
-        - ansible.builtin.include_role:
-            name: arkime
-        - ansible.builtin.include_role:
-            name: cyberchef
-        - ansible.builtin.include_role:
-            name: mattermost
-        - ansible.builtin.include_role:
-            name: rita
-        - ansible.builtin.include_role:
-            name: timesketch
-        - ansible.builtin.include_role:
-            name: nginx_proxy
-
-    # Option 2: Elastic Stack
-    - name: Deploy Elastic Stack
-      when: menu_choice == "2"
-      block:
-        - ansible.builtin.include_role:
-            name: common
-        - ansible.builtin.include_role:
-            name: environment
-        - ansible.builtin.include_role:
-            name: certificates
-        - ansible.builtin.include_role:
-            name: elasticsearch
-        - ansible.builtin.include_role:
-            name: kibana
-        - ansible.builtin.include_role:
-            name: fleet
-
-    # Option 3: TheHive
-    - name: Deploy TheHive
-      when: menu_choice == "3"
-      block:
-        - ansible.builtin.include_role:
-            name: common
-        - ansible.builtin.include_role:
-            name: environment
-        - ansible.builtin.include_role:
-            name: thehive
-
-    # Option 4: Velociraptor
-    - name: Deploy Velociraptor
-      when: menu_choice == "4"
-      block:
-        - ansible.builtin.include_role:
-            name: common
-        - ansible.builtin.include_role:
-            name: environment
-        - ansible.builtin.include_role:
-            name: velociraptor
-
-    # Option 5: Zeek
-    - name: Deploy Zeek
-      when: menu_choice == "5"
-      block:
-        - ansible.builtin.include_role:
-            name: common
-        - ansible.builtin.include_role:
-            name: environment
-        - ansible.builtin.include_role:
-            name: zeek
-
-    # Option 6: Suricata
-    - name: Deploy Suricata
-      when: menu_choice == "6"
-      block:
-        - ansible.builtin.include_role:
-            name: common
-        - ansible.builtin.include_role:
-            name: environment
-        - ansible.builtin.include_role:
-            name: suricata
-
-    # Option 7: Arkime
-    - name: Deploy Arkime
-      when: menu_choice == "7"
-      block:
-        - ansible.builtin.include_role:
-            name: common
-        - ansible.builtin.include_role:
-            name: environment
-        - ansible.builtin.include_role:
-            name: certificates
-        - ansible.builtin.include_role:
-            name: elasticsearch
-        - ansible.builtin.include_role:
-            name: arkime
-
-    # Option 8: CyberChef
-    - name: Deploy CyberChef
-      when: menu_choice == "8"
-      block:
-        - ansible.builtin.include_role:
-            name: common
-        - ansible.builtin.include_role:
-            name: cyberchef
-
-    # Option 9: Mattermost
-    - name: Deploy Mattermost
-      when: menu_choice == "9"
-      block:
-        - ansible.builtin.include_role:
-            name: common
-        - ansible.builtin.include_role:
-            name: environment
-        - ansible.builtin.include_role:
-            name: mattermost
-
-    # Option 10: RITA
-    - name: Deploy RITA
-      when: menu_choice == "10"
-      block:
-        - ansible.builtin.include_role:
-            name: common
-        - ansible.builtin.include_role:
-            name: environment
-        - ansible.builtin.include_role:
-            name: rita
-
-    # Option 11: Timesketch
-    - name: Deploy Timesketch
-      when: menu_choice == "11"
-      block:
-        - ansible.builtin.include_role:
-            name: common
-        - ansible.builtin.include_role:
-            name: timesketch
-
-    # Option 12: Tool Portal
-    - name: Deploy Tool Portal
-      when: menu_choice == "12"
-      block:
-        - ansible.builtin.include_role:
-            name: common
-        - ansible.builtin.include_role:
-            name: environment
-        - ansible.builtin.include_role:
-            name: certificates
-        - ansible.builtin.include_role:
-            name: nginx_proxy
-
-    # Option 13: Status
+    # ── Status ──────────────────────────────────────────────────────────────────
     - name: Show Status
-      when: menu_choice == "13"
+      when: "'status' in deploy_selections"
       block:
         - name: Get running containers
           ansible.builtin.command: docker ps --format "table {% raw %}{{.Names}}\t{{.Status}}\t{{.Ports}}{% endraw %}"
@@ -331,9 +192,9 @@
           ansible.builtin.debug:
             msg: "{{ container_status.stdout_lines }}"
 
-    # Option 14: Teardown
+    # ── Teardown ────────────────────────────────────────────────────────────────
     - name: Teardown All
-      when: menu_choice == "14"
+      when: "'teardown' in deploy_selections"
       block:
         - name: Confirm teardown
           ansible.builtin.pause:
@@ -393,11 +254,96 @@
           ignore_errors: true
           when: confirm_teardown.user_input == "YES"
 
+    # ── Shared prerequisites ─────────────────────────────────────────────────────
+    # Each runs once based on combined selections — avoids redundant role re-runs
+    # when multiple options share the same prerequisite.
+
+    - name: Deploy common role
+      ansible.builtin.include_role:
+        name: common
+      when: (deploy_selections | intersect(['1','2','3','4','5','6','7','8','9','10','11'])) | length > 0
+
+    - name: Deploy environment role
+      ansible.builtin.include_role:
+        name: environment
+      when: (deploy_selections | intersect(['1','2','3','4','5','6','8','9','11'])) | length > 0
+
+    - name: Deploy certificates role
+      ansible.builtin.include_role:
+        name: certificates
+      when: (deploy_selections | intersect(['1','6','11'])) | length > 0
+
+    - name: Deploy Elasticsearch
+      ansible.builtin.include_role:
+        name: elasticsearch
+      when: (deploy_selections | intersect(['1','6'])) | length > 0
+
+    # ── Individual services ──────────────────────────────────────────────────────
+    - name: Deploy Kibana
+      ansible.builtin.include_role:
+        name: kibana
+      when: "'1' in deploy_selections"
+
+    - name: Deploy Fleet
+      ansible.builtin.include_role:
+        name: fleet
+      when: "'1' in deploy_selections"
+
+    - name: Deploy TheHive
+      ansible.builtin.include_role:
+        name: thehive
+      when: "'2' in deploy_selections"
+
+    - name: Deploy Velociraptor
+      ansible.builtin.include_role:
+        name: velociraptor
+      when: "'3' in deploy_selections"
+
+    - name: Deploy Zeek
+      ansible.builtin.include_role:
+        name: zeek
+      when: "'4' in deploy_selections"
+
+    - name: Deploy Suricata
+      ansible.builtin.include_role:
+        name: suricata
+      when: "'5' in deploy_selections"
+
+    - name: Deploy Arkime
+      ansible.builtin.include_role:
+        name: arkime
+      when: "'6' in deploy_selections"
+
+    - name: Deploy CyberChef
+      ansible.builtin.include_role:
+        name: cyberchef
+      when: "'7' in deploy_selections"
+
+    - name: Deploy Mattermost
+      ansible.builtin.include_role:
+        name: mattermost
+      when: "'8' in deploy_selections"
+
+    - name: Deploy RITA
+      ansible.builtin.include_role:
+        name: rita
+      when: "'9' in deploy_selections"
+
+    - name: Deploy Timesketch
+      ansible.builtin.include_role:
+        name: timesketch
+      when: "'10' in deploy_selections"
+
+    - name: Deploy Tool Portal
+      ansible.builtin.include_role:
+        name: nginx_proxy
+      when: "'11' in deploy_selections"
+
   post_tasks:
     - name: Display Access Information
       ansible.builtin.debug:
         msg: |
-          
+
           ╔═══════════════════════════════════════════════════════════════╗
           ║                    DEPLOYMENT COMPLETE                        ║
           ╠═══════════════════════════════════════════════════════════════╣
@@ -411,8 +357,8 @@
           ║  • TheHive:       http://<IP>:9000                            ║
           ║  • Velociraptor:  https://<IP>:8889                           ║
           ╚═══════════════════════════════════════════════════════════════╝
-          
-      when: menu_choice not in ["0", "13", "14"]
+
+      when: (deploy_selections | intersect(['1','2','3','4','5','6','7','8','9','10','11'])) | length > 0
       tags: always
 
     - name: Show install log location
@@ -423,3 +369,134 @@
       delegate_to: localhost
       become: false
       tags: always
+
+# ── Play 3: Arkime remote capture ──────────────────────────────────────────────
+# Runs on capture_targets group — either localhost or a remote IP.
+# Group is only populated when option 12 is selected, so this play
+# silently skips when not needed.
+
+- name: Deploy Arkime Remote Capture
+  hosts: capture_targets
+  become: true
+  gather_facts: true
+
+  vars:
+    remote_capture_interface: "eth0"
+    remote_pcap_dir:          "/opt/orochi-remote/raw"
+    remote_cert_dir:          "/opt/orochi-remote/certs"
+    remote_capture_port:      8007
+    orochi_es_port:           9200
+
+  tasks:
+    - name: Resolve image registry and viewer host
+      ansible.builtin.set_fact:
+        _registry_host: "{{ 'localhost' if (inventory_hostname == 'localhost') else hostvars['localhost']['mgmt_box_ip'] }}"
+        _view_host:     "{{ hostvars['localhost']['mgmt_box_ip'] if (inventory_hostname == 'localhost') else ansible_host }}"
+
+    - name: Prompt for capture interface
+      ansible.builtin.pause:
+        prompt: |
+          Available interfaces:
+          {{ ansible_interfaces | reject('match', '^(lo|docker|br-|veth)') | list | join(', ') }}
+
+          Enter capture interface
+      register: _iface_input
+      when: remote_capture_interface == "eth0"
+      run_once: true
+
+    - name: Set interface from prompt
+      ansible.builtin.set_fact:
+        remote_capture_interface: "{{ _iface_input.user_input | trim }}"
+      when:
+        - remote_capture_interface == "eth0"
+        - _iface_input.user_input | default('') | trim | length > 0
+
+    - name: Create directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ remote_pcap_dir }}"
+        - "{{ remote_cert_dir }}"
+
+    - name: Set PCAP directory ownership
+      ansible.builtin.file:
+        path: "{{ remote_pcap_dir }}"
+        owner: nobody
+        group: nogroup
+        mode: '0755'
+
+    - name: Place orochi CA cert
+      ansible.builtin.copy:
+        content: "{{ hostvars['orochi']['_ca_cert_b64']['content'] | b64decode }}"
+        dest: "{{ remote_cert_dir }}/ca.crt"
+        mode: '0644'
+
+    - name: Set capture interface to promiscuous mode
+      ansible.builtin.shell: ip link set {{ remote_capture_interface }} promisc on
+      changed_when: false
+
+    - name: Remove any existing remote capture container
+      community.docker.docker_container:
+        name: arkimecapture-remote
+        state: absent
+        force_kill: true
+
+    - name: Start Arkime remote capture container
+      community.docker.docker_container:
+        name: arkimecapture-remote
+        image: "{{ _registry_host }}:{{ mgmt_registry_port }}/arkime/arkime:{{ arkime_version }}"
+        state: started
+        restart_policy: unless-stopped
+        network_mode: host
+        capabilities:
+          - NET_ADMIN
+          - NET_RAW
+        ulimits:
+          - "memlock:-1:-1"
+        env:
+          ARKIME__elasticsearch:          "https://{{ hostvars['localhost']['orochi_node_ip'] }}:{{ orochi_es_port }}"
+          ARKIME__elasticsearchBasicAuth: "elastic:{{ hostvars['orochi']['common_password'] }}"
+          ARKIME__caTrustFile:            "/opt/arkime/etc/ca.crt"
+          ARKIME__passwordSecret:         "{{ hostvars['orochi']['common_password'] }}"
+          ARKIME__interface:              "{{ remote_capture_interface }}"
+          ARKIME__pcapDir:                "/opt/arkime/raw"
+          ARKIME__viewPort:               "{{ remote_capture_port | string }}"
+          ARKIME__viewHost:               "{{ _view_host }}"
+          ARKIME__node:                   "{{ ansible_hostname }}"
+          ARKIME__maxFileSizeG:           "5"
+          ARKIME__freeSpaceG:             "5%"
+          ARKIME__rotateIndex:            "daily"
+          ARKIME__compressES:             "true"
+          ARKIME__dropUser:               "nobody"
+          ARKIME__dropGroup:              "nogroup"
+        volumes:
+          - "{{ remote_pcap_dir }}:/opt/arkime/raw"
+          - "{{ remote_cert_dir }}/ca.crt:/opt/arkime/etc/ca.crt:ro"
+        command: /opt/arkime/bin/docker.sh capture
+
+    - name: Wait for capture to initialise
+      ansible.builtin.wait_for:
+        timeout: 15
+
+    - name: Check capture container logs
+      ansible.builtin.command: docker logs --tail 20 arkimecapture-remote
+      register: _capture_logs
+      changed_when: false
+
+    - name: Display capture logs
+      ansible.builtin.debug:
+        msg: "{{ _capture_logs.stdout_lines + _capture_logs.stderr_lines }}"
+
+    - name: Display remote capture status
+      ansible.builtin.debug:
+        msg:
+          - "Remote Arkime capture deployed on {{ ansible_hostname }}"
+          - ""
+          - "Interface: {{ remote_capture_interface }}"
+          - "PCAP dir:  {{ remote_pcap_dir }}"
+          - "ES target: https://{{ hostvars['localhost']['orochi_node_ip'] }}:{{ orochi_es_port }}"
+          - ""
+          - "Sessions from this node appear in Arkime tagged as: {{ ansible_hostname }}"
+          - "docker logs -f arkimecapture-remote"

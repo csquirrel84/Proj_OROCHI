@@ -1,0 +1,194 @@
+---
+# Deploy a standalone Arkime capture node on any remote box.
+# Ships session data to the orochi node's Elasticsearch.
+# PCAP files are stored locally on the remote box.
+#
+# Run from the management box:
+#   ansible-playbook ~/orochi/orochi/playbooks/deploy_remote_capture.yml
+#
+# Or with explicit overrides:
+#   ansible-playbook ... -e remote_capture_interface=eth1 -e remote_capture_node=mgmt
+
+# ── Play 1: Read .env and add orochi node to inventory ────────────────────────
+
+- name: Resolve configuration
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: Read .env file
+      ansible.builtin.shell: cat {{ playbook_dir }}/../.env 2>/dev/null || true
+      register: _env_content
+      changed_when: false
+
+    - name: Fail if .env missing
+      ansible.builtin.fail:
+        msg: ".env not found — run fuse.yml against the orochi node first."
+      when: _env_content.stdout | trim | length == 0
+
+    - name: Parse .env values
+      ansible.builtin.set_fact:
+        orochi_node_ip:         "{{ _env_content.stdout | regex_search('OROCHI_NODE_IP=(.+)',         '\\1') | first | trim }}"
+        arkime_password_secret: "{{ _env_content.stdout | regex_search('ARKIME_PASSWORD_SECRET=(.+)', '\\1') | first | trim }}"
+        mgmt_box_ip:            "{{ _env_content.stdout | regex_search('MGMT_BOX_IP=(.+)',            '\\1') | default(['10.16.255.253'], true) | first | trim }}"
+        mgmt_registry_port:     "{{ _env_content.stdout | regex_search('MGMT_REGISTRY_PORT=(.+)',     '\\1') | default(['5000'],         true) | first | trim }}"
+        arkime_version:         "{{ _env_content.stdout | regex_search('ARKIME_VERSION=(.+)',         '\\1') | default(['v6-latest'],    true) | first | trim }}"
+
+    - name: Add orochi node to inventory
+      ansible.builtin.add_host:
+        name: orochi
+        groups: orochi_node
+        ansible_host: "{{ orochi_node_ip }}"
+        ansible_user: orochi
+        ansible_ssh_private_key_file: ~/.ssh/orochi_id_ed25519
+
+    - name: Show resolved config
+      ansible.builtin.debug:
+        msg:
+          - "Orochi node:    {{ orochi_node_ip }}"
+          - "Mgmt box:       {{ mgmt_box_ip }}"
+          - "Arkime version: {{ arkime_version }}"
+
+# ── Play 2: Fetch CA cert from orochi node ────────────────────────────────────
+
+- name: Fetch CA cert from orochi node
+  hosts: orochi_node
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Read CA cert
+      ansible.builtin.slurp:
+        src: /opt/orochi/certs/ca/ca.crt
+      register: _ca_cert_b64
+
+# ── Play 3: Deploy capture container on the remote box ────────────────────────
+
+- name: Deploy Arkime remote capture
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: true
+
+  vars:
+    remote_capture_interface: "eth0"
+    remote_capture_node:      "{{ ansible_hostname }}"
+    remote_pcap_dir:          "/opt/orochi-remote/raw"
+    remote_capture_port:      8007
+    remote_cert_dir:          "/opt/orochi-remote/certs"
+    orochi_es_port:           9200
+
+  vars_prompt:
+    - name: elasticsearch_password
+      prompt: "Elasticsearch password (same as orochi deployment)"
+      private: true
+
+  tasks:
+    - name: Prompt for capture interface if not set via -e
+      ansible.builtin.pause:
+        prompt: |
+          Available interfaces:
+          {{ ansible_interfaces | reject('match', '^(lo|docker|br-|veth)') | list | join(', ') }}
+
+          Enter capture interface
+      register: _iface_input
+      when: remote_capture_interface == "eth0"
+
+    - name: Set interface from prompt
+      ansible.builtin.set_fact:
+        remote_capture_interface: "{{ _iface_input.user_input | trim }}"
+      when:
+        - remote_capture_interface == "eth0"
+        - _iface_input.user_input | default('') | trim | length > 0
+
+    - name: Create directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ remote_pcap_dir }}"
+        - "{{ remote_cert_dir }}"
+
+    - name: Set PCAP directory ownership
+      ansible.builtin.file:
+        path: "{{ remote_pcap_dir }}"
+        owner: nobody
+        group: nogroup
+        mode: '0755'
+
+    - name: Place orochi CA cert
+      ansible.builtin.copy:
+        content: "{{ hostvars['orochi']['_ca_cert_b64']['content'] | b64decode }}"
+        dest: "{{ remote_cert_dir }}/ca.crt"
+        mode: '0644'
+
+    - name: Set capture interface to promiscuous mode
+      ansible.builtin.shell: ip link set {{ remote_capture_interface }} promisc on
+      changed_when: false
+
+    - name: Remove any existing remote capture container
+      community.docker.docker_container:
+        name: arkimecapture-remote
+        state: absent
+        force_kill: true
+
+    - name: Start Arkime remote capture container
+      community.docker.docker_container:
+        name: arkimecapture-remote
+        image: "localhost:{{ hostvars['localhost']['mgmt_registry_port'] | default('5000') }}/arkime/arkime:{{ hostvars['localhost']['arkime_version'] }}"
+        state: started
+        restart_policy: unless-stopped
+        network_mode: host
+        capabilities:
+          - NET_ADMIN
+          - NET_RAW
+        ulimits:
+          - "memlock:-1:-1"
+        env:
+          ARKIME__elasticsearch:          "https://{{ hostvars['localhost']['orochi_node_ip'] }}:{{ orochi_es_port }}"
+          ARKIME__elasticsearchBasicAuth: "elastic:{{ elasticsearch_password }}"
+          ARKIME__caTrustFile:            "/opt/arkime/etc/ca.crt"
+          ARKIME__passwordSecret:         "{{ hostvars['localhost']['arkime_password_secret'] }}"
+          ARKIME__interface:              "{{ remote_capture_interface }}"
+          ARKIME__pcapDir:                "/opt/arkime/raw"
+          ARKIME__viewPort:               "{{ remote_capture_port | string }}"
+          ARKIME__viewHost:               "{{ hostvars['localhost']['mgmt_box_ip'] }}"
+          ARKIME__node:                   "{{ remote_capture_node }}"
+          ARKIME__maxFileSizeG:           "5"
+          ARKIME__freeSpaceG:             "5%"
+          ARKIME__rotateIndex:            "daily"
+          ARKIME__compressES:             "true"
+          ARKIME__dropUser:               "nobody"
+          ARKIME__dropGroup:              "nogroup"
+        volumes:
+          - "{{ remote_pcap_dir }}:/opt/arkime/raw"
+          - "{{ remote_cert_dir }}/ca.crt:/opt/arkime/etc/ca.crt:ro"
+        command: /opt/arkime/bin/docker.sh capture
+
+    - name: Wait for capture to connect to ES
+      ansible.builtin.wait_for:
+        timeout: 15
+
+    - name: Check capture container logs
+      ansible.builtin.command: docker logs --tail 20 arkimecapture-remote
+      register: _capture_logs
+      changed_when: false
+
+    - name: Display capture logs
+      ansible.builtin.debug:
+        msg: "{{ _capture_logs.stdout_lines + _capture_logs.stderr_lines }}"
+
+    - name: Display remote capture status
+      ansible.builtin.debug:
+        msg:
+          - "Remote Arkime capture running on {{ remote_capture_node }}"
+          - ""
+          - "Interface:   {{ remote_capture_interface }}"
+          - "PCAP dir:    {{ remote_pcap_dir }}"
+          - "ES target:   https://{{ hostvars['localhost']['orochi_node_ip'] }}:{{ orochi_es_port }}"
+          - "Capture API: http://{{ hostvars['localhost']['mgmt_box_ip'] }}:{{ remote_capture_port }}"
+          - ""
+          - "Sessions from this node will appear in the Arkime viewer tagged as: {{ remote_capture_node }}"
+          - "docker logs -f arkimecapture-remote"
