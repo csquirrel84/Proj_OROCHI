@@ -2,3 +2,4 @@ terraform/terraform.tfvars
 noble-server-cloudimg-amd64.img
 *.claude*
 *.log
+./.claude/
