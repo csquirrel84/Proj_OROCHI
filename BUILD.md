@@ -133,7 +133,7 @@ All persistent data lives under `/opt/orochi/` on the orochi node:
 └── logs/               ← Shared log directory
 ```
 
-Running option 14 (Teardown) stops and removes containers but does **not** delete these directories. Data survives a teardown and redeploy.
+Running 'teardown' stops and removes containers but does **not** delete these directories. Data survives a teardown and redeploy.
 
 ---
 
@@ -316,31 +316,17 @@ ssh -i ~/.ssh/orochi_id_ed25519 orochi@192.168.0.200 "echo OK"
 
 You should see `OK` with no password prompt.
 
-### 0.7 Update the Ansible Inventory
+### 0.7 The Ansible Inventory (No Action Needed)
 
-Check `orochi/inventory/hosts.yml`:
-
-```yaml
-all:
-  children:
-    orochi_node:
-      hosts:
-        orochi:
-          ansible_host: 192.168.0.200   # ← orochi node IP
-          ansible_user: orochi
-          ansible_ssh_private_key_file: ~/.ssh/orochi_id_ed25519
-```
-
-Change `ansible_host` if your orochi node has a different IP.
+`orochi/inventory/hosts.yml` is **intentionally empty** — do not add static hosts to it. `fuse.yml` prompts for the orochi node IP on first run, saves it to `.env`, and populates the inventory dynamically via `add_host` on every run. The same applies to `deploy_remote_capture.yml`.
 
 ### 0.8 Verify the Connection
 
 ```bash
-cd ~/orochi/orochi
-ansible orochi_node -m ping
+ssh -i ~/.ssh/orochi_id_ed25519 orochi@192.168.0.200 "echo OK"
 ```
 
-Expected: `orochi | SUCCESS => {"ping": "pong"}`
+Expected: `OK` with no password prompt.
 
 If this fails, see [Can't SSH to Orochi Node](#cant-ssh-to-orochi-node) in Troubleshooting.
 
@@ -528,49 +514,56 @@ Before displaying the menu, `fuse.yml` always runs the `bootstrap_node` role as 
 ### 2.7 The Interactive Menu
 
 ```
-┌─────────────────────────────────────────┐
-│           DEPLOYMENT OPTIONS            │
-├─────────────────────────────────────────┤
-│  1. Deploy Complete Stack               │
-│  2. Deploy Elastic Stack                │
-│  3. Deploy TheHive 4                    │
-│  4. Deploy Velociraptor                 │
-│  5. Deploy Zeek                         │
-│  6. Deploy Suricata                     │
-│  7. Deploy Arkime                       │
-│  8. Deploy CyberChef                    │
-│  9. Deploy Mattermost                   │
-│ 10. Deploy RITA                         │
-│ 11. Deploy Timesketch                   │
-│ 12. Deploy Tool Portal                  │
-│ 13. Show Status                         │
-│ 14. Teardown All                        │
-│  0. Exit                                │
-└─────────────────────────────────────────┘
+┌──────────────────────────────────────────┐
+│            DEPLOYMENT OPTIONS            │
+├──────────────────────────────────────────┤
+│  [ 1]  Elastic Stack                     │
+│  [ 2]  TheHive 4                         │
+│  [ 3]  Velociraptor                      │
+│  [ 4]  Zeek                              │
+│  [ 5]  Suricata                          │
+│  [ 6]  Arkime (Packet Capture)           │
+│  [ 7]  CyberChef                         │
+│  [ 8]  Mattermost                        │
+│  [ 9]  RITA                              │
+│  [10]  Timesketch                        │
+│  [11]  Tool Portal                       │
+│  [12]  Arkime Remote Capture             │
+├──────────────────────────────────────────┤
+│  Space-separated numbers  e.g. 1 4 5 6   │
+│  'all' to deploy everything              │
+│  'status' or 'teardown'                  │
+└──────────────────────────────────────────┘
 ```
 
-Each option runs `common` (Docker install + network + base directories) before doing its specific work, so individual options are safe to run standalone.
+**Selection syntax:**
+- A single number deploys one service: `6`
+- Space-separated numbers deploy several in one run: `1 4 5 6`
+- `all` deploys options 1–12
+- `status` shows running containers; `teardown` removes everything (with confirmation)
+
+Shared prerequisites (`common`, `environment`, `certificates`, `elasticsearch`) run **once per fuse run** based on the combined selection — selecting `1 6` does not deploy Elasticsearch twice. This makes any individual option safe to run standalone.
 
 ---
 
 ## Deployment Menu Reference
 
-### Option 1 — Deploy Complete Stack
+### `all` — Deploy Everything
 
-Deploys everything in order. Use this for a full engagement build from a clean node.
+Deploys all twelve options. Use this for a full engagement build from a clean node.
 
 **Role execution order:**
-`common` → `environment` → `certificates` → `elasticsearch` → `kibana` → `fleet` → `thehive` → `velociraptor` → `suricata` → `zeek` → `arkime` → `cyberchef` → `mattermost` → `rita` → `timesketch` → `nginx_proxy`
+Shared prerequisites first — `common` → `environment` → `certificates` → `elasticsearch` — then per-service: `kibana` → `fleet` → `thehive` → `velociraptor` → `zeek` → `suricata` → `arkime` → `cyberchef` → `mattermost` → `rita` → `timesketch` → `nginx_proxy` → remote capture.
 
 **Estimated time:** 45–90 minutes
 
 **Caveats:**
-- Suricata startup takes up to 15 minutes for rule compilation on first run (see option 6 below for detail)
+- Suricata startup takes up to 15 minutes for rule compilation on first run (see option 5 below for detail)
 - RITA is fully offline — all images pre-cached by `prep_artefacts.yml`
 
 ---
 
-### Option 2 — Deploy Elastic Stack
+### Option 1 — Deploy Elastic Stack
 
 Deploys Elasticsearch 9.x, Kibana, and Fleet Server. This is the foundation — Arkime requires it, and it's the destination for Kibana dashboards and Fleet-managed agents.
 
@@ -587,7 +580,7 @@ Deploys Elasticsearch 9.x, Kibana, and Fleet Server. This is the foundation — 
 
 ---
 
-### Option 3 — Deploy TheHive 4
+### Option 2 — Deploy TheHive 4
 
 Deploys the TheHive 4 incident response platform with its own dedicated backend stack.
 
@@ -604,7 +597,7 @@ Deploys the TheHive 4 incident response platform with its own dedicated backend 
 
 ---
 
-### Option 4 — Deploy Velociraptor
+### Option 3 — Deploy Velociraptor
 
 Deploys Velociraptor for DFIR and live endpoint interrogation.
 
@@ -623,7 +616,7 @@ Deploys Velociraptor for DFIR and live endpoint interrogation.
 
 ---
 
-### Option 5 — Deploy Zeek
+### Option 4 — Deploy Zeek
 
 Installs Zeek Network Security Monitor from the pre-cached `.deb` tarball.
 
@@ -639,7 +632,7 @@ Installs Zeek Network Security Monitor from the pre-cached `.deb` tarball.
 
 ---
 
-### Option 6 — Deploy Suricata
+### Option 5 — Deploy Suricata
 
 Installs Suricata IDS from the pre-cached `.deb` tarball.
 
@@ -668,7 +661,7 @@ Once you see `Engine started.`, Suricata is live. Subsequent restarts are fast (
 
 ---
 
-### Option 7 — Deploy Arkime
+### Option 6 — Deploy Arkime
 
 Deploys Arkime full packet capture as Docker containers (official `arkime/arkime` image).
 
@@ -686,7 +679,7 @@ The role:
 7. Starts the `arkimecapture` and `arkimeviewer` containers
 8. Waits for the viewer to respond on port 8005; prints container logs if it fails
 
-**Elasticsearch dependency:** Arkime indexes session metadata into the main Elasticsearch 9.x instance. Elastic Stack (option 2) must be running before deploying Arkime. Option 7 in `fuse.yml` automatically includes Elastic Stack in its role chain.
+**Elasticsearch dependency:** Arkime indexes session metadata into the main Elasticsearch 9.x instance. Elastic Stack (option 1) must be running before deploying Arkime. Selecting option 6 in `fuse.yml` automatically includes the `elasticsearch` shared prerequisite in the run.
 
 **PCAP storage:** `/opt/orochi/arkime/raw/`
 
@@ -702,7 +695,7 @@ docker logs -f arkimeviewer     # web UI / query logs
 
 ---
 
-### Option 8 — Deploy CyberChef
+### Option 7 — Deploy CyberChef
 
 Deploys CyberChef as a Docker container. No authentication. Fully offline — no CDN calls, all resources are bundled in the image.
 
@@ -710,7 +703,7 @@ Deploys CyberChef as a Docker container. No authentication. Fully offline — no
 
 ---
 
-### Option 9 — Deploy Mattermost
+### Option 8 — Deploy Mattermost
 
 Deploys Mattermost team chat with a dedicated PostgreSQL backend.
 
@@ -724,7 +717,7 @@ Deploys Mattermost team chat with a dedicated PostgreSQL backend.
 
 ---
 
-### Option 10 — Deploy RITA
+### Option 9 — Deploy RITA
 
 Installs RITA (Real Intelligence Threat Analytics) for beaconing and C2 detection from Zeek logs.
 
@@ -737,27 +730,28 @@ Installs RITA (Real Intelligence Threat Analytics) for beaconing and C2 detectio
 
 The role extracts the RITA installer tarball from the artifact server, rewrites all `image:` references in `docker-compose.yml` to point at the local registry, and runs `docker compose up -d`.
 
-**Usage (on the orochi node):**
+**Usage (on the orochi node):** The role installs a wrapper at `/usr/local/bin/rita` that handles the compose invocation and mounts the log directory into the container — never call `docker compose` directly.
+
 ```bash
-cd /opt/rita
-
 # Import Zeek logs
-docker compose exec rita rita import --database=<engagement-name> /zeek/logs/current
+rita import --logs /opt/zeek/logs/current --database <engagement-name>
 
-# View results
-docker compose exec rita rita view <engagement-name>
+# View results (interactive TUI)
+rita view <engagement-name>
 
-# Generate HTML report
-docker compose exec rita rita html-report <engagement-name>
+# Generate HTML report (written to the current directory)
+rita html-report <engagement-name>
 ```
 
-> **Zeek logs volume:** RITA's compose file mounts Zeek log directories from the host. Verify the volume paths in `/opt/rita/docker-compose.yml` match your Zeek log location (`/opt/zeek/logs/current/`).
+See [RITA.md](RITA.md) for the full usage reference.
+
+> **Log paths:** the path you pass to `--logs` is always the **host** path — the wrapper mounts it read-only into the container as `/tmp/zeek_logs`.
 
 **Estimated time:** 5–10 minutes
 
 ---
 
-### Option 11 — Deploy Timesketch
+### Option 10 — Deploy Timesketch
 
 Deploys Timesketch timeline analysis platform.
 
@@ -784,7 +778,7 @@ After the containers are up, the role:
 
 ---
 
-### Option 12 — Deploy Tool Portal
+### Option 11 — Deploy Tool Portal
 
 Deploys the Orochi landing page — an nginx-served HTML dashboard with links to all running services.
 
@@ -796,7 +790,35 @@ Deploys the Orochi landing page — an nginx-served HTML dashboard with links to
 
 ---
 
-### Option 13 — Show Status
+### Option 12 — Arkime Remote Capture
+
+Deploys a standalone `arkimecapture-remote` container on an additional box positioned elsewhere in the target network. Session metadata ships to the orochi node's Elasticsearch; **PCAP files stay local on the capture box**. Sessions appear in the Arkime viewer tagged with the capture box's hostname.
+
+When option 12 is selected, fuse prompts for a target:
+- **Press Enter** → deploys to the management box itself
+- **Enter an IP** → deploys to a remote host (SSH as root)
+
+You are then prompted for the capture interface from a list of the target's non-loopback, non-Docker interfaces. The container runs with host networking and `NET_ADMIN`/`NET_RAW`, sets the interface promiscuous, and pulls its image from the management box registry.
+
+**Adding capture nodes mid-engagement** without re-running fuse — use the standalone playbook from the management box:
+
+```bash
+ansible-playbook playbooks/deploy_remote_capture.yml
+# Optional overrides:
+ansible-playbook playbooks/deploy_remote_capture.yml -e remote_capture_interface=eth1
+```
+
+The standalone playbook reads the orochi node IP and Arkime secrets from `.env` — a successful `fuse.yml` run against the node must have happened first. It will prompt for the Elasticsearch password (the engagement password).
+
+**On the capture box:**
+- PCAP: `/opt/orochi-remote/raw/`
+- Logs: `docker logs -f arkimecapture-remote`
+
+**Estimated time:** 5 minutes per capture box
+
+---
+
+### `status` — Show Status
 
 Runs `docker ps` on the orochi node and prints a formatted table of all running containers with their state and port mappings. Also check bare-metal services on the node:
 
@@ -807,7 +829,7 @@ ssh orochi@<node-ip> systemctl status suricata zeek
 
 ---
 
-### Option 14 — Teardown All
+### `teardown` — Teardown All
 
 Stops and removes all Orochi Docker containers (including `arkimecapture` and `arkimeviewer`) and bare-metal services (Suricata and Zeek). Removes the `orochi-network` Docker bridge.
 
@@ -819,25 +841,28 @@ You will be prompted to type `YES` to confirm.
 
 ## Recommended Deployment Order
 
-For a full engagement build using individual options rather than option 1:
+For a full engagement build using individual options rather than 'all':
 
 ```
-2  → Elastic Stack         (foundation — Arkime and Kibana agents depend on this)
-3  → TheHive               (independent; its own ES7 + Cassandra backend)
-4  → Velociraptor          (endpoint collection — get agents deployed early)
-5  → Zeek                  (start network logging immediately)
-6  → Suricata              (start alerting immediately — expect 15 min startup)
-7  → Arkime                (PCAP — needs Elastic Stack running)
-8  → CyberChef             (standalone, any time)
-9  → Mattermost            (comms, any time)
-11 → Timesketch            (timeline analysis — can wait)
-10 → RITA                  (requires internet — do before going offline or skip)
-12 → Portal                (last — links everything together)
+1  → Elastic Stack         (foundation — Arkime and Kibana agents depend on this)
+2  → TheHive               (independent; its own ES7 + Cassandra backend)
+3  → Velociraptor          (endpoint collection — get agents deployed early)
+4  → Zeek                  (start network logging immediately)
+5  → Suricata              (start alerting immediately — expect 15 min startup)
+6  → Arkime                (PCAP — needs Elastic Stack running)
+7  → CyberChef             (standalone, any time)
+8  → Mattermost            (comms, any time)
+9  → RITA                  (fully offline — images pre-cached in the local registry)
+10 → Timesketch            (timeline analysis — can wait)
+11 → Portal                (last — links everything together)
+12 → Remote Capture        (as and when extra capture points are needed)
 ```
+
+The menu accepts space-separated multi-select, so the whole sequence can be a single run: `1 2 3 4 5 6 7 8 9 10 11`.
 
 **For fastest time to visibility**, prioritise the network sensors first:
 ```
-6 (Suricata) → 5 (Zeek) → 2 (Elastic Stack) → 7 (Arkime)
+5 (Suricata) → 4 (Zeek) → 1 (Elastic Stack) → 6 (Arkime)
 ```
 Start Suricata first because its 15-minute startup runs in the background while you deploy the others.
 
@@ -931,19 +956,19 @@ ls /opt/orochi/arkime/raw/
 docker logs -f arkimecapture
 ```
 
-### Container Status (Option 13)
+### Container Status (`status`)
 
-The fastest full check: run `fuse.yml` and choose option `13`. It prints a live `docker ps` table.
+The fastest full check: run `fuse.yml` and enter `status`. It prints a live `docker ps` table.
 
 ---
 
 ## Teardown and Reset
 
-### Graceful Teardown (Option 14)
+### Graceful Teardown (`teardown`)
 
 ```bash
 ansible-playbook fuse.yml
-# Choose 14, type YES when prompted
+# Enter 'teardown' at the menu, type YES when prompted
 ```
 
 Stops all containers and bare metal services. Data under `/opt/orochi/` is preserved.
