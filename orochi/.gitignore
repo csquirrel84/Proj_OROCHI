@@ -1,8 +1,9 @@
 # Orochi Security Stack - Git Ignore
 # ==============================================
 
-# Environment configuration (contains secrets)
+# Environment configuration (contains secrets) — per-operation OP_<NAME>.env
 .env
+*.env
 
 # Ansible vault password file
 .vault_pass

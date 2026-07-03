@@ -1,0 +1,6 @@
+---
+# false = MONITOR MODE: capture-interface traffic that would be blocked is
+#         LOG-only, then falls through to ACCEPT. Nothing is blocked.
+# true  = LOCKDOWN: that same traffic is DROPped instead. Only set true via
+#         the "Lockdown Firewall" option in fuse.yml.
+firewall_enforce: false

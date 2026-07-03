@@ -41,12 +41,13 @@ echo "  • All OROCHI Docker containers and their data"
 echo "  • OROCHI Docker network and dangling volumes"
 echo "  • /opt/orochi  (service data, certs, elasticsearch, kibana, thehive,"
 echo "                  velociraptor, arkime, mattermost, timesketch, portal…)"
-echo "  • /opt/rita    (RITA docker-compose data)"
-echo "  • Zeek runtime dirs, config, and packages (purged)"
-echo "  • Suricata config, data dirs, and package (purged)"
+echo "  • /opt/rita, /etc/rita, /var/log/rita, /usr/local/bin/rita wrapper"
+echo "  • Zeek runtime dirs, config, packages, and cron watchdog (purged)"
+echo "  • Suricata config, data dirs, and packages (purged)"
 echo "  • OROCHI-written systemd units and profile.d entries"
+echo "  • Promiscuous mode on capture interfaces (turned off)"
 echo "  • apt proxy config, Docker insecure-registry config"
-echo "  • OROCHI firewall rules (INPUT / DOCKER-USER)"
+echo "  • OROCHI firewall rules and persistence packages"
 echo ""
 echo -e "${YELLOW}Skipped for speed (commented out — re-enable for full clean):${NC}"
 echo "  • All Docker image removal"
@@ -90,6 +91,7 @@ CONTAINERS=(
     velociraptor
     arkimecapture
     arkimeviewer
+    arkimecapture-remote
     thehive
     cassandra
     elasticsearch-hive
@@ -138,6 +140,9 @@ echo -e "${YELLOW}[5/9] Removing data directories...${NC}"
 for path in \
     /opt/orochi \
     /opt/rita \
+    /etc/rita \
+    /var/log/rita \
+    /usr/local/bin/rita \
     /tmp/docker-debs \
     /tmp/docker-debs.tar.gz \
     /tmp/zeek-debs \
@@ -146,6 +151,7 @@ for path in \
     /tmp/suricata-debs.tar.gz \
     /tmp/suricata-rules.tar.gz \
     /tmp/rita-installer.tar.gz \
+    /tmp/rita-*-installer \
     /tmp/rita_patch_images.py \
     /tmp/zeek-release.key
 do
@@ -195,9 +201,12 @@ if [ -n "$ZEEK_INSTALLED" ]; then
     DEBIAN_FRONTEND=noninteractive dpkg --purge --force-all $ZEEK_INSTALLED 2>/dev/null || true
 fi
 
-if dpkg -s suricata &>/dev/null 2>&1; then
-    info "Purging suricata"
-    DEBIAN_FRONTEND=noninteractive dpkg --purge --force-all suricata 2>/dev/null || true
+# suricata-debs.tar.gz also installs jq and libevent — purge the lot
+SURI_PKGS="suricata jq libevent-2.1-7t64 libevent-core-2.1-7t64 libevent-pthreads-2.1-7t64"
+SURI_INSTALLED=$(dpkg -l $SURI_PKGS 2>/dev/null | awk '/^[hi]i/{print $2}')
+if [ -n "$SURI_INSTALLED" ]; then
+    info "Purging suricata packages: $SURI_INSTALLED"
+    DEBIAN_FRONTEND=noninteractive dpkg --purge --force-all $SURI_INSTALLED 2>/dev/null || true
 fi
 
 ok "Bare metal packages purged"
@@ -230,6 +239,14 @@ done
 
 for unit in /etc/systemd/system/promisc-*.service; do
     if [ -e "$unit" ]; then
+        # Turn promiscuous mode off on the live interface before removing
+        # the unit — otherwise the flag persists until reboot.
+        IFACE=$(basename "$unit" .service)
+        IFACE=${IFACE#promisc-}
+        if ip link show "$IFACE" &>/dev/null; then
+            info "Disabling promiscuous mode on $IFACE"
+            ip link set "$IFACE" promisc off 2>/dev/null || true
+        fi
         info "Removing $unit"
         systemctl disable "$(basename "$unit")" 2>/dev/null || true
         rm -f "$unit"
@@ -279,6 +296,21 @@ iptables -F INPUT 2>/dev/null || true
 iptables -F DOCKER-USER 2>/dev/null || true
 iptables -A DOCKER-USER -j RETURN 2>/dev/null || true
 rm -f /etc/iptables/rules.v4 /etc/iptables/rules.v6
+
+# Firewall persistence packages installed by the firewall role
+# (iptables itself is a base-system package — left alone)
+FW_PKGS=$(dpkg -l iptables-persistent netfilter-persistent 2>/dev/null | awk '/^[hi]i/{print $2}')
+if [ -n "$FW_PKGS" ]; then
+    info "Purging firewall persistence packages: $FW_PKGS"
+    DEBIAN_FRONTEND=noninteractive dpkg --purge --force-all $FW_PKGS 2>/dev/null || true
+fi
+
+# Any leftover RITA compose networks (compose down handles these when the
+# compose file still exists; this catches partially-removed installs)
+for net in $(docker network ls --format '{{.Name}}' 2>/dev/null | grep '^rita' || true); do
+    info "Removing Docker network: $net"
+    docker network rm "$net" 2>/dev/null || true
+done
 
 ok "Node configuration cleaned"
 

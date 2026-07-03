@@ -8,6 +8,11 @@ orochi_project_name: orochi
 orochi_network_name: orochi-network
 orochi_server_ip: "{{ ansible_host | default('127.0.0.1') }}"
 
+# Per-operation configuration file. fuse.yml prompts for an operation name
+# at startup and overrides this with <OP_NAME>.env — one config per op.
+# This default only applies when a role is run outside fuse.
+env_file: "{{ playbook_dir }}/.env"
+
 elasticsearch:
   cluster_name: "orochi"
   license: "basic"

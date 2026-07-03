@@ -15,6 +15,12 @@
 # Docker publishes ports via NAT — that traffic never traverses INPUT, so
 # container ports are enforced in the DOCKER-USER chain. Host-networked
 # services (Arkime viewer/capture, SSH) are enforced in INPUT.
+#
+# MONITOR MODE: enforcement is currently disabled. Traffic that would be
+# dropped is LOG-only (kernel log, see dmesg/journalctl for the
+# OROCHI-FW-* prefixes) and then falls through to ACCEPT. Nothing is
+# actually blocked yet — flip the LOG rules below back to DROP once the
+# logged traffic has been reviewed.
 
 - name: Install iptables persistence packages (from apt cache)
   ansible.builtin.apt:
@@ -83,18 +89,22 @@
     action: insert
   tags: firewall
 
-- name: Drop all other inbound traffic on the capture interface (host)
+- name: Log (would-drop) all other inbound traffic on the capture interface (host)
   ansible.builtin.iptables:
     chain: INPUT
     in_interface: "{{ fw_capture_iface }}"
-    jump: DROP
+    jump: LOG
+    log_prefix: "OROCHI-FW-INPUT-DROP: "
+    log_level: warning
+    limit: "5/min"
+    limit_burst: 10
     action: append
   when: fw_analyst_iface != fw_capture_iface
   tags: firewall
 
 # ── DOCKER-USER rules (bridge-published container ports) ──────────────────────
 # Rules are inserted at position 1 in reverse order so the final order is:
-# established → 8220 → 9200 → DROP → (docker's RETURN).
+# established → 8220 → 9200 → LOG (would-drop) → (docker's RETURN, ACCEPT).
 
 - name: Ensure DOCKER-USER chain exists
   ansible.builtin.shell: |
@@ -102,11 +112,15 @@
   changed_when: false
   tags: firewall
 
-- name: Drop all other container-bound traffic from the capture interface
+- name: Log (would-drop) all other container-bound traffic from the capture interface
   ansible.builtin.iptables:
     chain: DOCKER-USER
     in_interface: "{{ fw_capture_iface }}"
-    jump: DROP
+    jump: LOG
+    log_prefix: "OROCHI-FW-DOCKER-DROP: "
+    log_level: warning
+    limit: "5/min"
+    limit_burst: 10
     action: insert
   when: fw_analyst_iface != fw_capture_iface
   tags: firewall
@@ -153,8 +167,9 @@
 - name: Display firewall status
   ansible.builtin.debug:
     msg:
-      - "Firewall applied."
+      - "Firewall applied (MONITOR MODE — nothing is being blocked)."
       - "Analyst NIC (open):            {{ fw_analyst_iface }}"
-      - "Capture/target NIC (locked):   {{ fw_capture_iface }} — only 8220/9200 reachable"
+      - "Capture/target NIC (logging):  {{ fw_capture_iface }} — non-8220/9200 traffic is logged, not dropped"
       - "Inspect: iptables -L INPUT -n --line-numbers; iptables -L DOCKER-USER -n"
+      - "Logs:    journalctl -k | grep OROCHI-FW-"
   tags: firewall

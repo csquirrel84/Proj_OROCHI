@@ -12,12 +12,86 @@
   gather_facts: false
 
   tasks:
-    - name: Read .env file
-      ansible.builtin.shell: cat {{ playbook_dir }}/.env 2>/dev/null || true
+    # ── Operation selection ───────────────────────────────────────────────────
+    # Every engagement gets its own config file: <OP_NAME>.env. Re-deploying
+    # under the same operation name reuses it; a new name starts clean.
+    # Override without a prompt: ansible-playbook fuse.yml -e op_name=BRASS
+
+    - name: List existing operation configs
+      ansible.builtin.shell: |
+        ls -1 {{ playbook_dir }}/OP_*.env 2>/dev/null | xargs -n1 basename | sed 's/\.env$//'
+        exit 0
+      register: _existing_ops
+      changed_when: false
+
+    - name: Show existing operations
+      ansible.builtin.debug:
+        msg: "Existing operations on this box: {{ _existing_ops.stdout_lines | join(', ') }}"
+      when: _existing_ops.stdout_lines | length > 0
+
+    - name: Check for legacy .env
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/.env"
+      register: _legacy_env
+
+    - name: Warn about legacy .env
+      ansible.builtin.debug:
+        msg: >-
+          NOTE: a legacy .env was found. To adopt it as an operation config,
+          rename it: mv .env OP_<NAME>.env
+      when: _legacy_env.stat.exists
+
+    - name: Prompt for operation name
+      ansible.builtin.pause:
+        prompt: "Operation name (e.g. BRASS)"
+        echo: yes
+      register: _op_name_input
+      when: op_name is not defined
+
+    - name: Normalise operation name
+      # 'brass', 'op brass', 'OP_BRASS' all become OP_BRASS — case and
+      # spacing differences can never fork an op's configuration.
+      ansible.builtin.set_fact:
+        op_id: >-
+          {%- set raw = (op_name | default(_op_name_input.user_input, true) | default('', true))
+                        | trim | upper | regex_replace('[^A-Z0-9]+', '_')
+                        | regex_replace('^_+', '') | regex_replace('_+$', '') -%}
+          {%- if raw | length == 0 -%}
+          {%- elif raw.startswith('OP_') -%}{{ raw }}
+          {%- else -%}OP_{{ raw }}
+          {%- endif -%}
+
+    - name: Fail if operation name is empty
+      ansible.builtin.fail:
+        msg: "An operation name is required (e.g. BRASS)."
+      when: op_id | trim | length == 0
+
+    - name: Set operation config path
+      ansible.builtin.set_fact:
+        env_file: "{{ playbook_dir }}/{{ op_id }}.env"
+
+    - name: Check for existing operation config
+      ansible.builtin.stat:
+        path: "{{ env_file }}"
+      register: _op_env_stat
+
+    - name: Report operation status
+      ansible.builtin.debug:
+        msg: >-
+          {%- if _op_env_stat.stat.exists -%}
+          Existing configuration found for {{ op_id }} ({{ op_id }}.env) —
+          you will be asked whether to reuse it.
+          {%- else -%}
+          New operation {{ op_id }} — a fresh configuration will be created
+          at {{ op_id }}.env.
+          {%- endif -%}
+
+    - name: Read operation config
+      ansible.builtin.shell: cat {{ env_file }} 2>/dev/null || true
       register: _env_content
       changed_when: false
 
-    - name: Parse .env values
+    - name: Parse saved node IP
       ansible.builtin.set_fact:
         _env_node_ip: "{{ _env_content.stdout | regex_search('OROCHI_NODE_IP=(.+)', '\\1') | first | default('') }}"
       when: _env_content.stdout | trim | length > 0
@@ -45,6 +119,8 @@
         ansible_host: "{{ orochi_node_ip }}"
         ansible_user: orochi
         ansible_ssh_private_key_file: ~/.ssh/orochi_id_ed25519
+        env_file: "{{ env_file }}"
+        op_id: "{{ op_id }}"
 
     - name: Display Orochi Banner
       ansible.builtin.debug:
@@ -63,7 +139,8 @@
           ║                                                               ║
           ╚═══════════════════════════════════════════════════════════════╝
 
-          Target: {{ orochi_node_ip }}
+          Operation: {{ op_id }}
+          Target:    {{ orochi_node_ip }}
 
 
     - name: Display menu
@@ -378,7 +455,8 @@
           ╔═══════════════════════════════════════════════════════════════╗
           ║                    DEPLOYMENT COMPLETE                        ║
           ╠═══════════════════════════════════════════════════════════════╣
-          ║  Configuration saved to ./orochi/.env (control node)          ║
+          ║{{ '%-63s' | format('  Operation: ' + (op_id | default('?'))) }}║
+          ║{{ '%-63s' | format('  Config saved to ' + (op_id | default('OP')) + '.env (control node)') }}║
           ║  The engagement password is NOT stored anywhere —             ║
           ║  record it securely now. It cannot be recovered.              ║
           ║                                                               ║

@@ -4,19 +4,20 @@
 # ==============================================
 
 # 1. CHECK FOR EXISTING CONFIG (on control node)
-- name: Check if .env file already exists on control node
+# env_file is the per-operation config (<OP_NAME>.env), set by fuse.yml.
+- name: Check if operation config already exists on control node
   ansible.builtin.stat:
-    path: "{{ playbook_dir }}/.env"
+    path: "{{ env_file }}"
   register: env_file_exists
   delegate_to: localhost
   become: false
   tags: environment
 
-- name: Read existing .env for display
+- name: Read existing operation config for display
   # Secrets (Arkime HMAC secret, Kibana encryption key) are filtered out so
   # they never appear on screen or in install.log.
   ansible.builtin.shell: |
-    grep -vE '^(ARKIME_PASSWORD_SECRET|KIBANA_ENCRYPTION_KEY)=' {{ playbook_dir }}/.env
+    grep -vE '^(ARKIME_PASSWORD_SECRET|KIBANA_ENCRYPTION_KEY)=' {{ env_file }}
   register: _env_preview
   delegate_to: localhost
   become: false
@@ -32,14 +33,14 @@
 
 - name: Prompt to use existing config
   ansible.builtin.pause:
-    prompt: "Use this configuration? (y/n) [y]"
+    prompt: "You have a saved configuration for {{ op_id | default('this operation') }}. Use it? (y/n) [y]"
     echo: yes
   register: use_existing_env
   when: env_file_exists.stat.exists
   tags: environment
 
-- name: Load existing .env variables from control node
-  ansible.builtin.command: cat {{ playbook_dir }}/.env
+- name: Load existing operation config from control node
+  ansible.builtin.command: cat {{ env_file }}
   register: existing_env
   delegate_to: localhost
   become: false
@@ -72,7 +73,7 @@
 # existing Arkime user hash; regenerating the Kibana key invalidates
 # encrypted saved objects.
 - name: Read secrets from existing .env
-  ansible.builtin.command: cat {{ playbook_dir }}/.env
+  ansible.builtin.command: cat {{ env_file }}
   register: _env_secrets_raw
   delegate_to: localhost
   become: false
@@ -105,7 +106,7 @@
 
 - name: Persist regenerated Arkime secret to .env
   ansible.builtin.lineinfile:
-    path: "{{ playbook_dir }}/.env"
+    path: "{{ env_file }}"
     regexp: '^ARKIME_PASSWORD_SECRET='
     line: "ARKIME_PASSWORD_SECRET={{ arkime_password_secret }}"
   delegate_to: localhost
@@ -438,7 +439,7 @@
 
 - name: Persist regenerated Kibana key to .env when reusing config
   ansible.builtin.lineinfile:
-    path: "{{ playbook_dir }}/.env"
+    path: "{{ env_file }}"
     regexp: '^KIBANA_ENCRYPTION_KEY='
     line: "KIBANA_ENCRYPTION_KEY={{ kibana_encryption_key }}"
   delegate_to: localhost
@@ -522,12 +523,13 @@
 
 
 
-# 6. WRITE .ENV (No Passwords) - On control node only
-- name: Create/Update .env file on control node
+# 6. WRITE OPERATION CONFIG (No Passwords) - On control node only
+- name: Create/Update operation config on control node
   ansible.builtin.copy:
     content: |
       # ==============================================
       # Orochi Security Stack Configuration
+      # Operation: {{ op_id | default('unknown') }}
       # Generated: {{ ansible_date_time.iso8601 }}
       # Target: {{ inventory_hostname }}
       # ==============================================
@@ -544,7 +546,7 @@
       OROCHI_NODE_IP={{ ansible_host }}
       ARKIME_VERSION={{ arkime_version }}
       DEFAULT_TIMEOUT=300
-    dest: "{{ playbook_dir }}/.env"
+    dest: "{{ env_file }}"
     mode: '0600'
   delegate_to: localhost
   become: false

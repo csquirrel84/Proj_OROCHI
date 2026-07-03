@@ -8,9 +8,9 @@
 # server. Under DHCP or Tailscale the IP changes between sessions, so we
 # resolve it here and persist it in .env for re-runs.
 
-- name: Read MGMT_BOX_IP from .env if present
+- name: Read MGMT_BOX_IP from the operation config if present
   ansible.builtin.shell: |
-    grep '^MGMT_BOX_IP=' {{ playbook_dir }}/.env 2>/dev/null | cut -d= -f2 || true
+    grep '^MGMT_BOX_IP=' {{ env_file }} 2>/dev/null | cut -d= -f2 || true
   register: _saved_mgmt_ip
   delegate_to: localhost
   become: false
@@ -94,9 +94,9 @@
   delegate_to: localhost
   delegate_facts: true
 
-- name: Persist MGMT_BOX_IP to .env for re-runs
+- name: Persist MGMT_BOX_IP to the operation config for re-runs
   ansible.builtin.lineinfile:
-    path: "{{ playbook_dir }}/.env"
+    path: "{{ env_file }}"
     regexp: '^MGMT_BOX_IP='
     line: "MGMT_BOX_IP={{ mgmt_box_ip }}"
     create: true

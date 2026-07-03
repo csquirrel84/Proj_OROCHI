@@ -7,7 +7,7 @@
 #   ansible-playbook ~/orochi/orochi/playbooks/deploy_remote_capture.yml
 #
 # Or with explicit overrides:
-#   ansible-playbook ... -e remote_capture_interface=eth1 -e capture_target=192.168.10.5
+#   ansible-playbook ... -e op_name=BRASS -e remote_capture_interface=eth1 -e capture_target=192.168.10.5
 
 # ── Play 1: Read .env, add orochi node + capture target to inventory ──────────
 
@@ -17,14 +17,60 @@
   gather_facts: false
 
   tasks:
-    - name: Read .env file
-      ansible.builtin.shell: cat {{ playbook_dir }}/../.env 2>/dev/null || true
+    # ── Operation selection ───────────────────────────────────────────────────
+    # Config is per-operation: <OP_NAME>.env, created by fuse.yml.
+    # Override without a prompt: -e op_name=BRASS
+
+    - name: List available operation configs
+      ansible.builtin.shell: |
+        ls -1 {{ playbook_dir }}/../OP_*.env 2>/dev/null | xargs -n1 basename | sed 's/\.env$//'
+        exit 0
+      register: _existing_ops
+      changed_when: false
+
+    - name: Show available operations
+      ansible.builtin.debug:
+        msg: "Operations on this box: {{ _existing_ops.stdout_lines | join(', ') }}"
+      when: _existing_ops.stdout_lines | length > 0
+
+    - name: Prompt for operation name
+      ansible.builtin.pause:
+        prompt: "Operation name (e.g. BRASS)"
+        echo: yes
+      register: _op_name_input
+      when: op_name is not defined
+
+    - name: Normalise operation name
+      ansible.builtin.set_fact:
+        op_id: >-
+          {%- set raw = (op_name | default(_op_name_input.user_input, true) | default('', true))
+                        | trim | upper | regex_replace('[^A-Z0-9]+', '_')
+                        | regex_replace('^_+', '') | regex_replace('_+$', '') -%}
+          {%- if raw | length == 0 -%}
+          {%- elif raw.startswith('OP_') -%}{{ raw }}
+          {%- else -%}OP_{{ raw }}
+          {%- endif -%}
+
+    - name: Fail if operation name is empty
+      ansible.builtin.fail:
+        msg: "An operation name is required (e.g. BRASS)."
+      when: op_id | trim | length == 0
+
+    - name: Set operation config path
+      ansible.builtin.set_fact:
+        env_file: "{{ playbook_dir }}/../{{ op_id }}.env"
+
+    - name: Read operation config
+      ansible.builtin.shell: cat {{ env_file }} 2>/dev/null || true
       register: _env_content
       changed_when: false
 
-    - name: Fail if .env missing
+    - name: Fail if operation config missing
       ansible.builtin.fail:
-        msg: ".env not found — run fuse.yml against the orochi node first."
+        msg: >-
+          No configuration found for {{ op_id }} ({{ op_id }}.env) —
+          run fuse.yml for this operation first.
+          Available operations: {{ _existing_ops.stdout_lines | join(', ') | default('none', true) }}
       when: _env_content.stdout | trim | length == 0
 
     - name: Parse .env values
@@ -79,6 +125,7 @@
     - name: Show resolved config
       ansible.builtin.debug:
         msg:
+          - "Operation:      {{ op_id }}"
           - "Orochi node:    {{ orochi_node_ip }}"
           - "Mgmt box:       {{ mgmt_box_ip }}"
           - "Arkime version: {{ arkime_version }}"
