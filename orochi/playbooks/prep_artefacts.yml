@@ -406,20 +406,44 @@
 
     # ── Suricata rules ─────────────────────────────────────────────────────────
 
-    - name: Download Suricata rules
+    # Two artefacts are produced:
+    #   suricata-rules.tar.gz    — merged ruleset of ALL free sources (initial
+    #                              node deploy, unchanged consumer)
+    #   suricata-sources.tar.gz  — per-source raw rule files + manifest.json,
+    #                              consumed by the node's Suricata Manager API
+    #                              so analysts can toggle sources offline.
+    # "Free" = every source in the suricata-update index that needs no auth
+    # parameters (ET Open, abuse.ch SSLbl/URLhaus, OISF traffic-id, etc.).
+    - name: Download Suricata rules (all free sources, merged + per-source)
+      # The per-source fetch logic lives in files/fetch_suricata_sources.py
+      # (shared with check_updates.yml) and is mounted into the container.
+      # The merged suricata.rules is the raw concatenation of the per-source
+      # files — identical bytes to "all sources ticked" in the node UI, so
+      # toggling is always a pure subset of what shipped.
       ansible.builtin.shell: |
         docker run --rm \
           -v {{ artifacts_dir }}:/output \
+          -v {{ playbook_dir }}/../files/fetch_suricata_sources.py:/fetch.py:ro \
           ubuntu:noble \
-          bash -c "
-            apt-get update -qq &&
-            DEBIAN_FRONTEND=noninteractive apt-get install -y -qq suricata suricata-update &&
-            suricata-update --no-reload --no-test &&
+          bash -c '
+            set -e
+            apt-get update -qq
+            DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+              suricata suricata-update python3-yaml curl
+            suricata-update update-sources
+            python3 /fetch.py /output/suricata-sources
+            mkdir -p /var/lib/suricata/rules
+            cat /output/suricata-sources/*.rules > /var/lib/suricata/rules/suricata.rules
             tar -czf /output/suricata-rules.tar.gz -C /var/lib/suricata rules/
-          "
+            tar -czf /output/suricata-sources.tar.gz -C /output suricata-sources/
+          '
       changed_when: true
       register: rules_result
       failed_when: rules_result.rc != 0
+
+    - name: Show Suricata source download summary
+      ansible.builtin.debug:
+        msg: "{{ rules_result.stdout_lines | select('match', '^(OK|SKIP)') | list }}"
 
     # ── Warm apt-cacher-ng with standard packages ──────────────────────────────
 
@@ -508,6 +532,7 @@
         - "zeek-debs.tar.gz"
         - "suricata-debs.tar.gz"
         - "suricata-rules.tar.gz"
+        - "suricata-sources.tar.gz"
         - "zeek-release.key"
       loop_control:
         label: "{{ item }}"

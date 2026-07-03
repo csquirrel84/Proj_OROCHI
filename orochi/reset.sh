@@ -150,6 +150,7 @@ for path in \
     /tmp/suricata-debs \
     /tmp/suricata-debs.tar.gz \
     /tmp/suricata-rules.tar.gz \
+    /tmp/suricata-sources.tar.gz \
     /tmp/rita-installer.tar.gz \
     /tmp/rita-*-installer \
     /tmp/rita_patch_images.py \
@@ -231,10 +232,16 @@ if systemctl is-enabled --quiet zeekctl-cron.timer 2>/dev/null; then
     systemctl disable --now zeekctl-cron.timer 2>/dev/null || true
 fi
 
+if systemctl is-enabled --quiet orochi-suricata-manager.service 2>/dev/null; then
+    info "Disabling orochi-suricata-manager.service"
+    systemctl disable --now orochi-suricata-manager.service 2>/dev/null || true
+fi
+
 for unit in \
     /etc/systemd/system/zeek.service \
     /etc/systemd/system/zeekctl-cron.service \
     /etc/systemd/system/zeekctl-cron.timer \
+    /etc/systemd/system/orochi-suricata-manager.service \
     /etc/systemd/system/suricata.service.d \
     /etc/systemd/system/zeek.service.d
 do
@@ -263,6 +270,12 @@ done
 if [ -f /etc/profile.d/zeek.sh ]; then
     info "Removing /etc/profile.d/zeek.sh"
     rm -f /etc/profile.d/zeek.sh
+fi
+
+# Suricata Manager script (config/sources dirs are removed with /var/lib/suricata above)
+if [ -f /usr/local/bin/orochi-suricata-manager ]; then
+    info "Removing Suricata Manager script"
+    rm -f /usr/local/bin/orochi-suricata-manager
 fi
 
 # zeekctl cron watchdog installed by the zeek role

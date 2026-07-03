@@ -57,7 +57,7 @@ Dev addressing: management box `100.99.102.28` (Tailscale, user `orochiman`), no
 | Service | Role |
 |---------|------|
 | Zeek | Network metadata (installed from cached `.deb`s) |
-| Suricata | Network IDS (cached `.deb`s + cached ET Open ruleset, ~15 min first start for rule compilation) |
+| Suricata | Network IDS (cached `.deb`s + cached free rulesets, ~15 min first start). Ships with the **Suricata Manager** — a stdlib-Python control API on the analyst NIC (:7000) to toggle per-source rules and pull refreshed bundles from the mgmt box, hot-reloading via `suricatasc` |
 
 ### Docker Compose stack at `/opt/rita/`
 | Container | Role |
@@ -168,9 +168,12 @@ Proj_OROCHI/
     ├── reset.sh                # Node reset script (run on the node as root)
     ├── group_vars/all.yml      # Versions, ports, images, resource limits, password fan-out
     ├── inventory/hosts.yml     # Intentionally empty — fuse populates via add_host
+    ├── files/
+    │   └── fetch_suricata_sources.py   # shared: per-source rule downloader
     ├── playbooks/
     │   ├── setup_mgmt_box.yml          # Phase 0
     │   ├── prep_artefacts.yml          # Phase 1
+    │   ├── check_updates.yml           # report upstream updates; refresh Suricata sources
     │   └── deploy_remote_capture.yml   # Standalone remote capture (mid-engagement)
     └── roles/
         bootstrap_node, common, environment, firewall, certificates,

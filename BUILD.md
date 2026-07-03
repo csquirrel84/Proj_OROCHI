@@ -661,6 +661,8 @@ Once you see `Engine started.`, Suricata is live. Subsequent restarts are fast (
 - `/var/log/suricata/fast.log` — human-readable alert log
 - `/var/log/suricata/stats.log` — performance statistics
 
+**Suricata Manager (rule source control):** Option 5 also installs the OROCHI Suricata Manager — a small control API on the analyst NIC (port 7000), linked from the portal's Suricata card. It lists every cached rule source (ET Open, abuse.ch SSLBL/URLhaus, OISF traffic-id, etc.) with a rule count and tick box. Untick a source and press **Apply & Reload** to rebuild the live ruleset and hot-reload Suricata via `suricatasc` — no 8–15 minute restart. Press **Update rules from mgmt box** to pull a refreshed source bundle from the management box artifact server (after you've run `check_updates.yml -e refresh_suricata=true` there with internet) and reload in place. The Manager binds to the analyst interface only, so it is never exposed on the monitored network — the firewall lockdown does not reach it.
+
 **Estimated time:** 5 minutes to deploy, 8–15 minutes for first service startup
 
 ---
@@ -1069,14 +1071,20 @@ To re-run the IP selection prompt (e.g. the management box IP has changed), dele
 
 All version pins are in `group_vars/all.yml`. To update any tool:
 
+**Checking what's available (management box, internet required):** run `ansible-playbook playbooks/check_updates.yml` before an engagement. It **reports only** — never bumps a pin automatically — printing pinned vs latest for the Elastic Stack, Velociraptor, and RITA. TheHive 4 and its Elasticsearch 7.x are marked `[FROZEN]` and deliberately excluded, because TheHive 4 breaks on ES 8+. Add `-e refresh_suricata=true` to also re-download the cached Suricata rule sources.
+
+**Adopting an update:**
+
 1. Edit the relevant version variable in `group_vars/all.yml`
 2. Run `prep_artefacts.yml` with internet access — it downloads the new version and pushes it to the local registry
 3. Run `fuse.yml` on-site — the role detects the container is out of date and recreates it with the new image
 
 **Version constraints to be aware of:**
-- `elasticsearch_hive_version` must stay on `7.x` — TheHive 4 is not compatible with Elasticsearch 8+
+- `elasticsearch_hive_version` must stay on `7.x` — TheHive 4 is not compatible with Elasticsearch 8+ (this is why `check_updates.yml` never flags it)
 - `cassandra_version: "4.0"` — TheHive 4 is tested against Cassandra 4
 - `stack_version` for Elasticsearch, Kibana, and Fleet Agent must all be the **same version** — the Elastic stack enforces version parity
+
+**Refreshing Suricata rules mid-engagement:** once deployed you don't re-run prep for new rules. On the management box run `check_updates.yml -e refresh_suricata=true`, then on the node open the portal's **Suricata Manager** and press **Update rules from mgmt box** — it pulls the refreshed bundle and hot-reloads Suricata. The node only ever pulls from the management box, never the internet.
 
 ---
 

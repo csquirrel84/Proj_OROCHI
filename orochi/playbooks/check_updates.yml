@@ -1,0 +1,123 @@
+---
+# check_updates.yml
+# Run on the management box WITH INTERNET. Reports (does not auto-install)
+# available updates for OROCHI's pinned software, and can refresh the cached
+# Suricata rule sources in place.
+#
+#   ansible-playbook playbooks/check_updates.yml            # report only
+#   ansible-playbook playbooks/check_updates.yml -e refresh_suricata=true
+#
+# Version pins that are intentionally frozen are NOT checked:
+#   - TheHive 4 and its Elasticsearch 7.x  (TheHive 4 breaks on ES 8+)
+# Everything else is reported so you can decide whether to bump the pin in
+# group_vars/all.yml and re-run prep_artefacts.yml.
+
+- name: Check for OROCHI software and ruleset updates
+  hosts: localhost
+  connection: local
+  gather_facts: true
+
+  vars_files:
+    - "{{ playbook_dir }}/../group_vars/all.yml"
+
+  vars:
+    artifacts_dir: /opt/orochi/artifacts
+    refresh_suricata: false
+    frozen_note: "TheHive 4 requires ES 7.x — pinned deliberately, not checked."
+
+  tasks:
+
+    - name: Query latest Elastic Stack version
+      ansible.builtin.uri:
+        url: https://artifacts-api.elastic.co/v1/versions
+        return_content: true
+        timeout: 15
+      register: _elastic_versions
+      failed_when: false
+
+    - name: Parse latest stable Elastic version
+      ansible.builtin.shell: |
+        python3 - <<'PY'
+        import json, re
+        raw = {{ _elastic_versions.json.versions | default([]) | to_json }}
+        stable = sorted(
+          [v for v in raw if re.match(r'^\d+\.\d+\.\d+$', v)],
+          key=lambda v: tuple(int(x) for x in v.split('.')))
+        print(stable[-1] if stable else '')
+        PY
+      register: _elastic_latest
+      changed_when: false
+      when: _elastic_versions.status | default(0) == 200
+
+    - name: Query latest Velociraptor release
+      ansible.builtin.uri:
+        url: https://api.github.com/repos/Velocidex/velociraptor/releases/latest
+        return_content: true
+        timeout: 15
+      register: _velox_latest
+      failed_when: false
+
+    - name: Query latest RITA release
+      ansible.builtin.uri:
+        url: https://api.github.com/repos/activecm/rita/releases/latest
+        return_content: true
+        timeout: 15
+      register: _rita_latest
+      failed_when: false
+
+    - name: Build update report
+      ansible.builtin.set_fact:
+        _report:
+          - "── OROCHI update report ──────────────────────────────"
+          - "Elastic Stack : pinned {{ stack_version }}  latest {{ _elastic_latest.stdout | default('?') | trim }}{{ '   ** UPDATE **' if (_elastic_latest.stdout | default('') | trim) not in ['', stack_version] else '   up to date' }}"
+          - "Velociraptor  : latest {{ (_velox_latest.json.tag_name | default('?')) if _velox_latest.json is defined else '?' }}  (resolved fresh at prep time — always current)"
+          - "RITA          : pinned {{ rita_version }}  latest {{ (_rita_latest.json.tag_name | default('?')) if _rita_latest.json is defined else '?' }}{{ '   ** UPDATE **' if (_rita_latest.json.tag_name | default('') if _rita_latest.json is defined else '') not in ['', rita_version] else '   up to date' }}"
+          - "Arkime        : pinned {{ arkime_version }}  (rolling tag — re-pulled each prep)"
+          - "TheHive 4     : {{ thehive_version }}  [FROZEN] {{ frozen_note }}"
+          - "ES for TheHive: {{ elasticsearch_hive_version }}  [FROZEN]"
+          - "Suricata rules: refresh with  -e refresh_suricata=true"
+          - "──────────────────────────────────────────────────────"
+          - "To adopt an update: edit the pin in group_vars/all.yml, then"
+          - "re-run prep_artefacts.yml with internet."
+
+    - name: Show update report
+      ansible.builtin.debug:
+        msg: "{{ _report }}"
+
+    # ── Optional: refresh cached Suricata sources in place ────────────────────
+
+    - name: Refresh Suricata rule sources
+      when: refresh_suricata | bool
+      block:
+        - name: Re-download all free Suricata sources
+          # Same shared script as prep_artefacts.yml.
+          ansible.builtin.shell: |
+            docker run --rm \
+              -v {{ artifacts_dir }}:/output \
+              -v {{ playbook_dir }}/../files/fetch_suricata_sources.py:/fetch.py:ro \
+              ubuntu:noble \
+              bash -c '
+                set -e
+                apt-get update -qq
+                DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+                  suricata suricata-update python3-yaml curl
+                suricata-update update-sources
+                python3 /fetch.py /output/suricata-sources
+                mkdir -p /var/lib/suricata/rules
+                cat /output/suricata-sources/*.rules > /var/lib/suricata/rules/suricata.rules
+                tar -czf /output/suricata-rules.tar.gz -C /var/lib/suricata rules/
+                tar -czf /output/suricata-sources.tar.gz -C /output suricata-sources/
+              '
+          register: _suri_refresh
+          changed_when: true
+
+        - name: Show refresh summary
+          ansible.builtin.debug:
+            msg: "{{ _suri_refresh.stdout_lines | select('match', '^(OK|SKIP)') | list }}"
+
+        - name: Remind to redeploy
+          ansible.builtin.debug:
+            msg: >-
+              Suricata sources refreshed on the management box. On the node,
+              open the Suricata Manager (portal → Suricata) and press Update,
+              or re-run fuse.yml option 5.

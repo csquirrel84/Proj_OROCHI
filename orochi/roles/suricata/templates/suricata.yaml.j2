@@ -139,3 +139,9 @@ capture:
 stats:
   enabled: yes
   interval: 8
+
+# Unix command socket — required for `suricatasc -c reload-rules`, the live
+# rule reload the OROCHI Suricata Manager uses to apply source toggles
+# without a full 8-15 min engine restart.
+unix-command:
+  enabled: yes
