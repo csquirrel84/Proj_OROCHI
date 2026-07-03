@@ -13,7 +13,10 @@
   tags: environment
 
 - name: Read existing .env for display
-  ansible.builtin.command: cat {{ playbook_dir }}/.env
+  # Secrets (Arkime HMAC secret, Kibana encryption key) are filtered out so
+  # they never appear on screen or in install.log.
+  ansible.builtin.shell: |
+    grep -vE '^(ARKIME_PASSWORD_SECRET|KIBANA_ENCRYPTION_KEY)=' {{ playbook_dir }}/.env
   register: _env_preview
   delegate_to: localhost
   become: false
@@ -48,25 +51,13 @@
 
 - name: Parse existing configuration
   ansible.builtin.set_fact:
-    stack_version: "{{ existing_env.stdout | regex_search('STACK_VERSION=(.+)', '\\1') | first | default('9.2.2', true) }}"
+    stack_version: "{{ existing_env.stdout | regex_search('STACK_VERSION=(.+)', '\\1') | first | default(stack_version, true) }}"
     cluster_name: "{{ existing_env.stdout | regex_search('CLUSTER_NAME=(.+)', '\\1') | first | default('orochi', true) }}"
-    license: "{{ existing_env.stdout | regex_search('LICENSE=(.+)', '\\1') | first | default('trial', true) }}"
+    license: "{{ existing_env.stdout | regex_search('LICENSE=(.+)', '\\1') | first | default('basic', true) }}"
     mem_limit: "{{ existing_env.stdout | regex_search('MEM_LIMIT=(.+)', '\\1') | first | default('4g', true) }}"
     velox_user: "{{ existing_env.stdout | regex_search('VELOX_USER=(.+)', '\\1') | first | default('admin', true) }}"
-    velox_role: "{{ existing_env.stdout | regex_search('VELOX_ROLE=(.+)', '\\1') | first | default('administrator', true) }}"
-    es_port: "{{ existing_env.stdout | regex_search('ES_PORT=(.+)', '\\1') | first | default('9200', true) }}"
-    kibana_port: "{{ existing_env.stdout | regex_search('KIBANA_PORT=(.+)', '\\1') | first | default('5601', true) }}"
-    fleet_port: "{{ existing_env.stdout | regex_search('FLEET_PORT=(.+)', '\\1') | first | default('8220', true) }}"
-    suricata_port: "{{ existing_env.stdout | regex_search('SURICATA_PORT=(.+)', '\\1') | first | default('8000', true) }}"
     suricata_interface: "{{ existing_env.stdout | regex_search('SURICATA_INTERFACE=(.+)', '\\1') | first | default('eth0', true) }}"
     suricata_home_net: "{{ existing_env.stdout | regex_search('SURICATA_HOME_NET=(.+)', '\\1') | first | default('192.168.0.0/16', true) }}"
-    local_kbn_url: "{{ existing_env.stdout | regex_search('LOCAL_KBN_URL=(.+)', '\\1') | first | default('https://100.106.108.5:5601', true) }}"
-    arkime_es_ip: "{{ existing_env.stdout | regex_search('ARKIME_ELASTICSEARCH_IP=(.+)', '\\1') | first | default('127.0.0.1', true) }}"
-    velox_server_url: "{{ existing_env.stdout | regex_search('VELOX_SERVER_URL=(.+)', '\\1') | first | default('https://100.106.108.5:8889/', true) }}"
-    velox_hostname: "{{ existing_env.stdout | regex_search('VELOX_FRONTEND_HOSTNAME=(.+)', '\\1') | first | default('100.106.108.5', true) }}"
-    selected_ip: "{{ existing_env.stdout | regex_search('SELECTED_IP=(.+)', '\\1') | first | default('127.0.0.1', true) }}"
-    arkime_password_secret: "{{ existing_env.stdout | regex_search('ARKIME_PASSWORD_SECRET=(.+)', '\\1') | first }}"
-    kibana_encryption_key: "{{ existing_env.stdout | regex_search('KIBANA_ENCRYPTION_KEY=(.+)', '\\1') | first | default('', true) }}"
     mgmt_box_ip: "{{ existing_env.stdout | regex_search('MGMT_BOX_IP=(.+)', '\\1') | first | default(mgmt_box_ip, true) }}"
     orochi_node_ip: "{{ existing_env.stdout | regex_search('OROCHI_NODE_IP=(.+)', '\\1') | first | default(ansible_host, true) }}"
     arkime_version: "{{ existing_env.stdout | regex_search('ARKIME_VERSION=(.+)', '\\1') | first | default(arkime_version, true) }}"
@@ -74,6 +65,53 @@
   when:
     - env_file_exists.stat.exists
     - use_existing_env.user_input | default('y', true) | lower in ['y', 'yes', '']
+  tags: environment
+
+# Secrets are reused from .env regardless of whether the rest of the config
+# is reused. Regenerating the Arkime password secret invalidates every
+# existing Arkime user hash; regenerating the Kibana key invalidates
+# encrypted saved objects.
+- name: Read secrets from existing .env
+  ansible.builtin.command: cat {{ playbook_dir }}/.env
+  register: _env_secrets_raw
+  delegate_to: localhost
+  become: false
+  changed_when: false
+  when: env_file_exists.stat.exists
+  no_log: true
+  tags: environment
+
+- name: Reuse persistent secrets from existing .env
+  ansible.builtin.set_fact:
+    arkime_password_secret: "{{ _env_secrets_raw.stdout | regex_search('ARKIME_PASSWORD_SECRET=(.+)', '\\1') | first | default('', true) }}"
+    kibana_encryption_key: "{{ _env_secrets_raw.stdout | regex_search('KIBANA_ENCRYPTION_KEY=(.+)', '\\1') | first | default('', true) }}"
+  when: env_file_exists.stat.exists
+  no_log: true
+  tags: environment
+
+- name: Regenerate Arkime password secret if missing from .env
+  ansible.builtin.shell: openssl rand -base64 32
+  register: _arkime_secret_regen
+  when: (arkime_password_secret | default('') | length) == 0 and env_file_exists.stat.exists
+  no_log: true
+  tags: environment
+
+- name: Set and persist regenerated Arkime secret
+  ansible.builtin.set_fact:
+    arkime_password_secret: "{{ _arkime_secret_regen.stdout }}"
+  when: _arkime_secret_regen is not skipped
+  no_log: true
+  tags: environment
+
+- name: Persist regenerated Arkime secret to .env
+  ansible.builtin.lineinfile:
+    path: "{{ playbook_dir }}/.env"
+    regexp: '^ARKIME_PASSWORD_SECRET='
+    line: "ARKIME_PASSWORD_SECRET={{ arkime_password_secret }}"
+  delegate_to: localhost
+  become: false
+  when: _arkime_secret_regen is not skipped
+  no_log: true
   tags: environment
 
 - name: Create suricata config dict from existing .env
@@ -105,7 +143,7 @@
 
 - name: Verify Password is Set
   ansible.builtin.fail:
-    msg: "Password is required! Check vars/secrets.yml or enter it interactively."
+    msg: "Password is required! Enter the engagement password when prompted."
   when: common_password is not defined or common_password == ""
   tags: environment
 
@@ -170,15 +208,15 @@
 
 - name: Prompt for license type
   ansible.builtin.pause:
-    prompt: "Enter license type (basic/trial) [trial]"
+    prompt: "Enter license type (basic/trial) [basic]"
     echo: yes
   register: license_input
   when: not (skip_env_prompts | default(false))
   tags: environment
 
-- name: Prompt for memory limit
+- name: Prompt for Elasticsearch memory limit
   ansible.builtin.pause:
-    prompt: "Enter memory limit [8g]"
+    prompt: "Enter Elasticsearch memory limit [4g]"
     echo: yes
   register: mem_limit_input
   when: not (skip_env_prompts | default(false))
@@ -367,33 +405,15 @@
   when: not (skip_env_prompts | default(false))
   tags: environment
 
-- name: Prompt for Fleet/Elasticsearch IP selection
-  ansible.builtin.pause:
-    prompt: "Select IP number for Fleet Server and Elasticsearch (external access)"
-    echo: yes
-  register: selected_ip_input
-  when: not (skip_env_prompts | default(false))
-  tags: environment
-
-- name: Parse selected IP
-  ansible.builtin.set_fact:
-    selected_ip_parsed: "{{ ip_lookup_table.stdout_lines[selected_ip_input.user_input | int - 1] if selected_ip_input.user_input | default('') | regex_search('^[0-9]+$') else (ip_lookup_table.stdout_lines[0] | default('127.0.0.1')) }}"
-  when: not (skip_env_prompts | default(false))
-  tags: environment
-
-- name: Prompt for Velociraptor server URL
-  ansible.builtin.pause:
-    prompt: "Enter Velociraptor server URL [https://100.106.108.5:8889/]"
-    echo: yes
-  register: velox_url_input
-  when: not (skip_env_prompts | default(false))
-  tags: environment
+# Fleet, Elasticsearch, Kibana, Velociraptor and Arkime all bind to the
+# node itself and are addressed via ansible_host (orochi_server_ip) — no
+# separate IP/URL prompts are needed.
 
 - name: Generate Arkime password secret
   ansible.builtin.shell: openssl rand -base64 32
   register: arkime_password_secret_new
   changed_when: false
-  when: not (skip_env_prompts | default(false))
+  when: (arkime_password_secret | default('') | length) == 0
   no_log: true
   tags: environment
 
@@ -401,9 +421,32 @@
   ansible.builtin.shell: openssl rand -hex 32
   register: kibana_key_gen
   changed_when: false
-  when: 
-    - not (skip_env_prompts | default(false))
-    - kibana_encryption_key | default('') == ''
+  when: (kibana_encryption_key | default('') | length) == 0
+  no_log: true
+  tags: environment
+
+# If config was reused from an older .env that lacked the key, the prompt-flow
+# set_fact below is skipped — set and persist it here instead.
+- name: Set regenerated Kibana key when reusing config
+  ansible.builtin.set_fact:
+    kibana_encryption_key: "{{ kibana_key_gen.stdout }}"
+  when:
+    - kibana_key_gen is not skipped
+    - skip_env_prompts | default(false)
+  no_log: true
+  tags: environment
+
+- name: Persist regenerated Kibana key to .env when reusing config
+  ansible.builtin.lineinfile:
+    path: "{{ playbook_dir }}/.env"
+    regexp: '^KIBANA_ENCRYPTION_KEY='
+    line: "KIBANA_ENCRYPTION_KEY={{ kibana_encryption_key }}"
+  delegate_to: localhost
+  become: false
+  when:
+    - kibana_key_gen is not skipped
+    - skip_env_prompts | default(false)
+  no_log: true
   tags: environment
 
 # 5. VARIABLE MAPPING (Crucial Fix for Passwords)
@@ -433,32 +476,17 @@
     # =========================
     # USERS / ROLES
     # =========================
-    velox_user: "{{ velox_user_input.user_input | default('admin', true) }}"
-    velox_role: "{{ velox_role_input.user_input | default('administrator', true) }}"
-
-    # =========================
-    # PORTS (FIXED)
-    # =========================
-    es_port: "9200"
-    kibana_port: "5601"
-    fleet_port: "8220"
-    suricata_port: "8000"
+    velox_user: "admin"
 
     # =========================
     # NETWORK
     # =========================
     suricata_interface: "{{ suricata_interface_parsed }}"
-    selected_ip: "{{ selected_ip_parsed }}"
-    velox_hostname: "{{ selected_ip_parsed }}"
-    arkime_es_ip: "{{ selected_ip_parsed }}"
-    local_kbn_url: "https://{{ selected_ip_parsed }}:5601"
-
-    velox_server_url: "{{ velox_url_input.user_input | default('https://100.106.108.5:8889/', true) }}"
 
     # =========================
-    # SECRETS (RUNTIME GENERATED)
+    # SECRETS (REUSED FROM .ENV OR RUNTIME GENERATED)
     # =========================
-    arkime_password_secret: "{{ arkime_password_secret_new.stdout }}"
+    arkime_password_secret: "{{ arkime_password_secret | default(arkime_password_secret_new.stdout, true) }}"
     kibana_encryption_key: "{{ kibana_encryption_key | default(kibana_key_gen.stdout, true) }}"
 
     # =========================
@@ -466,7 +494,7 @@
     # =========================
     resources:
       elasticsearch:
-        memory: "{{ mem_limit | default('8g', true) }}"
+        memory: "{{ mem_limit_input.user_input | default('4g', true) }}"
         heap: "2g"
       kibana:
         memory: "2g"
@@ -508,21 +536,10 @@
       LICENSE={{ license }}
       MEM_LIMIT={{ mem_limit }}
       VELOX_USER={{ velox_user }}
-      VELOX_ROLE={{ velox_role }}
-      VELOX_SERVER_URL={{ velox_server_url }}
-      VELOX_FRONTEND_HOSTNAME={{ velox_hostname }}
-      ES_PORT={{ es_port }}
-      KIBANA_PORT={{ kibana_port }}
-      FLEET_PORT={{ fleet_port }}
-      SURICATA_PORT={{ suricata_port }}
       SURICATA_INTERFACE={{ suricata_interface }}
       SURICATA_HOME_NET={{ suricata.home_net }}
-      ARKIME_ELASTICSEARCH_IP={{ arkime_es_ip }}
       ARKIME_PASSWORD_SECRET={{ arkime_password_secret }}
       KIBANA_ENCRYPTION_KEY={{ kibana_encryption_key }}
-      FLEET_SERVER_HOST={{ selected_ip }}
-      LOCAL_KBN_URL={{ local_kbn_url }}
-      SELECTED_IP={{ selected_ip }}
       MGMT_BOX_IP={{ mgmt_box_ip }}
       OROCHI_NODE_IP={{ ansible_host }}
       ARKIME_VERSION={{ arkime_version }}

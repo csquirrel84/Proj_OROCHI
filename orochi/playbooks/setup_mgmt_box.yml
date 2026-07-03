@@ -82,10 +82,15 @@
         state: present
 
     - name: Configure apt-cacher-ng
+      # PassThroughPattern is deliberately narrow: '.*' would make the box an
+      # open HTTP CONNECT proxy on port 3142 — dangerous on a hostile network.
+      # The orochi node only fetches Ubuntu archives over plain HTTP through
+      # this proxy (HTTPS repos are configured DIRECT), so CONNECT passthrough
+      # is limited to Ubuntu infrastructure.
       ansible.builtin.copy:
         dest: /etc/apt-cacher-ng/local.conf
         content: |
-          PassThroughPattern: .*
+          PassThroughPattern: ^(([a-z0-9-]+\.)*(ubuntu|canonical)\.com):443$
           DnsCacheSeconds: 2000
           ExThreshold: 100
         mode: '0644'

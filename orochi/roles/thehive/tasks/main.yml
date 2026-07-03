@@ -130,8 +130,15 @@
   tags: thehive
 
 - name: Wait for Cassandra to be ready
-  ansible.builtin.pause:
-    seconds: 45
+  # Poll gossip state instead of a fixed sleep — slow hardware needs longer
+  # than 45s, fast hardware needs far less.
+  ansible.builtin.shell: |
+    docker exec cassandra nodetool statusgossip 2>/dev/null | grep -q running
+  register: cassandra_ready
+  until: cassandra_ready.rc == 0
+  retries: 30
+  delay: 10
+  changed_when: false
   tags: thehive
 
 # TheHive 4

@@ -1,0 +1,160 @@
+---
+# ==============================================
+# FIREWALL ROLE — per-interface network policy
+# ==============================================
+# The orochi node sits with one NIC on the analyst link and one NIC on the
+# monitored (assume-compromised) target network. Without this role every
+# service listens on 0.0.0.0 and is reachable from the target network.
+#
+# Policy:
+#   analyst NIC (route to mgmt box) : unrestricted
+#   capture/target NIC              : Elastic Agent callbacks only
+#                                     (Fleet 8220, Elasticsearch 9200)
+#   all NICs                        : SSH, loopback, established allowed
+#
+# Docker publishes ports via NAT — that traffic never traverses INPUT, so
+# container ports are enforced in the DOCKER-USER chain. Host-networked
+# services (Arkime viewer/capture, SSH) are enforced in INPUT.
+
+- name: Install iptables persistence packages (from apt cache)
+  ansible.builtin.apt:
+    name:
+      - iptables
+      - iptables-persistent
+      - netfilter-persistent
+    state: present
+  tags: firewall
+
+- name: Determine analyst-facing interface (route to management box)
+  ansible.builtin.shell: |
+    ip -o route get {{ mgmt_box_ip }} | grep -oP 'dev \K\S+'
+  register: _analyst_iface_raw
+  changed_when: false
+  tags: firewall
+
+- name: Set firewall interface facts
+  ansible.builtin.set_fact:
+    fw_analyst_iface: "{{ _analyst_iface_raw.stdout | trim }}"
+    fw_capture_iface: "{{ suricata.interface }}"
+  tags: firewall
+
+- name: Warn and skip capture-NIC restrictions on single-NIC hosts
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: analyst interface and capture interface are both
+      '{{ fw_analyst_iface }}' — capture-NIC restrictions skipped to avoid
+      locking out the management box. This is expected on single-NIC dev
+      boxes, never in production.
+  when: fw_analyst_iface == fw_capture_iface
+  tags: firewall
+
+# ── Baseline INPUT rules (host-networked services, SSH) ───────────────────────
+
+- name: Allow loopback
+  ansible.builtin.iptables:
+    chain: INPUT
+    in_interface: lo
+    jump: ACCEPT
+    action: insert
+  tags: firewall
+
+- name: Allow established/related connections
+  ansible.builtin.iptables:
+    chain: INPUT
+    ctstate: ESTABLISHED,RELATED
+    jump: ACCEPT
+    action: insert
+  tags: firewall
+
+- name: Allow all traffic on the analyst interface
+  ansible.builtin.iptables:
+    chain: INPUT
+    in_interface: "{{ fw_analyst_iface }}"
+    jump: ACCEPT
+    action: insert
+  tags: firewall
+
+- name: Allow SSH on all interfaces (lockout guard)
+  ansible.builtin.iptables:
+    chain: INPUT
+    protocol: tcp
+    destination_port: "22"
+    jump: ACCEPT
+    action: insert
+  tags: firewall
+
+- name: Drop all other inbound traffic on the capture interface (host)
+  ansible.builtin.iptables:
+    chain: INPUT
+    in_interface: "{{ fw_capture_iface }}"
+    jump: DROP
+    action: append
+  when: fw_analyst_iface != fw_capture_iface
+  tags: firewall
+
+# ── DOCKER-USER rules (bridge-published container ports) ──────────────────────
+# Rules are inserted at position 1 in reverse order so the final order is:
+# established → 8220 → 9200 → DROP → (docker's RETURN).
+
+- name: Ensure DOCKER-USER chain exists
+  ansible.builtin.shell: |
+    iptables -L DOCKER-USER -n >/dev/null 2>&1 || iptables -N DOCKER-USER
+  changed_when: false
+  tags: firewall
+
+- name: Drop all other container-bound traffic from the capture interface
+  ansible.builtin.iptables:
+    chain: DOCKER-USER
+    in_interface: "{{ fw_capture_iface }}"
+    jump: DROP
+    action: insert
+  when: fw_analyst_iface != fw_capture_iface
+  tags: firewall
+
+- name: Allow Elasticsearch (9200) from the capture interface
+  # Remote Arkime capture boxes and Elastic Agents ship data here.
+  ansible.builtin.iptables:
+    chain: DOCKER-USER
+    in_interface: "{{ fw_capture_iface }}"
+    protocol: tcp
+    destination_port: "9200"
+    jump: RETURN
+    action: insert
+  when: fw_analyst_iface != fw_capture_iface
+  tags: firewall
+
+- name: Allow Fleet Server (8220) from the capture interface
+  # Elastic Agent enrolment/check-in from target endpoints.
+  ansible.builtin.iptables:
+    chain: DOCKER-USER
+    in_interface: "{{ fw_capture_iface }}"
+    protocol: tcp
+    destination_port: "8220"
+    jump: RETURN
+    action: insert
+  when: fw_analyst_iface != fw_capture_iface
+  tags: firewall
+
+- name: Allow established/related to containers
+  ansible.builtin.iptables:
+    chain: DOCKER-USER
+    ctstate: ESTABLISHED,RELATED
+    jump: RETURN
+    action: insert
+  tags: firewall
+
+# ── Persist across reboots ─────────────────────────────────────────────────────
+
+- name: Save rules for boot persistence
+  ansible.builtin.shell: netfilter-persistent save
+  changed_when: true
+  tags: firewall
+
+- name: Display firewall status
+  ansible.builtin.debug:
+    msg:
+      - "Firewall applied."
+      - "Analyst NIC (open):            {{ fw_analyst_iface }}"
+      - "Capture/target NIC (locked):   {{ fw_capture_iface }} — only 8220/9200 reachable"
+      - "Inspect: iptables -L INPUT -n --line-numbers; iptables -L DOCKER-USER -n"
+  tags: firewall

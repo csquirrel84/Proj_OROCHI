@@ -406,13 +406,6 @@
 
     # ── Suricata rules ─────────────────────────────────────────────────────────
 
-    - name: Download Suricata rules via container
-      community.docker.docker_container:
-        name: suricata-rules-downloader
-        image: "localhost:5000/gchq/cyberchef:{{ cyberchef_version }}"
-        state: absent
-      ignore_errors: true
-
     - name: Download Suricata rules
       ansible.builtin.shell: |
         docker run --rm \
@@ -479,6 +472,7 @@
         - "elastic-agent/elastic-agent"
         - "cassandra"
         - "thehiveproject/thehive4"
+        - "debian"
         - "mattermost/mattermost-team-edition"
         - "postgres"
         - "gchq/cyberchef"
@@ -488,6 +482,16 @@
         - "arkime/arkime"
       loop_control:
         label: "{{ item }}"
+
+    - name: Verify RITA images are in the registry
+      ansible.builtin.uri:
+        url: "http://localhost:5000/v2/_catalog?n=200"
+        return_content: true
+        status_code: 200
+      register: _registry_catalog
+      failed_when: >-
+        (_registry_catalog.json.repositories | default([])
+         | select('match', '^rita/') | list | length) == 0
 
     - name: Verify binary artifacts exist
       ansible.builtin.stat:

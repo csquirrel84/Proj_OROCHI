@@ -7,7 +7,7 @@
   ansible.builtin.file:
     path: "{{ item }}"
     state: directory
-    mode: '0777'
+    mode: '0770'
     owner: 1000
     group: 1000
   loop:
@@ -30,9 +30,10 @@
     hostname: elasticsearch
     networks:
       - name: "{{ orochi_network_name }}"
+    # 9300 (transport) is not published — single-node cluster, nothing
+    # external needs it.
     ports:
       - "{{ ports.elasticsearch }}:9200"
-      - "9300:9300"
     volumes:
       - "{{ directories.certs }}:/usr/share/elasticsearch/config/certs:ro"
       - "{{ directories.elasticsearch }}/data:/usr/share/elasticsearch/data"

@@ -86,6 +86,24 @@
   ansible.builtin.debug:
     msg: "Management box: {{ mgmt_box_ip }}"
 
+- name: Share resolved mgmt_box_ip with the control node
+  # Later plays (Arkime remote capture) read hostvars['localhost']['mgmt_box_ip'].
+  # Without this, they silently fall back to the group_vars default.
+  ansible.builtin.set_fact:
+    mgmt_box_ip: "{{ mgmt_box_ip }}"
+  delegate_to: localhost
+  delegate_facts: true
+
+- name: Persist MGMT_BOX_IP to .env for re-runs
+  ansible.builtin.lineinfile:
+    path: "{{ playbook_dir }}/.env"
+    regexp: '^MGMT_BOX_IP='
+    line: "MGMT_BOX_IP={{ mgmt_box_ip }}"
+    create: true
+    mode: '0600'
+  delegate_to: localhost
+  become: false
+
 # ── Verify reachability ───────────────────────────────────────────────────────
 
 - name: Verify management box is reachable

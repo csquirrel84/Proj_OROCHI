@@ -42,13 +42,13 @@ echo "  • OROCHI Docker network and dangling volumes"
 echo "  • /opt/orochi  (service data, certs, elasticsearch, kibana, thehive,"
 echo "                  velociraptor, arkime, mattermost, timesketch, portal…)"
 echo "  • /opt/rita    (RITA docker-compose data)"
-echo "  • Zeek runtime dirs and config (binary/package left intact)"
-echo "  • Suricata config and data dirs (package left intact)"
+echo "  • Zeek runtime dirs, config, and packages (purged)"
+echo "  • Suricata config, data dirs, and package (purged)"
 echo "  • OROCHI-written systemd units and profile.d entries"
 echo "  • apt proxy config, Docker insecure-registry config"
+echo "  • OROCHI firewall rules (INPUT / DOCKER-USER)"
 echo ""
 echo -e "${YELLOW}Skipped for speed (commented out — re-enable for full clean):${NC}"
-echo "  • Zeek and Suricata package purge"
 echo "  • All Docker image removal"
 echo ""
 read -rp "Type YES to confirm: " CONFIRM
@@ -241,6 +241,12 @@ if [ -f /etc/profile.d/zeek.sh ]; then
     rm -f /etc/profile.d/zeek.sh
 fi
 
+# zeekctl cron watchdog installed by the zeek role
+if crontab -l 2>/dev/null | grep -q 'zeekctl cron'; then
+    info "Removing zeekctl cron watchdog"
+    crontab -l 2>/dev/null | grep -v 'zeekctl cron' | crontab - || true
+fi
+
 systemctl daemon-reload 2>/dev/null || true
 ok "Systemd units removed"
 
@@ -266,6 +272,13 @@ if [ -f /etc/docker/daemon.json ]; then
     rm -f /etc/docker/daemon.json
     systemctl restart docker 2>/dev/null || true
 fi
+
+# Firewall rules written by the firewall role
+info "Flushing OROCHI firewall rules"
+iptables -F INPUT 2>/dev/null || true
+iptables -F DOCKER-USER 2>/dev/null || true
+iptables -A DOCKER-USER -j RETURN 2>/dev/null || true
+rm -f /etc/iptables/rules.v4 /etc/iptables/rules.v6
 
 ok "Node configuration cleaned"
 

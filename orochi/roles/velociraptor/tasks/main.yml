@@ -115,7 +115,8 @@
     image: "orochi/velociraptor:latest"
     state: started
     restart_policy: unless-stopped
-    recreate: true        # Forces container to update if image changed
+    # No recreate:true — docker_container detects image ID changes after a
+    # rebuild and recreates only then, keeping re-runs idempotent.
     pull: never           # Uses local build
     networks:
       - name: orochi-network
@@ -136,6 +137,8 @@
     seconds: 10
 
 - name: Create/Update Velociraptor Admin User
+  # no_log: the command line contains the engagement password and would
+  # otherwise be written to install.log on the control node.
   ansible.builtin.shell: |
     docker exec velociraptor \
       velociraptor --config /data/server.config.yaml \
@@ -143,10 +146,11 @@
   register: velox_user_create
   failed_when: velox_user_create.rc not in [0, 1]
   changed_when: "'Created user' in velox_user_create.stdout or 'already exists' not in velox_user_create.stderr"
+  no_log: true
 
-- name: Show user creation output
+- name: Show user creation result
   ansible.builtin.debug:
-    msg: "{{ velox_user_create }}"
+    msg: "Velociraptor user '{{ velox_user }}' ensured (rc={{ velox_user_create.rc }})"
 
 - name: Restart Velociraptor to apply user changes
   community.docker.docker_container:
@@ -161,7 +165,7 @@
 
 - name: Display Velociraptor Connection Info
   ansible.builtin.debug:
-    msg: 
+    msg:
       - "Velociraptor GUI: https://{{ orochi_server_ip }}:8889"
       - "Username: {{ velox_user }}"
-      - "Password: {{ common_password }}"
+      - "Password: (engagement password)"

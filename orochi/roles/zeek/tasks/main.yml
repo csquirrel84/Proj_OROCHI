@@ -191,6 +191,17 @@
     daemon_reload: true
   tags: zeek
 
+- name: Install zeekctl cron watchdog
+  # The zeek systemd unit is Type=oneshot — a crashed Zeek worker is never
+  # restarted by systemd. `zeekctl cron` restarts crashed workers and rotates
+  # stats; this is the supervision mechanism ZeekControl expects.
+  ansible.builtin.cron:
+    name: "zeekctl cron watchdog"
+    minute: "*/5"
+    user: root
+    job: "/opt/zeek/bin/zeekctl cron >/dev/null 2>&1"
+  tags: zeek
+
 - name: Check Zeek status
   ansible.builtin.shell: /opt/zeek/bin/zeekctl status
   environment:

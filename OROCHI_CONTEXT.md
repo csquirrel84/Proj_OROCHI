@@ -136,13 +136,14 @@ Option 12 / `playbooks/deploy_remote_capture.yml` deploy `arkimecapture-remote` 
 
 These are design intent. **None of the following exists in the codebase yet:**
 
-1. **iptables Ansible role** — per-interface network policy (analyst NIC allow-all; target NIC allow Elastic callback port only; capture NIC no IP/promiscuous; WiFi WireGuard port only)
-2. **WireGuard Ansible role** — remote analyst access over a bearer of opportunity (`group_vars` already carries wireguard_* variables; no role consumes them)
-3. **Export playbook** — verified NDJSON archive to a blank per-engagement USB Evidence Drive, checksummed, before any destroy
-4. **Destroy playbook** — evidence-safe wipe, gated on confirmed export (current `reset.sh`/`teardown` are dev tools, not evidence-handling tools)
-5. **Management laptop wizard/front-end** — guided deployment UX
-6. **PXE boot** for node OS install (manual Ubuntu install for now)
-7. **Capture-network USB NIC** — hardware still to be procured
+1. **WireGuard Ansible role** — remote analyst access over a bearer of opportunity (`group_vars` already carries wireguard_* variables; no role consumes them)
+2. **Export playbook** — verified NDJSON archive to a blank per-engagement USB Evidence Drive, checksummed, before any destroy
+3. **Destroy playbook** — evidence-safe wipe, gated on confirmed export (current `reset.sh`/`teardown` are dev tools, not evidence-handling tools)
+4. **Management laptop wizard/front-end** — guided deployment UX
+5. **PXE boot** for node OS install (manual Ubuntu install for now)
+6. **Capture-network USB NIC** — hardware still to be procured
+
+> **Implemented since the list above was written:** the `firewall` role (per-interface iptables policy — analyst NIC open, capture/target NIC restricted to Fleet 8220 / ES 9200, SSH lockout guard, DOCKER-USER enforcement for published container ports, persisted via netfilter-persistent).
 
 Target physical interface plan (NUC): `enp89s0` analyst LAN, `enx98e743225b91` target network (Elastic callbacks), USB NIC (TBD) passive capture, `wlo1` WireGuard.
 
@@ -168,7 +169,7 @@ Proj_OROCHI/
     │   ├── prep_artefacts.yml          # Phase 1
     │   └── deploy_remote_capture.yml   # Standalone remote capture (mid-engagement)
     └── roles/
-        bootstrap_node, common, environment, certificates,
+        bootstrap_node, common, environment, firewall, certificates,
         elasticsearch, kibana, fleet, thehive, velociraptor,
         zeek, suricata, arkime, rita, cyberchef, mattermost,
         timesketch, nginx_proxy

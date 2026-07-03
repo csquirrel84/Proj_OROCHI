@@ -15,6 +15,7 @@
     - "{{ directories.timesketch }}/config"
     - "{{ directories.timesketch }}/logs"
     - "{{ directories.timesketch }}/data"
+    - "{{ directories.timesketch }}/upload"
     - "{{ directories.postgres_timesketch }}"
   tags: timesketch
 
@@ -24,7 +25,7 @@
   ansible.builtin.file:
     path: "{{ directories.thehive_es }}"
     state: directory
-    mode: '0777'
+    mode: '0770'
     owner: 1000
     group: 1000
   tags: timesketch
@@ -135,8 +136,8 @@
       ELASTIC_HOST = 'elasticsearch-hive'
       ELASTIC_PORT = 9200
 
-      UPLOAD_ENABLED = False
-      UPLOAD_FOLDER = '/tmp/timesketch_upload'
+      UPLOAD_ENABLED = True
+      UPLOAD_FOLDER = '/usr/share/timesketch/upload'
 
       REDIS_URL = 'redis://redis-timesketch:6379'
 
@@ -174,6 +175,7 @@
       - "{{ directories.timesketch }}/config/timesketch.conf:/etc/timesketch/timesketch.conf:ro"
       - "{{ directories.timesketch }}/logs:/var/log/timesketch"
       - "{{ directories.timesketch }}/data:/usr/share/timesketch/data"
+      - "{{ directories.timesketch }}/upload:/usr/share/timesketch/upload"
     memory: "{{ resources.timesketch.memory }}"
   tags: timesketch
 
@@ -191,6 +193,7 @@
       - "{{ directories.timesketch }}/config/timesketch.conf:/etc/timesketch/timesketch.conf:ro"
       - "{{ directories.timesketch }}/logs:/var/log/timesketch"
       - "{{ directories.timesketch }}/data:/usr/share/timesketch/data"
+      - "{{ directories.timesketch }}/upload:/usr/share/timesketch/upload"
     env:
       WORKER_LOG_LEVEL: "info"
     memory: "{{ resources.timesketch.memory }}"

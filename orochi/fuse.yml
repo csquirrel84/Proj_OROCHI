@@ -110,6 +110,19 @@
             {{ raw.split(' ') | map('trim') | select('truthy') | list }}
           {%- endif -%}
 
+    - name: Validate selection
+      ansible.builtin.fail:
+        msg: >-
+          Invalid selection '{{ item }}'.
+          Valid choices: 1-12 (space-separated), 'all', 'status', 'teardown'.
+      when: item not in ['1','2','3','4','5','6','7','8','9','10','11','12','status','teardown']
+      loop: "{{ deploy_selections }}"
+
+    - name: Fail if nothing was selected
+      ansible.builtin.fail:
+        msg: "No selection entered. Valid choices: 1-12, 'all', 'status', 'teardown'."
+      when: deploy_selections | length == 0
+
     - name: Prompt for capture target
       ansible.builtin.pause:
         prompt: |
@@ -176,7 +189,17 @@
         src: /opt/orochi/certs/ca/ca.crt
       register: _ca_cert_b64
       when: "'12' in deploy_selections"
-      ignore_errors: true
+      failed_when: false
+
+    - name: Fail if CA cert is missing for remote capture
+      ansible.builtin.fail:
+        msg: >-
+          /opt/orochi/certs/ca/ca.crt not found on the orochi node.
+          Remote capture needs the node CA to trust Elasticsearch —
+          deploy option 1 (Elastic Stack) first, then re-run option 12.
+      when:
+        - "'12' in deploy_selections"
+        - _ca_cert_b64.content is not defined
 
   tasks:
     # ── Status ──────────────────────────────────────────────────────────────────
@@ -198,7 +221,7 @@
       block:
         - name: Confirm teardown
           ansible.builtin.pause:
-            prompt: "WARNING: This will remove all Orochi containers and data. Type 'YES' to confirm"
+            prompt: "WARNING: This stops and removes all Orochi containers and bare-metal services. Data under /opt/orochi is PRESERVED (use reset.sh for a full wipe). Type 'YES' to confirm"
           register: confirm_teardown
 
         - name: Stop bare metal services
@@ -266,6 +289,14 @@
     - name: Deploy environment role
       ansible.builtin.include_role:
         name: environment
+      when: (deploy_selections | intersect(['1','2','3','4','5','6','8','9','11'])) | length > 0
+
+    - name: Deploy firewall role
+      # Locks the capture/target NIC down to Elastic Agent callbacks (8220/9200).
+      # Runs after environment (needs the selected capture interface) and after
+      # common (needs Docker's DOCKER-USER chain).
+      ansible.builtin.include_role:
+        name: firewall
       when: (deploy_selections | intersect(['1','2','3','4','5','6','8','9','11'])) | length > 0
 
     - name: Deploy certificates role
@@ -348,7 +379,8 @@
           ║                    DEPLOYMENT COMPLETE                        ║
           ╠═══════════════════════════════════════════════════════════════╣
           ║  Configuration saved to ./orochi/.env (control node)          ║
-          ║  Credentials stored in vars/secrets.yml (vault encrypted)     ║
+          ║  The engagement password is NOT stored anywhere —             ║
+          ║  record it securely now. It cannot be recovered.              ║
           ║                                                               ║
           ║  Common Services:                                             ║
           ║  • Elasticsearch: https://<IP>:9200                           ║
@@ -392,6 +424,34 @@
       ansible.builtin.set_fact:
         _registry_host: "{{ 'localhost' if (inventory_hostname == 'localhost') else hostvars['localhost']['mgmt_box_ip'] }}"
         _view_host:     "{{ hostvars['localhost']['mgmt_box_ip'] if (inventory_hostname == 'localhost') else ansible_host }}"
+
+    - name: Ensure remote Docker daemon trusts the management box registry
+      # Remote boxes pull over plain HTTP from the mgmt registry — the daemon
+      # must list it as insecure. localhost registries are trusted by default.
+      when: inventory_hostname != 'localhost'
+      block:
+        - name: Check if insecure registry is already active
+          ansible.builtin.shell: |
+            docker info 2>/dev/null | grep -q "{{ _registry_host }}:{{ mgmt_registry_port }}" && echo "configured" || echo "needs_config"
+          register: _remote_registry_check
+          changed_when: false
+
+        - name: Configure Docker daemon insecure registry
+          ansible.builtin.copy:
+            dest: /etc/docker/daemon.json
+            content: |
+              {
+                "insecure-registries": ["{{ _registry_host }}:{{ mgmt_registry_port }}"]
+              }
+            mode: '0644'
+          when: _remote_registry_check.stdout | trim == "needs_config"
+
+        - name: Restart Docker to load insecure registry config
+          ansible.builtin.systemd:
+            name: docker
+            state: restarted
+            daemon_reload: true
+          when: _remote_registry_check.stdout | trim == "needs_config"
 
     - name: Prompt for capture interface
       ansible.builtin.pause:

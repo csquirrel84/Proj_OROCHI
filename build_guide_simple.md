@@ -173,12 +173,10 @@ You will be asked a few questions about the deployment. Press Enter to accept th
 - Elastic Stack version — press Enter
 - Cluster name — press Enter
 - License type — press Enter
-- Memory limit — press Enter
+- Elasticsearch memory limit — press Enter
+- **Arkime Docker tag** — press Enter (uses the tag cached in the registry)
 - **Capture interface** — select the NIC facing the monitored network
 - **HOME_NET CIDR** — the target network subnet, e.g. `10.0.0.0/8`
-- **IP for analyst access** — select the NIC analysts connect to
-- Velociraptor server URL — press Enter
-- **Arkime Docker tag** — select from the list of available tags (choose `v6-latest`)
 
 **f) Deployment runs**
 

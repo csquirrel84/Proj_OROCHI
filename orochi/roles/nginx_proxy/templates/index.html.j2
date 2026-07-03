@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OROCHI Security Stack</title>
+    <style>
+        /* Fully offline: no CDN fonts or images. System font stack only. */
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --mono: 'SF Mono', 'Cascadia Code', Consolas, 'DejaVu Sans Mono', monospace;
+            --sans: -apple-system, 'Segoe UI', Ubuntu, Roboto, 'Helvetica Neue', sans-serif;
+        }
+        body {
+            font-family: var(--sans);
+            background: #0a0e1a;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+            color: #fff;
+            overflow-x: hidden;
+        }
+        /* Animated background grid */
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background:
+                linear-gradient(rgba(0, 255, 136, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 255, 136, 0.03) 1px, transparent 1px);
+            background-size: 60px 60px;
+            animation: gridMove 20s linear infinite;
+            z-index: 0;
+        }
+        @keyframes gridMove {
+            0% { transform: translateY(0); }
+            100% { transform: translateY(60px); }
+        }
+        body::after {
+            content: '';
+            position: fixed;
+            top: -200px; right: -200px;
+            width: 600px; height: 600px;
+            background: radial-gradient(circle, rgba(0, 255, 136, 0.08) 0%, transparent 70%);
+            z-index: 0;
+        }
+        .glow-orb {
+            position: fixed;
+            bottom: -200px; left: -100px;
+            width: 500px; height: 500px;
+            background: radial-gradient(circle, rgba(0, 170, 255, 0.06) 0%, transparent 70%);
+            z-index: 0;
+            pointer-events: none;
+        }
+        .header {
+            text-align: center;
+            margin: 50px 0 40px;
+            position: relative;
+            z-index: 1;
+        }
+        .header h1 {
+            font-family: var(--mono);
+            font-size: 4em;
+            font-weight: 900;
+            letter-spacing: 12px;
+            background: linear-gradient(135deg, #00ff88, #00aaff, #00ff88);
+            background-size: 200% auto;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            animation: shimmer 3s ease-in-out infinite;
+            filter: drop-shadow(0 0 30px rgba(0, 255, 136, 0.3));
+        }
+        @keyframes shimmer {
+            0%, 100% { background-position: 0% center; }
+            50% { background-position: 200% center; }
+        }
+        .header .subtitle {
+            font-size: 0.95em;
+            margin-top: 12px;
+            letter-spacing: 6px;
+            text-transform: uppercase;
+            color: rgba(255, 255, 255, 0.4);
+            font-weight: 300;
+        }
+        .header .tagline {
+            font-family: var(--mono);
+            font-size: 0.75em;
+            margin-top: 8px;
+            color: rgba(0, 255, 136, 0.5);
+            letter-spacing: 3px;
+        }
+        .services {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            max-width: 1300px;
+            width: 100%;
+            margin: 20px 0;
+            position: relative;
+            z-index: 1;
+        }
+        .service-card {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 16px;
+            padding: 28px 24px;
+            text-align: left;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            cursor: pointer;
+            text-decoration: none;
+            color: #fff;
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            position: relative;
+            overflow: hidden;
+        }
+        .service-card::after {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: linear-gradient(135deg, rgba(0, 255, 136, 0.05) 0%, transparent 50%);
+            opacity: 0;
+            transition: opacity 0.4s ease;
+        }
+        .service-card:hover {
+            transform: translateY(-4px);
+            border-color: rgba(0, 255, 136, 0.2);
+            box-shadow: 0 8px 32px rgba(0, 255, 136, 0.1), 0 0 0 1px rgba(0, 255, 136, 0.1);
+            background: rgba(255, 255, 255, 0.05);
+        }
+        .service-card:hover::after { opacity: 1; }
+        .service-card:hover .service-icon { border-color: rgba(0, 255, 136, 0.3); color: #00ff88; }
+        .service-card:hover .service-name { color: #00ff88; }
+        .service-card:hover .arrow { opacity: 1; transform: translateX(0); }
+        .service-icon {
+            height: 56px;
+            width: 56px;
+            min-width: 56px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: rgba(255, 255, 255, 0.04);
+            font-family: var(--mono);
+            font-size: 1.5em;
+            font-weight: 700;
+            color: rgba(255, 255, 255, 0.7);
+            transition: all 0.4s ease;
+            position: relative;
+            z-index: 1;
+        }
+        .service-info {
+            flex: 1;
+            position: relative;
+            z-index: 1;
+        }
+        .service-name {
+            font-size: 1.15em;
+            font-weight: 600;
+            margin-bottom: 4px;
+            color: rgba(255, 255, 255, 0.9);
+            transition: color 0.3s ease;
+        }
+        .service-desc {
+            font-size: 0.8em;
+            color: rgba(255, 255, 255, 0.35);
+            margin-bottom: 6px;
+            font-weight: 300;
+        }
+        .service-url {
+            font-size: 0.7em;
+            color: rgba(0, 255, 136, 0.3);
+            font-family: var(--mono);
+            letter-spacing: 0.5px;
+        }
+        .arrow {
+            position: relative;
+            z-index: 1;
+            opacity: 0;
+            transform: translateX(-8px);
+            transition: all 0.3s ease;
+            color: #00ff88;
+            font-size: 1.2em;
+        }
+        .status-bar {
+            display: flex;
+            gap: 24px;
+            margin: 40px 0 20px;
+            padding: 16px 32px;
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid rgba(255, 255, 255, 0.04);
+            position: relative;
+            z-index: 1;
+        }
+        .stat { text-align: center; }
+        .stat-value {
+            font-family: var(--mono);
+            font-size: 1.4em;
+            font-weight: 700;
+            color: #00ff88;
+        }
+        .stat-label {
+            font-size: 0.65em;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            color: rgba(255, 255, 255, 0.25);
+            margin-top: 4px;
+        }
+        .footer {
+            margin-top: auto;
+            padding: 30px;
+            text-align: center;
+            position: relative;
+            z-index: 1;
+        }
+        .footer p {
+            font-size: 0.7em;
+            color: rgba(255, 255, 255, 0.15);
+            letter-spacing: 2px;
+            text-transform: uppercase;
+        }
+    </style>
+</head>
+<body>
+    <div class="glow-orb"></div>
+    <div class="header">
+        <h1>OROCHI</h1>
+        <div class="subtitle">Security Stack Portal</div>
+        <div class="tagline">{{ orochi_server_ip }}</div>
+    </div>
+
+    <div class="services">
+        <a href="https://{{ orochi_server_ip }}:{{ ports.kibana }}" class="service-card" target="_blank">
+            <div class="service-icon">K</div>
+            <div class="service-info">
+                <div class="service-name">Kibana</div>
+                <div class="service-desc">SIEM &amp; Data Visualization</div>
+                <div class="service-url">:{{ ports.kibana }}</div>
+            </div>
+            <div class="arrow">&#8594;</div>
+        </a>
+
+        <a href="http://{{ orochi_server_ip }}:{{ ports.thehive }}" class="service-card" target="_blank">
+            <div class="service-icon">TH</div>
+            <div class="service-info">
+                <div class="service-name">TheHive</div>
+                <div class="service-desc">Incident Response Platform</div>
+                <div class="service-url">:{{ ports.thehive }}</div>
+            </div>
+            <div class="arrow">&#8594;</div>
+        </a>
+
+        <a href="https://{{ orochi_server_ip }}:{{ ports.velociraptor_gui }}" class="service-card" target="_blank">
+            <div class="service-icon">V</div>
+            <div class="service-info">
+                <div class="service-name">Velociraptor</div>
+                <div class="service-desc">DFIR &amp; Endpoint Visibility</div>
+                <div class="service-url">:{{ ports.velociraptor_gui }}</div>
+            </div>
+            <div class="arrow">&#8594;</div>
+        </a>
+
+        <a href="http://{{ orochi_server_ip }}:{{ ports.arkime }}" class="service-card" target="_blank">
+            <div class="service-icon">A</div>
+            <div class="service-info">
+                <div class="service-name">Arkime</div>
+                <div class="service-desc">Full Packet Capture</div>
+                <div class="service-url">:{{ ports.arkime }}</div>
+            </div>
+            <div class="arrow">&#8594;</div>
+        </a>
+
+        <a href="http://{{ orochi_server_ip }}:{{ ports.cyberchef }}" class="service-card" target="_blank">
+            <div class="service-icon">CC</div>
+            <div class="service-info">
+                <div class="service-name">CyberChef</div>
+                <div class="service-desc">Data Analysis Toolkit</div>
+                <div class="service-url">:{{ ports.cyberchef }}</div>
+            </div>
+            <div class="arrow">&#8594;</div>
+        </a>
+
+        <a href="http://{{ orochi_server_ip }}:{{ ports.mattermost }}" class="service-card" target="_blank">
+            <div class="service-icon">M</div>
+            <div class="service-info">
+                <div class="service-name">Mattermost</div>
+                <div class="service-desc">Team Communication</div>
+                <div class="service-url">:{{ ports.mattermost }}</div>
+            </div>
+            <div class="arrow">&#8594;</div>
+        </a>
+
+        <a href="http://{{ orochi_server_ip }}:{{ ports.timesketch }}" class="service-card" target="_blank">
+            <div class="service-icon">TS</div>
+            <div class="service-info">
+                <div class="service-name">Timesketch</div>
+                <div class="service-desc">Timeline Analysis</div>
+                <div class="service-url">:{{ ports.timesketch }}</div>
+            </div>
+            <div class="arrow">&#8594;</div>
+        </a>
+    </div>
+
+    <div class="status-bar">
+        <div class="stat">
+            <div class="stat-value">7</div>
+            <div class="stat-label">Services</div>
+        </div>
+        <div class="stat">
+            <div class="stat-value">&#9679;</div>
+            <div class="stat-label">Online</div>
+        </div>
+        <div class="stat">
+            <div class="stat-value">v3.0</div>
+            <div class="stat-label">Stack</div>
+        </div>
+    </div>
+
+    <div class="footer">
+        <p>Orochi Security Stack &bull; Deployed via Ansible</p>
+    </div>
+</body>
+</html>

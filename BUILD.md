@@ -289,8 +289,6 @@ This playbook installs and configures everything the management box needs to ser
 | Ansible collections | Installs community.docker, community.crypto, ansible.posix, community.general |
 | SSH keypair | Generates `~/.ssh/orochi_id_ed25519` — the key used to SSH to the orochi node |
 
-> **Note:** The playbook also installs Terraform and creates a Terraform plugin cache directory. This is vestigial (Terraform was used in an earlier architecture for VM provisioning). It is harmless — ignore it.
-
 Both the registry and nginx containers are started with `restart_policy: unless-stopped`, so they survive management box reboots.
 
 ### 0.5 Install the Orochi Node OS
@@ -542,7 +540,9 @@ Before displaying the menu, `fuse.yml` always runs the `bootstrap_node` role as 
 - `all` deploys options 1–12
 - `status` shows running containers; `teardown` removes everything (with confirmation)
 
-Shared prerequisites (`common`, `environment`, `certificates`, `elasticsearch`) run **once per fuse run** based on the combined selection — selecting `1 6` does not deploy Elasticsearch twice. This makes any individual option safe to run standalone.
+Shared prerequisites (`common`, `environment`, `firewall`, `certificates`, `elasticsearch`) run **once per fuse run** based on the combined selection — selecting `1 6` does not deploy Elasticsearch twice. This makes any individual option safe to run standalone.
+
+> **Firewall:** the `firewall` role locks the capture/target NIC down so only Elastic Agent callbacks (Fleet 8220, Elasticsearch 9200) are reachable from the monitored network. The analyst NIC (the one facing the management box) is unrestricted, and SSH stays open on all interfaces as a lockout guard. Rules persist across reboots via `netfilter-persistent`. On single-NIC dev boxes the capture-NIC restrictions are skipped automatically (with a warning).
 
 ---
 
@@ -553,7 +553,7 @@ Shared prerequisites (`common`, `environment`, `certificates`, `elasticsearch`) 
 Deploys all twelve options. Use this for a full engagement build from a clean node.
 
 **Role execution order:**
-Shared prerequisites first — `common` → `environment` → `certificates` → `elasticsearch` — then per-service: `kibana` → `fleet` → `thehive` → `velociraptor` → `zeek` → `suricata` → `arkime` → `cyberchef` → `mattermost` → `rita` → `timesketch` → `nginx_proxy` → remote capture.
+Shared prerequisites first — `common` → `environment` → `firewall` → `certificates` → `elasticsearch` — then per-service: `kibana` → `fleet` → `thehive` → `velociraptor` → `zeek` → `suricata` → `arkime` → `cyberchef` → `mattermost` → `rita` → `timesketch` → `nginx_proxy` → remote capture.
 
 **Estimated time:** 45–90 minutes
 
@@ -622,9 +622,9 @@ Installs Zeek Network Security Monitor from the pre-cached `.deb` tarball.
 
 **What it deploys:** Zeek runs as a bare-metal systemd service (not a container). The role:
 1. Downloads `zeek-debs.tar.gz` from the artifact server
-2. Extracts and installs all `.deb` files with `apt-get`
-3. Configures Zeek to monitor `{{ capture_interface }}` (discovered at runtime from `target_nic_mac`)
-4. Configures `zeekctl` and deploys Zeek via `zeekctl deploy`
+2. Extracts and installs all `.deb` files
+3. Configures Zeek to monitor the capture interface selected interactively at deploy time
+4. Configures `zeekctl`, deploys Zeek via `zeekctl deploy`, and installs a `zeekctl cron` watchdog (every 5 minutes) that restarts crashed workers
 
 **Log location:** `/opt/zeek/logs/current/` (conn.log, dns.log, http.log, ssl.log, etc.)
 
@@ -638,12 +638,12 @@ Installs Suricata IDS from the pre-cached `.deb` tarball.
 
 **What it deploys:** Suricata runs as a bare-metal systemd service. The role:
 1. Downloads `suricata-debs.tar.gz` from the artifact server and installs
-2. Writes `/etc/suricata/suricata.yaml` — configures `HOME_NET`, all required port-groups (HTTP_PORTS, SSH_PORTS, ORACLE_PORTS, DNP3_PORTS, MODBUS_PORTS, FTP_PORTS, SHELLCODE_PORTS, FILE_DATA_PORTS), EVE JSON output, af-packet capture on `{{ capture_interface }}`
+2. Writes `/etc/suricata/suricata.yaml` (templated) — configures `HOME_NET`, all required port-groups (HTTP_PORTS, SSH_PORTS, ORACLE_PORTS, DNP3_PORTS, MODBUS_PORTS, FTP_PORTS, SHELLCODE_PORTS, FILE_DATA_PORTS), EVE JSON output, af-packet capture on the selected capture interface
 3. Downloads `suricata-rules.tar.gz` (Emerging Threats Open ruleset, ~55,000 signatures) from the artifact server and extracts to `/var/lib/suricata/rules/`
-4. Creates a systemd service override with `TimeoutStartSec=900` and `Restart=on-failure`
-5. Enables and starts the service
+4. Creates a systemd service override (`Type=simple`, `Restart=on-failure`)
+5. Enables and starts the service (non-blocking)
 
-**Important — Suricata startup time:** On first start, Suricata must compile 55,000+ ET Open signatures into its detection engine. This takes **8–15 minutes** depending on hardware. The systemd timeout is set to 900 seconds (15 minutes) to accommodate this. The service will show `activating` in `systemctl status` for the full duration. This is normal — do not interrupt it. You can monitor progress:
+**Important — Suricata startup time:** On first start, Suricata must compile 55,000+ ET Open signatures into its detection engine. This takes **8–15 minutes** depending on hardware. Because the unit is `Type=simple`, `systemctl status` shows `active (running)` immediately — but no alerts will flow until compilation completes. Do not restart the service during this window. Monitor progress:
 
 ```bash
 # On the orochi node — watch for "Engine started." in the journal
@@ -808,7 +808,7 @@ ansible-playbook playbooks/deploy_remote_capture.yml
 ansible-playbook playbooks/deploy_remote_capture.yml -e remote_capture_interface=eth1
 ```
 
-The standalone playbook reads the orochi node IP and Arkime secrets from `.env` — a successful `fuse.yml` run against the node must have happened first. It will prompt for the Elasticsearch password (the engagement password).
+The standalone playbook reads the orochi node IP and Arkime secrets from `.env` — a successful `fuse.yml` run against the node must have happened first. It prompts for a target (press Enter for the management box, or enter an IP for a remote host — SSH as root) and for the Elasticsearch password (the engagement password). Remote targets get the management box registry added to their Docker `insecure-registries` automatically.
 
 **On the capture box:**
 - PCAP: `/opt/orochi-remote/raw/`
@@ -1017,7 +1017,7 @@ OROCHI is hardware-agnostic for the orochi node. No MAC addresses or interface n
 ### If the Orochi Node Is Different Hardware
 
 1. Boot the new hardware with Ubuntu Server 25.10 installed
-2. Update `inventory/hosts.yml` with the new node's IP
+2. Delete the `OROCHI_NODE_IP` line from `.env` on the management box (or remove `.env` entirely) — `fuse.yml` will prompt for the new node's IP
 3. Run `fuse.yml` — the `environment` role lists available interfaces and prompts you to select the capture interface at runtime
 
 No other changes are required.
@@ -1129,14 +1129,11 @@ sudo sysctl -w vm.max_map_count=262144
 Interface enx98e743225b91 does not exist
 ```
 
-The capture interface MAC in `group_vars/all.yml` doesn't match the hardware. Find the correct interface:
+The saved capture interface no longer matches the hardware. The interface is stored as `SURICATA_INTERFACE` in `.env` on the management box. Delete that line (or the whole `.env`), re-run `fuse.yml` option 5, and select the correct interface when prompted:
 ```bash
-# On the orochi node
+# On the orochi node — list interfaces
 ip link
-# Find the NIC connected to the target network and note its MAC
 ```
-
-Update `target_nic_mac` in `group_vars/all.yml` and re-run option 6.
 
 **Configuration test fails:**
 ```bash
@@ -1144,18 +1141,18 @@ Update `target_nic_mac` in `group_vars/all.yml` and re-run option 6.
 sudo suricata -T -c /etc/suricata/suricata.yaml
 ```
 
-Any `Variable "X" is not defined` error means a port-group variable is missing from `suricata.yaml`. This is normally handled by the role — re-run option 6 to re-apply the config.
+Any `Variable "X" is not defined` error means a port-group variable is missing from `suricata.yaml`. This is normally handled by the role — re-run option 5 to re-apply the config.
 
-**Service stuck at `activating`:**
+**Service active but no alerts yet:**
 
-This is **normal** on first start. Suricata is compiling 55,000+ detection signatures. Monitor it:
+This is **normal** on first start. Suricata is compiling 55,000+ detection signatures (8–15 minutes). Monitor it:
 
 ```bash
 journalctl -fu suricata
 # Wait for: "Engine started."
 ```
 
-If it fails after 900 seconds, check the journal for errors:
+If it fails or restarts repeatedly, check the journal for errors:
 ```bash
 journalctl -u suricata --since "10 minutes ago"
 ```
@@ -1264,7 +1261,7 @@ docker compose logs rita
 docker compose logs rita-clickhouse
 ```
 
-If images are missing from the local registry (pull errors), re-run `prep_artefacts.yml` on the management box to re-cache the RITA images, then re-run option 10.
+If images are missing from the local registry (pull errors), re-run `prep_artefacts.yml` on the management box to re-cache the RITA images, then re-run option 9.
 
 ---
 
@@ -1275,7 +1272,7 @@ ansible orochi_node -m ping
 # UNREACHABLE! => SSH Error
 ```
 
-1. Verify the IP in `inventory/hosts.yml` is correct
+1. Verify the `OROCHI_NODE_IP` value in `.env` (next to `fuse.yml`) is correct
 2. Verify the SSH key exists: `ls ~/.ssh/orochi_id_ed25519`
 3. Re-copy the key: `ssh-copy-id -i ~/.ssh/orochi_id_ed25519 orochi@<node-ip>`
 4. Verify sshd is running on the orochi node — connect a keyboard/monitor directly and run: `sudo systemctl start ssh`

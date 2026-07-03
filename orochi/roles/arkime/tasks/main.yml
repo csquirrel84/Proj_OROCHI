@@ -105,20 +105,14 @@
   failed_when:
     - arkime_user_create.rc != 0
     - "'already' not in (arkime_user_create.stdout | default('') + arkime_user_create.stderr | default(''))"
-
+  # no_log: command line contains the engagement password (would land in install.log)
+  no_log: true
   tags: arkime
 
 
-- name: Remove stale Arkime containers
-  community.docker.docker_container:
-    name: "{{ item }}"
-    state: absent
-    force_kill: true
-  loop:
-    - arkimecapture
-    - arkimeviewer
-  tags: arkime
-
+# Note: no unconditional container removal here — docker_container is
+# idempotent and recreates only when configuration or image changed. This
+# keeps re-runs from dropping packet capture unnecessarily.
 - name: Start Arkime capture container
   community.docker.docker_container:
     name: arkimecapture

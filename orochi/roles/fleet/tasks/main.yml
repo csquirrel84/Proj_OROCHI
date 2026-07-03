@@ -7,7 +7,7 @@
   ansible.builtin.file:
     path: "{{ directories.fleet }}"
     state: directory
-    mode: '0777'
+    mode: '0770'
     owner: 1000
     group: 1000
   tags: fleet
