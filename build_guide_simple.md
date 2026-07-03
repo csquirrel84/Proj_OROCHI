@@ -116,7 +116,23 @@ ansible-playbook fuse.yml
 
 Here is exactly what you will see and do:
 
-**a) Password prompt**
+**a) Operation name**
+
+```
+Operation name (e.g. BRASS):
+```
+
+Type a short name for this engagement, e.g. `BRASS`. This creates the config file `OP_BRASS.env` — everything you answer below is saved into it. If you run the deployer again later **with the same name**, it will show your saved answers and ask "You have a saved configuration for OP_BRASS. Use it? (y/n)" — type `y` and you skip all the questions. A different name starts a fresh configuration for a new op.
+
+**b) Orochi node IP (first run of this op only)**
+
+```
+Enter the orochi node IP address: 
+```
+
+Type the IP of the orochi node (the one you used with `ssh-copy-id`). It is saved and you will not be asked again for this op.
+
+**c) Engagement password**
 
 ```
 Engagement password (used across all services): ****
@@ -125,15 +141,7 @@ Engagement password (used across all services) (confirm): ****
 
 Choose a strong password and write it down. It is used for every service. It cannot be recovered after the session ends.
 
-**b) Orochi node IP (first run only)**
-
-```
-Enter the orochi node IP address: 
-```
-
-Type the IP of the orochi node (the one you used with `ssh-copy-id`). It is saved and you will not be asked again.
-
-**c) Management box IP (first run only)**
+**d) Management box IP (first run of this op only)**
 
 ```
 Select the IP address the orochi node should use to reach this management box:
@@ -145,7 +153,7 @@ Enter number or IP address [10.16.255.253]:
 
 Type the number of the interface connected to the orochi node. It is saved and you will not be asked again.
 
-**d) The menu appears**
+**e) The menu appears**
 
 ```
 ┌──────────────────────────────────────────┐
@@ -155,16 +163,21 @@ Type the number of the interface connected to the orochi node. It is saved and y
 │  [ 2]  TheHive 4                         │
 │  ...                                     │
 │  [12]  Arkime Remote Capture             │
+│  [13]  Lockdown Firewall (LOG → DROP)    │
 ├──────────────────────────────────────────┤
 │  Space-separated numbers  e.g. 1 4 5 6   │
-│  'all' to deploy everything              │
+│  'all' to deploy 1-11 (never 12 or 13)   │
 │  'status' or 'teardown'                  │
 └──────────────────────────────────────────┘
 
 Selection:
 ```
 
-Type **`all`** and press Enter to deploy everything.
+Type **`all`** and press Enter to deploy the full stack (options 1–11).
+
+Options 12 and 13 are intentionally left out of `all`:
+- **12 (Arkime Remote Capture)** places an extra capture box elsewhere in the network — run it on its own when you actually have that box
+- **13 (Lockdown Firewall)** switches the firewall from logging to blocking — run it on its own at the end, once everything is working
 
 **e) Environment questions**
 
@@ -233,9 +246,12 @@ cd ~/orochi/orochi
 ansible-playbook fuse.yml
 ```
 
+- **Enter the same operation name as before** (e.g. `BRASS`) — this loads the saved config for that op
 - The node IP and management box IP will not be prompted again — both were saved on first run
 - You will need to enter the engagement password again
-- When asked "Existing configuration found. Use it? (y/n)" — type `y`
+- When asked "You have a saved configuration for OP_BRASS. Use it? (y/n)" — type `y`
 - Select the option you want from the menu
+
+Starting a **new engagement**? Just enter a new operation name — a fresh config is created and the old op's config stays untouched.
 
 All roles are idempotent — re-running a step that already completed is safe.

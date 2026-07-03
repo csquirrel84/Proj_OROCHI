@@ -44,9 +44,10 @@ OROCHI uses exactly two machines:
 
 `fuse.yml` is the single entry point for all deployments. It:
 
-1. Runs `bootstrap_node` as a pre-task (always, before any menu choice) — this resolves the management box IP (prompting on first run, reading `.env` on re-runs), configures the orochi node to use the management box for apt, and verifies the management box is reachable.
-2. Prompts for a single engagement password that flows into every service's authentication.
-3. Presents an interactive menu and runs the selected role chain.
+1. Prompts for an **Operation Name** (e.g. `BRASS`). Every engagement gets its own config file — `OP_BRASS.env` — on the management box. Re-running fuse with the same op name offers to reuse the saved configuration; a new op name starts clean. Input is normalised (`brass`, `op brass`, and `OP_BRASS` are all the same op).
+2. Runs `bootstrap_node` as a pre-task (always, before any menu choice) — this resolves the management box IP (prompting on first run, reading the op's env file on re-runs), configures the orochi node to use the management box for apt, and verifies the management box is reachable.
+3. Prompts for a single engagement password that flows into every service's authentication.
+4. Presents an interactive menu and runs the selected role chain.
 
 Every role is idempotent — re-running the same option is safe and will skip already-complete steps while re-applying any changed configuration.
 
@@ -200,15 +201,15 @@ The management box uses a dedicated ethernet port at `10.16.255.253` connected d
 
 Because the management box IP can vary (DHCP, Tailscale, different ethernet adapters), `bootstrap_node` resolves it dynamically at the start of every `fuse.yml` run:
 
-1. If `MGMT_BOX_IP` exists in `{{ playbook_dir }}/.env`, it is used automatically — no prompt.
-2. Otherwise, `bootstrap_node` lists all non-loopback interfaces on the **management box** (the control node) and asks you to select the one the orochi node can reach. The chosen IP is saved to `.env` and reused on the next run.
+1. If `MGMT_BOX_IP` exists in the operation's env file (`<OP_NAME>.env`), it is used automatically — no prompt.
+2. Otherwise, `bootstrap_node` lists all non-loopback interfaces on the **management box** (the control node) and asks you to select the one the orochi node can reach. The chosen IP is saved to the op's env file and reused on the next run.
 
 To override for a specific run (dev or testing):
 ```bash
 ansible-playbook fuse.yml -e mgmt_box_ip=100.99.102.28
 ```
 
-The `-e` override takes precedence over `.env` for that run only. `.env` is not modified.
+The `-e` override takes precedence over the saved env file for that run only; the file is not modified.
 
 For `prep_artefacts.yml`, which runs on localhost, override the same way:
 ```bash
@@ -316,7 +317,7 @@ You should see `OK` with no password prompt.
 
 ### 0.7 The Ansible Inventory (No Action Needed)
 
-`orochi/inventory/hosts.yml` is **intentionally empty** — do not add static hosts to it. `fuse.yml` prompts for the orochi node IP on first run, saves it to `.env`, and populates the inventory dynamically via `add_host` on every run. The same applies to `deploy_remote_capture.yml`.
+`orochi/inventory/hosts.yml` is **intentionally empty** — do not add static hosts to it. `fuse.yml` prompts for the orochi node IP on the first run of each operation, saves it to that op's `<OP_NAME>.env`, and populates the inventory dynamically via `add_host` on every run. The same applies to `deploy_remote_capture.yml`.
 
 ### 0.8 Verify the Connection
 
@@ -499,13 +500,15 @@ ansible-playbook fuse.yml
 ansible-playbook fuse.yml -e mgmt_box_ip=100.99.102.28
 ```
 
-You will be prompted to enter and confirm the **engagement password**. This password is used for every service's authentication. Choose something strong and record it securely — it cannot be retrieved after the session ends.
+The first prompt is the **Operation Name** (e.g. `BRASS`). This selects the config file for the engagement (`OP_BRASS.env`). Reuse the same name to redeploy or extend an existing op — fuse will show the saved configuration and ask whether to use it. A new name creates a fresh config.
+
+You will then be prompted to enter and confirm the **engagement password**. This password is used for every service's authentication. Choose something strong and record it securely — it cannot be retrieved after the session ends.
 
 ### 2.6 What Happens Before the Menu Appears
 
 Before displaying the menu, `fuse.yml` always runs the `bootstrap_node` role as a pre-task. This:
 
-1. **Resolves the management box IP** — reads `MGMT_BOX_IP` from `{{ playbook_dir }}/.env` if present. If not, it lists all non-loopback interfaces on the management box (the control node) and prompts you to select the correct one. The selected IP is saved to `.env` for future runs.
+1. **Resolves the management box IP** — reads `MGMT_BOX_IP` from the operation's env file if present. If not, it lists all non-loopback interfaces on the management box (the control node) and prompts you to select the correct one. The selected IP is saved to the op's env file for future runs.
 2. **Verifies the management box is reachable** — fails immediately if port 8888 is unreachable at the resolved IP.
 3. **Configures apt on the orochi node** to proxy through the management box (`/etc/apt/apt.conf.d/01orochi-proxy`). All subsequent `apt-get` calls on the node go through port 3142 on the management box.
 
@@ -527,9 +530,10 @@ Before displaying the menu, `fuse.yml` always runs the `bootstrap_node` role as 
 │  [10]  Timesketch                        │
 │  [11]  Tool Portal                       │
 │  [12]  Arkime Remote Capture             │
+│  [13]  Lockdown Firewall (LOG → DROP)    │
 ├──────────────────────────────────────────┤
 │  Space-separated numbers  e.g. 1 4 5 6   │
-│  'all' to deploy everything              │
+│  'all' to deploy 1-11 (never 12 or 13)   │
 │  'status' or 'teardown'                  │
 └──────────────────────────────────────────┘
 ```
@@ -537,12 +541,12 @@ Before displaying the menu, `fuse.yml` always runs the `bootstrap_node` role as 
 **Selection syntax:**
 - A single number deploys one service: `6`
 - Space-separated numbers deploy several in one run: `1 4 5 6`
-- `all` deploys options 1–12
+- `all` deploys options 1–11 only. Options 12 (needs a capture target decision and usually extra hardware) and 13 (changes what traffic reaches the box) must always be selected explicitly.
 - `status` shows running containers; `teardown` removes everything (with confirmation)
 
 Shared prerequisites (`common`, `environment`, `firewall`, `certificates`, `elasticsearch`) run **once per fuse run** based on the combined selection — selecting `1 6` does not deploy Elasticsearch twice. This makes any individual option safe to run standalone.
 
-> **Firewall:** the `firewall` role locks the capture/target NIC down so only Elastic Agent callbacks (Fleet 8220, Elasticsearch 9200) are reachable from the monitored network. The analyst NIC (the one facing the management box) is unrestricted, and SSH stays open on all interfaces as a lockout guard. Rules persist across reboots via `netfilter-persistent`. On single-NIC dev boxes the capture-NIC restrictions are skipped automatically (with a warning).
+> **Firewall:** the `firewall` role restricts the capture/target NIC so only Elastic Agent callbacks (Fleet 8220, Elasticsearch 9200) are reachable from the monitored network. The analyst NIC (the one facing the management box) is unrestricted, and SSH stays open on all interfaces as a lockout guard. By default the role runs in **MONITOR mode**: traffic that would be blocked is only logged (`journalctl -k | grep OROCHI-FW-`), nothing is dropped. Selecting **option 13 (Lockdown Firewall)** flips those LOG rules to DROP after a typed confirmation — review the monitor logs first to confirm nothing legitimate would be cut off. Rules persist across reboots via `netfilter-persistent`. On single-NIC dev boxes the capture-NIC restrictions are skipped automatically (with a warning).
 
 ---
 
@@ -550,7 +554,7 @@ Shared prerequisites (`common`, `environment`, `firewall`, `certificates`, `elas
 
 ### `all` — Deploy Everything
 
-Deploys all twelve options. Use this for a full engagement build from a clean node.
+Deploys options 1–11. Use this for a full engagement build from a clean node. Options 12 (Arkime Remote Capture) and 13 (Lockdown Firewall) are **never** included in `all` — run them explicitly when needed.
 
 **Role execution order:**
 Shared prerequisites first — `common` → `environment` → `firewall` → `certificates` → `elasticsearch` — then per-service: `kibana` → `fleet` → `thehive` → `velociraptor` → `zeek` → `suricata` → `arkime` → `cyberchef` → `mattermost` → `rita` → `timesketch` → `nginx_proxy` → remote capture.
@@ -624,7 +628,7 @@ Installs Zeek Network Security Monitor from the pre-cached `.deb` tarball.
 1. Downloads `zeek-debs.tar.gz` from the artifact server
 2. Extracts and installs all `.deb` files
 3. Configures Zeek to monitor the capture interface selected interactively at deploy time
-4. Configures `zeekctl`, deploys Zeek via `zeekctl deploy`, and installs a `zeekctl cron` watchdog (every 5 minutes) that restarts crashed workers
+4. Configures `zeekctl`, deploys Zeek via `zeekctl deploy`, and installs a `zeekctl cron` watchdog as a systemd timer (`zeekctl-cron.timer`, every 5 minutes) that restarts crashed workers — check it with `systemctl list-timers zeekctl-cron.timer`
 
 **Log location:** `/opt/zeek/logs/current/` (conn.log, dns.log, http.log, ssl.log, etc.)
 
@@ -795,8 +799,11 @@ Deploys the Orochi landing page — an nginx-served HTML dashboard with links to
 Deploys a standalone `arkimecapture-remote` container on an additional box positioned elsewhere in the target network. Session metadata ships to the orochi node's Elasticsearch; **PCAP files stay local on the capture box**. Sessions appear in the Arkime viewer tagged with the capture box's hostname.
 
 When option 12 is selected, fuse prompts for a target:
-- **Press Enter** → deploys to the management box itself
-- **Enter an IP** → deploys to a remote host (SSH as root)
+- **Press Enter** → skip (no remote capture this run — nothing is deployed)
+- **Enter `local`** → deploys to the management box itself
+- **Enter an IP** → deploys to a remote host (SSH as root; Docker must already be installed on it)
+
+Anything else fails validation immediately — a typo'd IP is caught at the prompt, not as an SSH timeout later.
 
 You are then prompted for the capture interface from a list of the target's non-loopback, non-Docker interfaces. The container runs with host networking and `NET_ADMIN`/`NET_RAW`, sets the interface promiscuous, and pulls its image from the management box registry.
 
@@ -808,13 +815,34 @@ ansible-playbook playbooks/deploy_remote_capture.yml
 ansible-playbook playbooks/deploy_remote_capture.yml -e remote_capture_interface=eth1
 ```
 
-The standalone playbook reads the orochi node IP and Arkime secrets from `.env` — a successful `fuse.yml` run against the node must have happened first. It prompts for a target (press Enter for the management box, or enter an IP for a remote host — SSH as root) and for the Elasticsearch password (the engagement password). Remote targets get the management box registry added to their Docker `insecure-registries` automatically.
+The standalone playbook prompts for the **operation name** and reads the orochi node IP and Arkime secrets from that op's `<OP_NAME>.env` — a successful `fuse.yml` run for the same operation must have happened first. It then prompts for a target (press Enter for the management box, or enter an IP for a remote host — SSH as root) and for the Elasticsearch password (the engagement password). Remote targets get the management box registry added to their Docker `insecure-registries` automatically.
 
 **On the capture box:**
 - PCAP: `/opt/orochi-remote/raw/`
 - Logs: `docker logs -f arkimecapture-remote`
 
 **Estimated time:** 5 minutes per capture box
+
+---
+
+### Option 13 — Lockdown Firewall (LOG → DROP)
+
+Flips the firewall on the capture/target NIC from its default **MONITOR mode** (would-be drops are logged, nothing blocked) to **LOCKDOWN** (actually dropped). After lockdown, only Fleet (8220) and Elasticsearch (9200) are reachable from the monitored network; everything else inbound on that NIC is dropped in both INPUT and DOCKER-USER.
+
+**Never included in `all`** — it changes what traffic reaches the box, so it requires an explicit selection plus a typed `YES` confirmation.
+
+**Before running it**, review what monitor mode has been logging:
+
+```bash
+# On the orochi node — anything here would be BLOCKED after lockdown
+journalctl -k | grep OROCHI-FW-
+```
+
+If legitimate traffic (agent callbacks from unexpected ports, remote capture boxes) shows up in those logs, fix that first.
+
+**To revert to monitor mode:** re-run any service option (e.g. `11`) without 13 — the firewall role removes the DROP rules and reinstates LOG rules. `reset.sh` flushes everything.
+
+**Estimated time:** under a minute
 
 ---
 
@@ -856,6 +884,7 @@ For a full engagement build using individual options rather than 'all':
 10 → Timesketch            (timeline analysis — can wait)
 11 → Portal                (last — links everything together)
 12 → Remote Capture        (as and when extra capture points are needed)
+13 → Lockdown Firewall     (once everything is stable and the OROCHI-FW monitor logs are clean)
 ```
 
 The menu accepts space-separated multi-select, so the whole sequence can be a single run: `1 2 3 4 5 6 7 8 9 10 11`.
@@ -1017,14 +1046,14 @@ OROCHI is hardware-agnostic for the orochi node. No MAC addresses or interface n
 ### If the Orochi Node Is Different Hardware
 
 1. Boot the new hardware with Ubuntu Server 25.10 installed
-2. Delete the `OROCHI_NODE_IP` line from `.env` on the management box (or remove `.env` entirely) — `fuse.yml` will prompt for the new node's IP
+2. Delete the `OROCHI_NODE_IP` line from the operation's `<OP_NAME>.env` on the management box (or remove the file entirely) — `fuse.yml` will prompt for the new node's IP
 3. Run `fuse.yml` — the `environment` role lists available interfaces and prompts you to select the capture interface at runtime
 
 No other changes are required.
 
 ### If the Management Box Has a Different IP (Production vs Development)
 
-`bootstrap_node` resolves the management box IP dynamically — you don't need to hardcode it. On first run it prompts you to select the interface, saves the result to `.env`, and reuses it on subsequent runs.
+`bootstrap_node` resolves the management box IP dynamically — you don't need to hardcode it. On the first run of an operation it prompts you to select the interface, saves the result to the op's `<OP_NAME>.env`, and reuses it on subsequent runs.
 
 To force a specific IP for a single run without changing `.env`:
 ```bash
@@ -1032,7 +1061,7 @@ ansible-playbook fuse.yml -e mgmt_box_ip=100.99.102.28
 ansible-playbook playbooks/prep_artefacts.yml -e mgmt_box_ip=100.99.102.28
 ```
 
-To re-run the IP selection prompt (e.g. the management box IP has changed), delete `MGMT_BOX_IP` from `{{ playbook_dir }}/.env` or remove the file entirely — `bootstrap_node` will prompt again on the next run.
+To re-run the IP selection prompt (e.g. the management box IP has changed), delete `MGMT_BOX_IP` from the operation's `<OP_NAME>.env` or remove the file entirely — `bootstrap_node` will prompt again on the next run.
 
 ---
 
@@ -1272,7 +1301,7 @@ ansible orochi_node -m ping
 # UNREACHABLE! => SSH Error
 ```
 
-1. Verify the `OROCHI_NODE_IP` value in `.env` (next to `fuse.yml`) is correct
+1. Verify the `OROCHI_NODE_IP` value in the operation's `<OP_NAME>.env` (next to `fuse.yml`) is correct
 2. Verify the SSH key exists: `ls ~/.ssh/orochi_id_ed25519`
 3. Re-copy the key: `ssh-copy-id -i ~/.ssh/orochi_id_ed25519 orochi@<node-ip>`
 4. Verify sshd is running on the orochi node — connect a keyboard/monitor directly and run: `sudo systemctl start ssh`

@@ -226,8 +226,15 @@ ok "Image removal skipped"
 echo ""
 echo -e "${YELLOW}[8/9] Removing OROCHI systemd units...${NC}"
 
+if systemctl is-enabled --quiet zeekctl-cron.timer 2>/dev/null; then
+    info "Disabling zeekctl-cron.timer"
+    systemctl disable --now zeekctl-cron.timer 2>/dev/null || true
+fi
+
 for unit in \
     /etc/systemd/system/zeek.service \
+    /etc/systemd/system/zeekctl-cron.service \
+    /etc/systemd/system/zeekctl-cron.timer \
     /etc/systemd/system/suricata.service.d \
     /etc/systemd/system/zeek.service.d
 do

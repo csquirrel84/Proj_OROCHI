@@ -9,7 +9,8 @@ Pre-cache everything on a management box with internet, then deploy the full sta
 - **Fully Offline**: local Docker registry, artifact server, and apt proxy on the management box — the node never touches the internet
 - **Interactive Menu**: space-separated multi-select, `all`, `status`, `teardown`
 - **Single Engagement Password**: one credential fans out to every service
-- **Idempotent**: re-running any option is safe; choices persist in `.env`
+- **Per-Operation Configs**: fuse asks for an op name first — each engagement gets its own `OP_<NAME>.env`; same name reuses it, new name starts clean
+- **Idempotent**: re-running any option is safe; choices persist per op
 - **Firewalled**: the capture/target NIC is locked to Elastic Agent callbacks only
 - **Remote Capture**: drop additional Arkime capture nodes around the target network mid-engagement
 
@@ -28,7 +29,8 @@ Pre-cache everything on a management box with internet, then deploy the full sta
 | 9 | RITA | Beaconing / C2 detection (CLI, no web UI) | — |
 | 10 | Timesketch | Timeline analysis | 5000 |
 | 11 | Tool Portal | Service dashboard | 80 |
-| 12 | Arkime Remote Capture | Capture node on any additional box | 8007 |
+| 12 | Arkime Remote Capture | Capture node on any additional box (not in `all`) | 8007 |
+| 13 | Lockdown Firewall | Flip capture-NIC firewall LOG → DROP (not in `all`) | — |
 
 ## Quick Start
 

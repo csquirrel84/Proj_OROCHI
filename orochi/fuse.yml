@@ -92,8 +92,10 @@
       changed_when: false
 
     - name: Parse saved node IP
+      # default BEFORE | first — regex_search yields None when the key is
+      # absent (e.g. a partial env file holding only MGMT_BOX_IP).
       ansible.builtin.set_fact:
-        _env_node_ip: "{{ _env_content.stdout | regex_search('OROCHI_NODE_IP=(.+)', '\\1') | first | default('') }}"
+        _env_node_ip: "{{ _env_content.stdout | regex_search('OROCHI_NODE_IP=(.+)', '\\1') | default([''], true) | first }}"
       when: _env_content.stdout | trim | length > 0
 
     - name: Prompt for orochi node IP
@@ -134,7 +136,7 @@
           ║    ██    ██ ██   ██ ██    ██ ██      ██   ██ ██               ║
           ║     ██████  ██   ██  ██████   ██████ ██   ██ ██               ║
           ║                                                               ║
-          ║              SECURITY STACK DEPLOYER v3.0                     ║
+          ║              SECURITY STACK DEPLOYER V3.1                     ║
           ║         Based on Project Tiamat by csquirrel84                ║
           ║                                                               ║
           ╚═══════════════════════════════════════════════════════════════╝
@@ -162,9 +164,10 @@
           │  [10]  Timesketch                        │
           │  [11]  Tool Portal                       │
           │  [12]  Arkime Remote Capture             │
+          │  [13]  Lockdown Firewall (LOG → DROP)    │
           ├──────────────────────────────────────────┤
-          │  Space-separated numbers  e.g. 1 4 5 6  │
-          │  'all' to deploy everything              │
+          │  Space-separated numbers  e.g. 1 4 5 6   │
+          │  'all' to deploy 1-11 (never 12 or 13)   │
           │  'status' or 'teardown'                  │
           └──────────────────────────────────────────┘
 
@@ -180,7 +183,10 @@
         deploy_selections: >-
           {%- set raw = (menu_choice | default(_selection_input.user_input)) | trim | lower -%}
           {%- if raw == 'all' -%}
-            {{ ['1','2','3','4','5','6','7','8','9','10','11','12'] }}
+            {#- 'all' deliberately excludes 12 (needs extra hardware / a target
+                decision) and 13 (changes what traffic reaches the box).
+                Both must be selected explicitly. -#}
+            {{ ['1','2','3','4','5','6','7','8','9','10','11'] }}
           {%- elif raw in ['status', 'teardown'] -%}
             {{ [raw] }}
           {%- else -%}
@@ -191,25 +197,50 @@
       ansible.builtin.fail:
         msg: >-
           Invalid selection '{{ item }}'.
-          Valid choices: 1-12 (space-separated), 'all', 'status', 'teardown'.
-      when: item not in ['1','2','3','4','5','6','7','8','9','10','11','12','status','teardown']
+          Valid choices: 1-13 (space-separated), 'all' (deploys 1-11 —
+          12 and 13 must be selected explicitly), 'status', 'teardown'.
+      when: item not in ['1','2','3','4','5','6','7','8','9','10','11','12','13','status','teardown']
       loop: "{{ deploy_selections }}"
 
     - name: Fail if nothing was selected
       ansible.builtin.fail:
-        msg: "No selection entered. Valid choices: 1-12, 'all', 'status', 'teardown'."
+        msg: "No selection entered. Valid choices: 1-13, 'all', 'status', 'teardown'."
       when: deploy_selections | length == 0
 
     - name: Prompt for capture target
       ansible.builtin.pause:
         prompt: |
           Arkime Remote Capture target:
-            Press Enter  →  this box (mgmt box / localhost)
-            Enter IP     →  remote host
+            Press Enter     →  skip (no remote capture this run)
+            Enter 'local'   →  this box (the management box)
+            Enter an IP     →  remote host (SSH as root)
 
           Target
       register: _capture_input
       when: "'12' in deploy_selections"
+
+    - name: Set capture target choice
+      ansible.builtin.set_fact:
+        _capture_choice: "{{ _capture_input.user_input | default('') | trim | lower }}"
+      when: "'12' in deploy_selections"
+
+    - name: Validate capture target
+      ansible.builtin.fail:
+        msg: >-
+          Capture target must be empty (skip), 'local', or an IPv4 address —
+          got '{{ _capture_choice }}'.
+      when:
+        - "'12' in deploy_selections"
+        - _capture_choice | length > 0
+        - _capture_choice not in ['local', 'localhost']
+        - not (_capture_choice | regex_search('^\d{1,3}(\.\d{1,3}){3}$'))
+
+    - name: Note remote capture skipped
+      ansible.builtin.debug:
+        msg: "Arkime Remote Capture skipped (no target entered). Add capture boxes later with playbooks/deploy_remote_capture.yml."
+      when:
+        - "'12' in deploy_selections"
+        - _capture_choice | length == 0
 
     - name: Add localhost as capture target
       ansible.builtin.add_host:
@@ -218,20 +249,25 @@
         ansible_connection: local
       when:
         - "'12' in deploy_selections"
-        - (_capture_input.user_input | default('') | trim | length == 0) or
-          (_capture_input.user_input | default('') | trim | lower == 'localhost')
+        - _capture_choice in ['local', 'localhost']
 
     - name: Add remote host as capture target
       ansible.builtin.add_host:
-        name: "{{ _capture_input.user_input | trim }}"
+        name: "{{ _capture_choice }}"
         groups: capture_targets
-        ansible_host: "{{ _capture_input.user_input | trim }}"
+        ansible_host: "{{ _capture_choice }}"
         ansible_user: root
         ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
       when:
         - "'12' in deploy_selections"
-        - _capture_input.user_input | default('') | trim | length > 0
-        - _capture_input.user_input | default('') | trim | lower != 'localhost'
+        - _capture_choice | length > 0
+        - _capture_choice not in ['local', 'localhost']
+
+    - name: Record whether a capture target was selected
+      # Consumed by Play 2 — the CA cert fetch must not run (or fail) when
+      # the analyst skipped remote capture at the prompt.
+      ansible.builtin.set_fact:
+        capture_target_selected: "{{ ('12' in deploy_selections) and (_capture_choice | default('') | length > 0) }}"
 
 # ── Play 2: Deploy to orochi node ─────────────────────────────────────────────
 
@@ -262,10 +298,12 @@
       tags: always
 
     - name: Fetch CA cert for remote capture
+      # Gated on capture_target_selected, not just '12' — the analyst can
+      # press Enter at the target prompt to skip remote capture entirely.
       ansible.builtin.slurp:
         src: /opt/orochi/certs/ca/ca.crt
       register: _ca_cert_b64
-      when: "'12' in deploy_selections"
+      when: hostvars['localhost']['capture_target_selected'] | default(false) | bool
       failed_when: false
 
     - name: Fail if CA cert is missing for remote capture
@@ -275,7 +313,7 @@
           Remote capture needs the node CA to trust Elasticsearch —
           deploy option 1 (Elastic Stack) first, then re-run option 12.
       when:
-        - "'12' in deploy_selections"
+        - hostvars['localhost']['capture_target_selected'] | default(false) | bool
         - _ca_cert_b64.content is not defined
 
   tasks:
@@ -354,6 +392,32 @@
           ignore_errors: true
           when: confirm_teardown.user_input == "YES"
 
+    # ── Firewall lockdown ───────────────────────────────────────────────────────
+    # '13' flips the firewall role from its default MONITOR mode (log would-be
+    # drops, block nothing) to LOCKDOWN (actually drop). It changes what
+    # traffic reaches the box, so it always requires its own confirmation and
+    # is deliberately excluded from 'all' — see roles/firewall/tasks/main.yml.
+
+    - name: Confirm firewall lockdown
+      when: "'13' in deploy_selections"
+      block:
+        - name: Confirm lockdown
+          ansible.builtin.pause:
+            prompt: >-
+              WARNING: This flips the capture/target-interface firewall from
+              LOG-only to DROP — traffic outside Fleet/Elasticsearch
+              (8220/9200) will be actively blocked. Type 'YES' to confirm
+          register: confirm_lockdown
+
+        - name: Abort if lockdown not confirmed
+          ansible.builtin.fail:
+            msg: "Firewall lockdown not confirmed — aborting."
+          when: confirm_lockdown.user_input != "YES"
+
+    - name: Set firewall enforcement mode
+      ansible.builtin.set_fact:
+        firewall_enforce: "{{ '13' in deploy_selections }}"
+
     # ── Shared prerequisites ─────────────────────────────────────────────────────
     # Each runs once based on combined selections — avoids redundant role re-runs
     # when multiple options share the same prerequisite.
@@ -361,20 +425,21 @@
     - name: Deploy common role
       ansible.builtin.include_role:
         name: common
-      when: (deploy_selections | intersect(['1','2','3','4','5','6','7','8','9','10','11'])) | length > 0
+      when: (deploy_selections | intersect(['1','2','3','4','5','6','7','8','9','10','11','13'])) | length > 0
 
     - name: Deploy environment role
       ansible.builtin.include_role:
         name: environment
-      when: (deploy_selections | intersect(['1','2','3','4','5','6','8','9','11'])) | length > 0
+      when: (deploy_selections | intersect(['1','2','3','4','5','6','8','9','11','13'])) | length > 0
 
     - name: Deploy firewall role
-      # Locks the capture/target NIC down to Elastic Agent callbacks (8220/9200).
-      # Runs after environment (needs the selected capture interface) and after
-      # common (needs Docker's DOCKER-USER chain).
+      # Default (13 not selected): MONITOR mode — logs would-be drops on the
+      # capture/target NIC, blocks nothing. '13': LOCKDOWN — actually drops.
+      # Runs after environment (needs the selected capture interface) and
+      # after common (needs Docker's DOCKER-USER chain).
       ansible.builtin.include_role:
         name: firewall
-      when: (deploy_selections | intersect(['1','2','3','4','5','6','8','9','11'])) | length > 0
+      when: (deploy_selections | intersect(['1','2','3','4','5','6','8','9','11','13'])) | length > 0
 
     - name: Deploy certificates role
       ansible.builtin.include_role:

@@ -97,16 +97,20 @@ Passive Capture (on-node)
 `playbooks/prep_artefacts.yml` — pulls and pushes all Docker images to the local registry (including all RITA compose images, resolved from the installer's own compose file), downloads Velociraptor (latest from GitHub API), Zeek/Suricata/Docker `.deb` tarballs, Suricata ET Open rules, writes version files, warms the apt cache, verifies everything, then declares the box offline-ready. Offers latest-Elastic-version detection with prompt, persists the choice to `group_vars/all.yml`.
 
 ### Phase 2 — On-site deployment (fully offline)
-`fuse.yml` — single entry point. Resolves node IP (prompt on first run, `.env` thereafter), prompts once for the **engagement password** (fans out to every service), always runs `bootstrap_node` (resolves/persists mgmt box IP, configures apt proxy, Docker insecure-registry trust), then presents a 12-option menu:
+`fuse.yml` — single entry point. Prompts first for an **Operation Name** (normalised to `OP_<NAME>`, selects/creates `OP_<NAME>.env`), resolves node IP (prompt on first run of the op, env file thereafter), prompts once for the **engagement password** (fans out to every service), always runs `bootstrap_node` (resolves/persists mgmt box IP, configures apt proxy, Docker insecure-registry trust), then presents a 12-option menu:
 
 ```
 1 Elastic Stack   2 TheHive 4      3 Velociraptor   4 Zeek
 5 Suricata        6 Arkime         7 CyberChef      8 Mattermost
 9 RITA            10 Timesketch    11 Tool Portal   12 Arkime Remote Capture
-Space-separated multi-select, 'all', 'status', 'teardown'
+13 Lockdown Firewall (LOG → DROP)
+Space-separated multi-select, 'status', 'teardown'.
+'all' = 1-11 only — 12 (needs a capture target) and 13 (starts blocking
+traffic) must always be selected explicitly. Option 12 prompts for a
+target: Enter = skip, 'local' = mgmt box, IP = remote host (root SSH).
 ```
 
-Shared prerequisites (`common`, `environment`, `certificates`, `elasticsearch`) run once based on the combined selection. The `environment` role handles all runtime prompts (capture interface, HOME_NET, versions offered from the registry, analyst-facing IP) and persists answers to `.env` on the control node for idempotent re-runs.
+Shared prerequisites (`common`, `environment`, `firewall`, `certificates`, `elasticsearch`) run once based on the combined selection. The `environment` role handles all runtime prompts (capture interface, HOME_NET, versions offered from the registry) and persists answers to the op's `<OP_NAME>.env` on the control node for idempotent re-runs.
 
 Option 12 / `playbooks/deploy_remote_capture.yml` deploy `arkimecapture-remote` to additional boxes around the target network — the standalone playbook exists so capture nodes can be added mid-engagement without re-running fuse.
 
@@ -123,7 +127,7 @@ Option 12 / `playbooks/deploy_remote_capture.yml` deploy `arkimecapture-remote` 
 | Docker for services, bare metal for Zeek/Suricata | Repeatability and offline image caching vs raw packet access |
 | Ansible only — Terraform abandoned | No VMs to provision |
 | Single engagement password | One credential per engagement, fans out to every service (TheHive excepted — hardcoded default, change on first login) |
-| `.env` on the control node | Persists node IP, mgmt IP, interface and version choices across re-runs |
+| Per-operation `<OP_NAME>.env` on the control node | fuse prompts for an op name first; each op gets its own config (node IP, mgmt IP, interface, versions, Arkime secret, Kibana key). Same op name = reuse offer; new name = clean config. Names normalised (`brass` → `OP_BRASS`) |
 | Local registry + artifact server + apt proxy | The node never needs internet |
 | Remote capture: sessions to central ES, PCAP local | Bandwidth-light visibility from multiple capture points |
 | Fixed management network 10.16.255.0/24 | Removes "why can't my laptop see the node" troubleshooting |
@@ -143,7 +147,7 @@ These are design intent. **None of the following exists in the codebase yet:**
 5. **PXE boot** for node OS install (manual Ubuntu install for now)
 6. **Capture-network USB NIC** — hardware still to be procured
 
-> **Implemented since the list above was written:** the `firewall` role (per-interface iptables policy — analyst NIC open, capture/target NIC restricted to Fleet 8220 / ES 9200, SSH lockout guard, DOCKER-USER enforcement for published container ports, persisted via netfilter-persistent).
+> **Implemented since the list above was written:** the `firewall` role (per-interface iptables policy — analyst NIC open, capture/target NIC restricted to Fleet 8220 / ES 9200, SSH lockout guard, DOCKER-USER enforcement for published container ports, persisted via netfilter-persistent). It deploys in MONITOR mode (LOG-only, blocks nothing); menu option 13 "Lockdown Firewall" flips LOG → DROP after a typed confirmation and is never part of 'all'.
 
 Target physical interface plan (NUC): `enp89s0` analyst LAN, `enx98e743225b91` target network (Elastic callbacks), USB NIC (TBD) passive capture, `wlo1` WireGuard.
 

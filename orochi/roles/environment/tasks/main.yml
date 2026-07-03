@@ -13,6 +13,26 @@
   become: false
   tags: environment
 
+# bootstrap_node may have already written MGMT_BOX_IP into a brand-new op
+# file before this role runs. A file is only a *saved configuration* if this
+# role finished writing it (STACK_VERSION is the marker) — otherwise offering
+# to "reuse" it would silently deploy with defaults.
+- name: Check operation config completeness
+  ansible.builtin.shell: |
+    grep -q '^STACK_VERSION=' {{ env_file }} && echo complete || echo partial
+  register: _env_completeness
+  delegate_to: localhost
+  become: false
+  changed_when: false
+  failed_when: false
+  when: env_file_exists.stat.exists
+  tags: environment
+
+- name: Set saved-config flag
+  ansible.builtin.set_fact:
+    _env_complete: "{{ env_file_exists.stat.exists and ((_env_completeness.stdout | default('')) | trim == 'complete') }}"
+  tags: environment
+
 - name: Read existing operation config for display
   # Secrets (Arkime HMAC secret, Kibana encryption key) are filtered out so
   # they never appear on screen or in install.log.
@@ -22,13 +42,13 @@
   delegate_to: localhost
   become: false
   changed_when: false
-  when: env_file_exists.stat.exists
+  when: _env_complete | bool
   tags: environment
 
 - name: Display existing configuration
   ansible.builtin.debug:
     msg: "{{ _env_preview.stdout_lines }}"
-  when: env_file_exists.stat.exists
+  when: _env_complete | bool
   tags: environment
 
 - name: Prompt to use existing config
@@ -36,7 +56,7 @@
     prompt: "You have a saved configuration for {{ op_id | default('this operation') }}. Use it? (y/n) [y]"
     echo: yes
   register: use_existing_env
-  when: env_file_exists.stat.exists
+  when: _env_complete | bool
   tags: environment
 
 - name: Load existing operation config from control node
@@ -45,26 +65,28 @@
   delegate_to: localhost
   become: false
   when:
-    - env_file_exists.stat.exists
+    - _env_complete | bool
     - use_existing_env.user_input | default('y', true) | lower in ['y', 'yes', '']
   changed_when: false
   tags: environment
 
+# regex_search returns None (not undefined) when a key is missing, so the
+# default must be applied BEFORE | first — 'None | first' is a hard error.
 - name: Parse existing configuration
   ansible.builtin.set_fact:
-    stack_version: "{{ existing_env.stdout | regex_search('STACK_VERSION=(.+)', '\\1') | first | default(stack_version, true) }}"
-    cluster_name: "{{ existing_env.stdout | regex_search('CLUSTER_NAME=(.+)', '\\1') | first | default('orochi', true) }}"
-    license: "{{ existing_env.stdout | regex_search('LICENSE=(.+)', '\\1') | first | default('basic', true) }}"
-    mem_limit: "{{ existing_env.stdout | regex_search('MEM_LIMIT=(.+)', '\\1') | first | default('4g', true) }}"
-    velox_user: "{{ existing_env.stdout | regex_search('VELOX_USER=(.+)', '\\1') | first | default('admin', true) }}"
-    suricata_interface: "{{ existing_env.stdout | regex_search('SURICATA_INTERFACE=(.+)', '\\1') | first | default('eth0', true) }}"
-    suricata_home_net: "{{ existing_env.stdout | regex_search('SURICATA_HOME_NET=(.+)', '\\1') | first | default('192.168.0.0/16', true) }}"
-    mgmt_box_ip: "{{ existing_env.stdout | regex_search('MGMT_BOX_IP=(.+)', '\\1') | first | default(mgmt_box_ip, true) }}"
-    orochi_node_ip: "{{ existing_env.stdout | regex_search('OROCHI_NODE_IP=(.+)', '\\1') | first | default(ansible_host, true) }}"
-    arkime_version: "{{ existing_env.stdout | regex_search('ARKIME_VERSION=(.+)', '\\1') | first | default(arkime_version, true) }}"
+    stack_version: "{{ existing_env.stdout | regex_search('STACK_VERSION=(.+)', '\\1') | default([stack_version], true) | first }}"
+    cluster_name: "{{ existing_env.stdout | regex_search('CLUSTER_NAME=(.+)', '\\1') | default(['orochi'], true) | first }}"
+    license: "{{ existing_env.stdout | regex_search('LICENSE=(.+)', '\\1') | default(['basic'], true) | first }}"
+    mem_limit: "{{ existing_env.stdout | regex_search('MEM_LIMIT=(.+)', '\\1') | default(['4g'], true) | first }}"
+    velox_user: "{{ existing_env.stdout | regex_search('VELOX_USER=(.+)', '\\1') | default(['admin'], true) | first }}"
+    suricata_interface: "{{ existing_env.stdout | regex_search('SURICATA_INTERFACE=(.+)', '\\1') | default(['eth0'], true) | first }}"
+    suricata_home_net: "{{ existing_env.stdout | regex_search('SURICATA_HOME_NET=(.+)', '\\1') | default(['192.168.0.0/16'], true) | first }}"
+    mgmt_box_ip: "{{ existing_env.stdout | regex_search('MGMT_BOX_IP=(.+)', '\\1') | default([mgmt_box_ip], true) | first }}"
+    orochi_node_ip: "{{ existing_env.stdout | regex_search('OROCHI_NODE_IP=(.+)', '\\1') | default([ansible_host], true) | first }}"
+    arkime_version: "{{ existing_env.stdout | regex_search('ARKIME_VERSION=(.+)', '\\1') | default([arkime_version], true) | first }}"
     skip_env_prompts: true
   when:
-    - env_file_exists.stat.exists
+    - _env_complete | bool
     - use_existing_env.user_input | default('y', true) | lower in ['y', 'yes', '']
   tags: environment
 
@@ -83,9 +105,10 @@
   tags: environment
 
 - name: Reuse persistent secrets from existing .env
+  # default BEFORE | first — regex_search yields None when the key is absent.
   ansible.builtin.set_fact:
-    arkime_password_secret: "{{ _env_secrets_raw.stdout | regex_search('ARKIME_PASSWORD_SECRET=(.+)', '\\1') | first | default('', true) }}"
-    kibana_encryption_key: "{{ _env_secrets_raw.stdout | regex_search('KIBANA_ENCRYPTION_KEY=(.+)', '\\1') | first | default('', true) }}"
+    arkime_password_secret: "{{ _env_secrets_raw.stdout | regex_search('ARKIME_PASSWORD_SECRET=(.+)', '\\1') | default([''], true) | first }}"
+    kibana_encryption_key: "{{ _env_secrets_raw.stdout | regex_search('KIBANA_ENCRYPTION_KEY=(.+)', '\\1') | default([''], true) | first }}"
   when: env_file_exists.stat.exists
   no_log: true
   tags: environment
@@ -121,7 +144,7 @@
       interface: "{{ suricata_interface }}"
       home_net: "{{ suricata_home_net }}"
   when:
-    - env_file_exists.stat.exists
+    - _env_complete | bool
     - use_existing_env.user_input | default('y', true) | lower in ['y', 'yes', '']
   tags: environment
 

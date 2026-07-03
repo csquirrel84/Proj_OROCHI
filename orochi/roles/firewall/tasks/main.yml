@@ -12,15 +12,21 @@
 #                                     (Fleet 8220, Elasticsearch 9200)
 #   all NICs                        : SSH, loopback, established allowed
 #
+# MODE (firewall_enforce, default false — see defaults/main.yml):
+#   false (MONITOR)  : capture-interface traffic that would be blocked is
+#                       LOG-only (kernel log, OROCHI-FW-* prefixes) and
+#                       falls through to ACCEPT. Nothing is blocked.
+#   true  (LOCKDOWN) : that same traffic is DROPped instead. Set only by
+#                       selecting "Lockdown Firewall" in fuse.yml — never
+#                       bundled into a normal service deploy or 'all',
+#                       since it changes what traffic reaches the box.
+#
+# Re-running this role removes the other mode's rule first, so switching
+# between MONITOR and LOCKDOWN never leaves a stale LOG or DROP rule behind.
+#
 # Docker publishes ports via NAT — that traffic never traverses INPUT, so
 # container ports are enforced in the DOCKER-USER chain. Host-networked
 # services (Arkime viewer/capture, SSH) are enforced in INPUT.
-#
-# MONITOR MODE: enforcement is currently disabled. Traffic that would be
-# dropped is LOG-only (kernel log, see dmesg/journalctl for the
-# OROCHI-FW-* prefixes) and then falls through to ACCEPT. Nothing is
-# actually blocked yet — flip the LOG rules below back to DROP once the
-# logged traffic has been reviewed.
 
 - name: Install iptables persistence packages (from apt cache)
   ansible.builtin.apt:
@@ -89,7 +95,40 @@
     action: insert
   tags: firewall
 
-- name: Log (would-drop) all other inbound traffic on the capture interface (host)
+- name: Remove monitor-mode LOG rule for the capture interface (host), if present
+  ansible.builtin.iptables:
+    chain: INPUT
+    in_interface: "{{ fw_capture_iface }}"
+    jump: LOG
+    log_prefix: "OROCHI-FW-INPUT-DROP: "
+    log_level: warning
+    limit: "5/min"
+    limit_burst: 10
+    state: absent
+  when: fw_analyst_iface != fw_capture_iface
+  tags: firewall
+
+- name: Remove lockdown DROP rule for the capture interface (host), if present
+  ansible.builtin.iptables:
+    chain: INPUT
+    in_interface: "{{ fw_capture_iface }}"
+    jump: DROP
+    state: absent
+  when: fw_analyst_iface != fw_capture_iface
+  tags: firewall
+
+- name: "Lockdown: drop all other inbound traffic on the capture interface (host)"
+  ansible.builtin.iptables:
+    chain: INPUT
+    in_interface: "{{ fw_capture_iface }}"
+    jump: DROP
+    action: append
+  when:
+    - fw_analyst_iface != fw_capture_iface
+    - firewall_enforce | default(false)
+  tags: firewall
+
+- name: "Monitor: log (would-drop) all other inbound traffic on the capture interface (host)"
   ansible.builtin.iptables:
     chain: INPUT
     in_interface: "{{ fw_capture_iface }}"
@@ -99,12 +138,14 @@
     limit: "5/min"
     limit_burst: 10
     action: append
-  when: fw_analyst_iface != fw_capture_iface
+  when:
+    - fw_analyst_iface != fw_capture_iface
+    - not (firewall_enforce | default(false))
   tags: firewall
 
 # ── DOCKER-USER rules (bridge-published container ports) ──────────────────────
 # Rules are inserted at position 1 in reverse order so the final order is:
-# established → 8220 → 9200 → LOG (would-drop) → (docker's RETURN, ACCEPT).
+# established → 8220 → 9200 → DROP/LOG → (docker's RETURN, ACCEPT).
 
 - name: Ensure DOCKER-USER chain exists
   ansible.builtin.shell: |
@@ -112,7 +153,40 @@
   changed_when: false
   tags: firewall
 
-- name: Log (would-drop) all other container-bound traffic from the capture interface
+- name: Remove monitor-mode LOG rule for container-bound capture traffic, if present
+  ansible.builtin.iptables:
+    chain: DOCKER-USER
+    in_interface: "{{ fw_capture_iface }}"
+    jump: LOG
+    log_prefix: "OROCHI-FW-DOCKER-DROP: "
+    log_level: warning
+    limit: "5/min"
+    limit_burst: 10
+    state: absent
+  when: fw_analyst_iface != fw_capture_iface
+  tags: firewall
+
+- name: Remove lockdown DROP rule for container-bound capture traffic, if present
+  ansible.builtin.iptables:
+    chain: DOCKER-USER
+    in_interface: "{{ fw_capture_iface }}"
+    jump: DROP
+    state: absent
+  when: fw_analyst_iface != fw_capture_iface
+  tags: firewall
+
+- name: "Lockdown: drop all other container-bound traffic from the capture interface"
+  ansible.builtin.iptables:
+    chain: DOCKER-USER
+    in_interface: "{{ fw_capture_iface }}"
+    jump: DROP
+    action: insert
+  when:
+    - fw_analyst_iface != fw_capture_iface
+    - firewall_enforce | default(false)
+  tags: firewall
+
+- name: "Monitor: log (would-drop) all other container-bound traffic from the capture interface"
   ansible.builtin.iptables:
     chain: DOCKER-USER
     in_interface: "{{ fw_capture_iface }}"
@@ -122,7 +196,9 @@
     limit: "5/min"
     limit_burst: 10
     action: insert
-  when: fw_analyst_iface != fw_capture_iface
+  when:
+    - fw_analyst_iface != fw_capture_iface
+    - not (firewall_enforce | default(false))
   tags: firewall
 
 - name: Allow Elasticsearch (9200) from the capture interface
@@ -167,9 +243,15 @@
 - name: Display firewall status
   ansible.builtin.debug:
     msg:
-      - "Firewall applied (MONITOR MODE — nothing is being blocked)."
-      - "Analyst NIC (open):            {{ fw_analyst_iface }}"
-      - "Capture/target NIC (logging):  {{ fw_capture_iface }} — non-8220/9200 traffic is logged, not dropped"
+      - "Firewall applied ({{ 'LOCKDOWN' if (firewall_enforce | default(false)) else 'MONITOR MODE' }})."
+      - "{{ 'Capture-interface traffic outside 8220/9200 is being DROPPED.' if (firewall_enforce | default(false)) else 'Capture-interface traffic outside 8220/9200 is logged only — nothing is blocked.' }}"
+      - "Analyst NIC (open):  {{ fw_analyst_iface }}"
+      - "Capture/target NIC:  {{ fw_capture_iface }}"
       - "Inspect: iptables -L INPUT -n --line-numbers; iptables -L DOCKER-USER -n"
-      - "Logs:    journalctl -k | grep OROCHI-FW-"
+  tags: firewall
+
+- name: Display monitor-mode log hint
+  ansible.builtin.debug:
+    msg: "Logs: journalctl -k | grep OROCHI-FW-"
+  when: not (firewall_enforce | default(false))
   tags: firewall

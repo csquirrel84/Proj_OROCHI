@@ -75,11 +75,19 @@
 
     - name: Parse .env values
       ansible.builtin.set_fact:
-        orochi_node_ip:         "{{ _env_content.stdout | regex_search('OROCHI_NODE_IP=(.+)',         '\\1') | first | trim }}"
-        arkime_password_secret: "{{ _env_content.stdout | regex_search('ARKIME_PASSWORD_SECRET=(.+)', '\\1') | first | trim }}"
+        orochi_node_ip:         "{{ _env_content.stdout | regex_search('OROCHI_NODE_IP=(.+)',         '\\1') | default([''],             true) | first | trim }}"
+        arkime_password_secret: "{{ _env_content.stdout | regex_search('ARKIME_PASSWORD_SECRET=(.+)', '\\1') | default([''],             true) | first | trim }}"
         mgmt_box_ip:            "{{ _env_content.stdout | regex_search('MGMT_BOX_IP=(.+)',            '\\1') | default(['10.16.255.253'], true) | first | trim }}"
         mgmt_registry_port:     "{{ _env_content.stdout | regex_search('MGMT_REGISTRY_PORT=(.+)',     '\\1') | default(['5000'],         true) | first | trim }}"
         arkime_version:         "{{ _env_content.stdout | regex_search('ARKIME_VERSION=(.+)',         '\\1') | default(['v6-latest'],    true) | first | trim }}"
+
+    - name: Fail if operation config is incomplete
+      ansible.builtin.fail:
+        msg: >-
+          {{ op_id }}.env is missing OROCHI_NODE_IP and/or ARKIME_PASSWORD_SECRET.
+          The config was not fully written — run fuse.yml for this operation
+          (option 1 at minimum, option 6 for Arkime) before deploying remote capture.
+      when: (orochi_node_ip | length == 0) or (arkime_password_secret | length == 0)
 
     - name: Add orochi node to inventory
       ansible.builtin.add_host:
@@ -93,8 +101,8 @@
       ansible.builtin.pause:
         prompt: |
           Arkime Remote Capture target:
-            Press Enter  →  this box (mgmt box / localhost)
-            Enter IP     →  remote host (SSH as root)
+            Press Enter or 'local'  →  this box (the management box)
+            Enter an IP             →  remote host (SSH as root)
 
           Target
       register: _capture_input
@@ -102,14 +110,24 @@
 
     - name: Set capture target fact
       ansible.builtin.set_fact:
-        _capture_target: "{{ capture_target | default(_capture_input.user_input | default('') | trim, true) }}"
+        _capture_target: "{{ capture_target | default(_capture_input.user_input | default('') | trim, true) | lower }}"
+
+    - name: Validate capture target
+      ansible.builtin.fail:
+        msg: >-
+          Capture target must be empty/'local' (this box) or an IPv4 address —
+          got '{{ _capture_target }}'.
+      when:
+        - _capture_target | length > 0
+        - _capture_target not in ['local', 'localhost']
+        - not (_capture_target | regex_search('^\d{1,3}(\.\d{1,3}){3}$'))
 
     - name: Add localhost as capture target
       ansible.builtin.add_host:
         name: localhost
         groups: capture_targets
         ansible_connection: local
-      when: (_capture_target | length == 0) or (_capture_target | lower == 'localhost')
+      when: (_capture_target | length == 0) or (_capture_target in ['local', 'localhost'])
 
     - name: Add remote host as capture target
       ansible.builtin.add_host:
@@ -120,7 +138,7 @@
         ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
       when:
         - _capture_target | length > 0
-        - _capture_target | lower != 'localhost'
+        - _capture_target not in ['local', 'localhost']
 
     - name: Show resolved config
       ansible.builtin.debug:

@@ -106,12 +106,15 @@
 
 # ── Verify reachability ───────────────────────────────────────────────────────
 
+# ignore_errors (not failed_when: false) — failed_when: false rewrites
+# .failed to False, which made the gate below dead code: an unreachable
+# management box sailed straight through and broke every later role.
 - name: Verify management box is reachable
   ansible.builtin.wait_for:
     host: "{{ mgmt_box_ip }}"
     port: "{{ mgmt_artifact_port }}"
     timeout: 10
-  failed_when: false
+  ignore_errors: true
   register: mgmt_reachable
 
 - name: Fail if management box artifact server is not reachable
@@ -119,8 +122,11 @@
     msg: >
       Management box artifact server not reachable at
       {{ mgmt_box_ip }}:{{ mgmt_artifact_port }}.
-      Ensure setup_mgmt_box.yml and prep_artefacts.yml have been run.
-  when: mgmt_reachable.failed | default(false)
+      If this IP is wrong (e.g. you accepted the production default on a dev
+      box), delete the MGMT_BOX_IP line from the op's env file and re-run to
+      be prompted again. Otherwise ensure setup_mgmt_box.yml and
+      prep_artefacts.yml have been run on the management box.
+  when: mgmt_reachable is failed
 
 # ── apt proxy ─────────────────────────────────────────────────────────────────
 
