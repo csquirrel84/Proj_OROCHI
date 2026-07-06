@@ -6,6 +6,7 @@
 #
 #   ansible-playbook playbooks/check_updates.yml            # report only
 #   ansible-playbook playbooks/check_updates.yml -e refresh_suricata=true
+#   ansible-playbook playbooks/check_updates.yml -e bump_rita=true
 #
 # Version pins that are intentionally frozen are NOT checked:
 #   - TheHive 4 and its Elasticsearch 7.x  (TheHive 4 breaks on ES 8+)
@@ -23,6 +24,7 @@
   vars:
     artifacts_dir: /opt/orochi/artifacts
     refresh_suricata: false
+    bump_rita: false
     frozen_note: "TheHive 4 requires ES 7.x — pinned deliberately, not checked."
 
   tasks:
@@ -71,7 +73,7 @@
           - "── OROCHI update report ──────────────────────────────"
           - "Elastic Stack : pinned {{ stack_version }}  latest {{ _elastic_latest.stdout | default('?') | trim }}{{ '   ** UPDATE **' if (_elastic_latest.stdout | default('') | trim) not in ['', stack_version] else '   up to date' }}"
           - "Velociraptor  : latest {{ (_velox_latest.json.tag_name | default('?')) if _velox_latest.json is defined else '?' }}  (resolved fresh at prep time — always current)"
-          - "RITA          : pinned {{ rita_version }}  latest {{ (_rita_latest.json.tag_name | default('?')) if _rita_latest.json is defined else '?' }}{{ '   ** UPDATE **' if (_rita_latest.json.tag_name | default('') if _rita_latest.json is defined else '') not in ['', rita_version] else '   up to date' }}"
+          - "RITA          : pinned {{ rita_version }}  latest {{ (_rita_latest.json.tag_name | default('?')) if _rita_latest.json is defined else '?' }}{{ '   ** UPDATE **' if (_rita_latest.json.tag_name | default('') if _rita_latest.json is defined else '') not in ['', rita_version] else '   up to date' }}  (also auto-checked & promptable in prep_artefacts.yml)"
           - "Arkime        : pinned {{ arkime_version }}  (rolling tag — re-pulled each prep)"
           - "TheHive 4     : {{ thehive_version }}  [FROZEN] {{ frozen_note }}"
           - "ES for TheHive: {{ elasticsearch_hive_version }}  [FROZEN]"
@@ -83,6 +85,47 @@
     - name: Show update report
       ansible.builtin.debug:
         msg: "{{ _report }}"
+
+    # ── Optional: bump the pinned RITA version in place ───────────────────────
+    # Only touches the pin in group_vars/all.yml — re-run prep_artefacts.yml
+    # afterwards (with internet) to actually fetch that version.
+
+    - name: Bump pinned RITA version
+      when:
+        - bump_rita | bool
+        - _rita_latest.json is defined
+        - (_rita_latest.json.tag_name | default('')) not in ['', rita_version]
+      block:
+        - name: Confirm RITA version bump
+          ansible.builtin.pause:
+            prompt: >-
+              Bump pinned RITA version from {{ rita_version }} to
+              {{ _rita_latest.json.tag_name }}? [y/N]
+            echo: yes
+          register: _bump_rita_confirm
+
+        - name: Persist bumped RITA version to group_vars/all.yml
+          ansible.builtin.lineinfile:
+            path: "{{ playbook_dir }}/../group_vars/all.yml"
+            regexp: '^rita_version:'
+            line: "rita_version: \"{{ _rita_latest.json.tag_name }}\""
+          when: (_bump_rita_confirm.user_input | default('') | lower) in ['y', 'yes']
+
+        - name: Show RITA bump result
+          ansible.builtin.debug:
+            msg: >-
+              {{ ('RITA pin updated to ' ~ _rita_latest.json.tag_name ~
+                  '. Re-run prep_artefacts.yml with internet to fetch it.')
+                 if (_bump_rita_confirm.user_input | default('') | lower) in ['y', 'yes']
+                 else ('Left RITA pinned at ' ~ rita_version ~ '.') }}
+
+    - name: Hint that a RITA update is available
+      ansible.builtin.debug:
+        msg: "A newer RITA release is available — re-run with -e bump_rita=true to update the pin."
+      when:
+        - not (bump_rita | bool)
+        - _rita_latest.json is defined
+        - (_rita_latest.json.tag_name | default('')) not in ['', rita_version]
 
     # ── Optional: refresh cached Suricata sources in place ────────────────────
 
@@ -103,10 +146,6 @@
                   suricata suricata-update python3-yaml curl
                 suricata-update update-sources
                 python3 /fetch.py /output/suricata-sources
-                mkdir -p /var/lib/suricata/rules
-                cat /output/suricata-sources/*.rules > /var/lib/suricata/rules/suricata.rules
-                tar -czf /output/suricata-rules.tar.gz -C /var/lib/suricata rules/
-                tar -czf /output/suricata-sources.tar.gz -C /output suricata-sources/
               '
           register: _suri_refresh
           changed_when: true
@@ -118,6 +157,7 @@
         - name: Remind to redeploy
           ansible.builtin.debug:
             msg: >-
-              Suricata sources refreshed on the management box. On the node,
-              open the Suricata Manager (portal → Suricata) and press Update,
-              or re-run fuse.yml option 5.
+              Suricata sources refreshed on the management box. Reconnect the
+              management box to the node's network and re-run fuse.yml
+              (or the suricata role, e.g. `--tags suricata`) to pull the
+              refreshed rules via suricata-update.

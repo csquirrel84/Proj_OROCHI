@@ -76,20 +76,78 @@
   changed_when: "'Setting up' in suricata_install.stdout"
   tags: suricata
 
-# ── Rules — use pre-downloaded tarball ────────────────────────────────────────
+# ── Rules — build via suricata-update, pointed at the management box ──────────
+# The management box mirrors every free Suricata rule source (no auth
+# parameters — ET Open, abuse.ch SSLbl/URLhaus, OISF traffic-id, etc.) as
+# plain per-source .rules files under {{ artifact_base_url }}/suricata-sources/
+# (see playbooks/prep_artefacts.yml and files/fetch_suricata_sources.py).
+# Each source is registered here with that explicit URL, so suricata-update
+# fetches straight from the management box and never needs the real
+# internet-facing source index.
 
-- name: Download pre-cached Suricata rules from artifact server
-  ansible.builtin.get_url:
-    url: "{{ artifact_base_url }}/suricata-rules.tar.gz"
-    dest: /tmp/suricata-rules.tar.gz
-    mode: '0644'
+- name: Fetch Suricata source manifest from artifact server
+  ansible.builtin.uri:
+    url: "{{ artifact_base_url }}/suricata-sources/manifest.json"
+    return_content: true
+  register: _suri_manifest_raw
   tags: suricata
 
-- name: Extract Suricata rules
-  ansible.builtin.unarchive:
-    src: /tmp/suricata-rules.tar.gz
-    dest: /var/lib/suricata
-    remote_src: true
+- name: Parse Suricata source manifest
+  ansible.builtin.set_fact:
+    _suri_sources: "{{ (_suri_manifest_raw.content | from_json).sources }}"
+  tags: suricata
+
+# suricata-update's own enable-source lookup is broken for any name
+# containing a "/" (e.g. "ipfire/dbl"): it falls back to re-deriving names
+# from filenames on disk via a hyphen replace that it never un-does, so
+# "ipfire/dbl" (file ipfire-dbl.yaml) can never match itself and
+# enable-source errors "Unknown source". Sidestep it entirely by using the
+# slash-free "safe" name (manifest file name minus ".rules") as the actual
+# suricata-update source identifier — safe_filename() is a no-op on a
+# string with no slashes, so lookups always succeed regardless of what's
+# in the bundled/online index.
+
+- name: Remove any previously registered Suricata sources (clean re-add)
+  ansible.builtin.command:
+    argv:
+      - suricata-update
+      - remove-source
+      - "{{ item.value.file | regex_replace('\\.rules$', '') }}"
+  loop: "{{ _suri_sources | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  failed_when: false
+  changed_when: true
+  tags: suricata
+
+- name: Register free Suricata sources, pointed at the management box
+  ansible.builtin.command:
+    argv:
+      - suricata-update
+      - add-source
+      - "{{ item.value.file | regex_replace('\\.rules$', '') }}"
+      - "{{ artifact_base_url }}/suricata-sources/{{ item.value.file }}"
+  loop: "{{ _suri_sources | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  changed_when: true
+  tags: suricata
+
+- name: Enable free Suricata sources
+  ansible.builtin.command:
+    argv:
+      - suricata-update
+      - enable-source
+      - "{{ item.value.file | regex_replace('\\.rules$', '') }}"
+  loop: "{{ _suri_sources | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  changed_when: true
+  tags: suricata
+
+- name: Build merged ruleset with suricata-update
+  ansible.builtin.command: suricata-update
+  changed_when: true
   tags: suricata
 
 # ── Service ────────────────────────────────────────────────────────────────────
@@ -135,94 +193,4 @@
       - "Check status: systemctl status suricata"
       - "Logs: /var/log/suricata/eve.json"
       - "Rules: /var/lib/suricata/rules"
-  tags: suricata
-
-# ── Suricata Manager (per-source rule toggle + update API) ────────────────────
-# Serves a small control API on the analyst NIC so an analyst can enable/
-# disable cached rule sources and pull refreshed bundles from the management
-# box — all offline. stdlib-only Python, runs as a systemd service.
-
-- name: Create Suricata sources directory
-  ansible.builtin.file:
-    path: /var/lib/suricata/sources
-    state: directory
-    mode: '0755'
-  tags: suricata
-
-- name: Download per-source Suricata bundle from artifact server
-  ansible.builtin.get_url:
-    url: "{{ artifact_base_url }}/suricata-sources.tar.gz"
-    dest: /tmp/suricata-sources.tar.gz
-    mode: '0644'
-  register: _suri_sources_dl
-  failed_when: false
-  tags: suricata
-
-- name: Extract per-source Suricata bundle
-  ansible.builtin.unarchive:
-    src: /tmp/suricata-sources.tar.gz
-    dest: /var/lib/suricata
-    remote_src: true
-  when: _suri_sources_dl is succeeded and _suri_sources_dl.status_code | default(0) == 200
-  tags: suricata
-
-- name: Warn if per-source bundle is unavailable
-  ansible.builtin.debug:
-    msg: >-
-      suricata-sources.tar.gz not found on the artifact server — the Suricata
-      Manager will show no sources until prep_artefacts.yml is re-run with the
-      updated playbook. The merged ruleset is still deployed and active.
-  when: not (_suri_sources_dl is succeeded and _suri_sources_dl.status_code | default(0) == 200)
-  tags: suricata
-
-- name: Resolve analyst-facing IP for the manager to bind
-  ansible.builtin.shell: |
-    ip -o route get {{ mgmt_box_ip }} | grep -oP 'src \K\S+'
-  register: _suri_mgr_ip
-  changed_when: false
-  tags: suricata
-
-- name: Install Suricata Manager script
-  ansible.builtin.copy:
-    src: suricata_manager.py
-    dest: /usr/local/bin/orochi-suricata-manager
-    mode: '0755'
-  tags: suricata
-
-- name: Install Suricata Manager systemd unit
-  ansible.builtin.copy:
-    dest: /etc/systemd/system/orochi-suricata-manager.service
-    mode: '0644'
-    content: |
-      [Unit]
-      Description=OROCHI Suricata Manager (rule source control API)
-      After=suricata.service network-online.target
-      Wants=network-online.target
-
-      [Service]
-      Type=simple
-      Environment=OROCHI_ARTIFACT_URL={{ artifact_base_url }}
-      Environment=OROCHI_BIND_HOST={{ _suri_mgr_ip.stdout | trim | default('0.0.0.0', true) }}
-      Environment=OROCHI_BIND_PORT={{ suricata_manager_port | default('7000') }}
-      ExecStart=/usr/bin/python3 /usr/local/bin/orochi-suricata-manager
-      Restart=on-failure
-      RestartSec=5s
-
-      [Install]
-      WantedBy=multi-user.target
-  tags: suricata
-
-- name: Enable and start Suricata Manager
-  ansible.builtin.systemd:
-    name: orochi-suricata-manager
-    enabled: true
-    state: restarted
-    daemon_reload: true
-  tags: suricata
-
-- name: Display Suricata Manager info
-  ansible.builtin.debug:
-    msg:
-      - "Suricata Manager: http://{{ _suri_mgr_ip.stdout | trim }}:{{ suricata_manager_port | default('7000') }}/"
-      - "Toggle rule sources and pull updates from the portal (Suricata card)."
   tags: suricata

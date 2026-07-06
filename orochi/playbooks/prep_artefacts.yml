@@ -196,6 +196,69 @@
         label: "{{ item.local }}"
       changed_when: true
 
+    # ── RITA version selection ─────────────────────────────────────────────────
+
+    - name: Check latest RITA release
+      ansible.builtin.uri:
+        url: https://api.github.com/repos/activecm/rita/releases/latest
+        return_content: true
+        timeout: 10
+      register: _rita_latest_raw
+      failed_when: false
+      changed_when: false
+
+    - name: Set latest RITA version fact
+      ansible.builtin.set_fact:
+        _rita_latest: "{{ _rita_latest_raw.json.tag_name }}"
+      when:
+        - _rita_latest_raw.status is defined
+        - _rita_latest_raw.status == 200
+        - _rita_latest_raw.json.tag_name is defined
+
+    - name: Warn if RITA version detection failed
+      ansible.builtin.debug:
+        msg: "WARNING: Could not detect latest RITA version from GitHub — you will be prompted."
+      when: _rita_latest is not defined
+
+    - name: Prompt — use detected latest RITA version?
+      ansible.builtin.pause:
+        prompt: "Found latest RITA {{ _rita_latest }} (currently pinned: {{ rita_version }}). Use this? [Y/n]"
+        echo: yes
+      register: _use_latest_rita
+      when: _rita_latest is defined
+
+    - name: Prompt — enter RITA version manually
+      ansible.builtin.pause:
+        prompt: "Enter RITA version to download [{{ rita_version }}]"
+        echo: yes
+      register: _manual_rita_input
+      when: >-
+        (_rita_latest is not defined) or
+        ((_use_latest_rita | default({})).user_input | default('') | lower in ['n', 'no'])
+
+    - name: Set final RITA version
+      ansible.builtin.set_fact:
+        rita_version: >-
+          {%- set _decline = (_use_latest_rita | default({})).user_input | default('') | lower in ['n', 'no'] -%}
+          {%- set _manual  = (_manual_rita_input | default({})).user_input | default('') | trim -%}
+          {%- if _rita_latest is defined and not _decline -%}
+            {{ _rita_latest }}
+          {%- elif _manual | length > 0 -%}
+            {{ _manual }}
+          {%- else -%}
+            {{ rita_version }}
+          {%- endif -%}
+
+    - name: Persist rita_version to group_vars/all.yml
+      ansible.builtin.lineinfile:
+        path: "{{ playbook_dir }}/../group_vars/all.yml"
+        regexp: '^rita_version:'
+        line: "rita_version: \"{{ rita_version }}\""
+
+    - name: Confirm RITA version in use
+      ansible.builtin.debug:
+        msg: "Using RITA version: {{ rita_version }}"
+
     # ── Binary artifacts ───────────────────────────────────────────────────────
 
     - name: Download binary artifacts
@@ -324,7 +387,7 @@
         apt-get update -qq
         apt-get install -y --reinstall --download-only \
           -o Dir::Cache::Archives={{ artifacts_dir }}/suricata-debs \
-          suricata jq \
+          suricata suricata-update jq \
           libevent-2.1-7t64 libevent-core-2.1-7t64 libevent-pthreads-2.1-7t64
       changed_when: true
 
@@ -406,20 +469,17 @@
 
     # ── Suricata rules ─────────────────────────────────────────────────────────
 
-    # Two artefacts are produced:
-    #   suricata-rules.tar.gz    — merged ruleset of ALL free sources (initial
-    #                              node deploy, unchanged consumer)
-    #   suricata-sources.tar.gz  — per-source raw rule files + manifest.json,
-    #                              consumed by the node's Suricata Manager API
-    #                              so analysts can toggle sources offline.
-    # "Free" = every source in the suricata-update index that needs no auth
-    # parameters (ET Open, abuse.ch SSLbl/URLhaus, OISF traffic-id, etc.).
-    - name: Download Suricata rules (all free sources, merged + per-source)
-      # The per-source fetch logic lives in files/fetch_suricata_sources.py
-      # (shared with check_updates.yml) and is mounted into the container.
-      # The merged suricata.rules is the raw concatenation of the per-source
-      # files — identical bytes to "all sources ticked" in the node UI, so
-      # toggling is always a pure subset of what shipped.
+    # Mirrors every free Suricata rule source (no auth parameters — ET Open,
+    # abuse.ch SSLbl/URLhaus, OISF traffic-id, etc.) as plain per-source
+    # .rules files plus a manifest.json under {{ artifacts_dir }}/suricata-sources/,
+    # which nginx serves directly at {{ artifact_base_url }}/suricata-sources/.
+    # The node's suricata role points suricata-update straight at those URLs
+    # (roles/suricata/tasks/main.yml) instead of the real internet-facing
+    # source index, so re-running this task with internet access and then
+    # redeploying the suricata role is how rules get refreshed.
+    - name: Download free Suricata rule sources (per-source + manifest)
+      # The fetch logic lives in files/fetch_suricata_sources.py (shared with
+      # check_updates.yml) and is mounted into the container.
       ansible.builtin.shell: |
         docker run --rm \
           -v {{ artifacts_dir }}:/output \
@@ -432,10 +492,6 @@
               suricata suricata-update python3-yaml curl
             suricata-update update-sources
             python3 /fetch.py /output/suricata-sources
-            mkdir -p /var/lib/suricata/rules
-            cat /output/suricata-sources/*.rules > /var/lib/suricata/rules/suricata.rules
-            tar -czf /output/suricata-rules.tar.gz -C /var/lib/suricata rules/
-            tar -czf /output/suricata-sources.tar.gz -C /output suricata-sources/
           '
       changed_when: true
       register: rules_result
@@ -531,8 +587,7 @@
         - "docker-debs.tar.gz"
         - "zeek-debs.tar.gz"
         - "suricata-debs.tar.gz"
-        - "suricata-rules.tar.gz"
-        - "suricata-sources.tar.gz"
+        - "suricata-sources/manifest.json"
         - "zeek-release.key"
       loop_control:
         label: "{{ item }}"

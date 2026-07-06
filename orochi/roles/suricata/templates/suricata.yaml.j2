@@ -140,8 +140,7 @@ stats:
   enabled: yes
   interval: 8
 
-# Unix command socket — required for `suricatasc -c reload-rules`, the live
-# rule reload the OROCHI Suricata Manager uses to apply source toggles
-# without a full 8-15 min engine restart.
+# Unix command socket — enables `suricatasc` for ad-hoc live rule reloads
+# and stats queries without a full engine restart.
 unix-command:
   enabled: yes

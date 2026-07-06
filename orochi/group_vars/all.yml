@@ -87,10 +87,6 @@ ports:
   timesketch: 5000
   portal_http: 80
   portal_https: 443
-  suricata_manager: 7000
-
-# Suricata Manager binds to the analyst NIC only (resolved at deploy time).
-suricata_manager_port: 7000
 
 
 # ==============================================
