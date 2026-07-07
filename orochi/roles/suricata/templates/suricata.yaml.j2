@@ -103,6 +103,14 @@ app-layer:
       enabled: yes
     smb:
       enabled: yes
+    dnp3:
+      enabled: yes
+      detection-ports:
+        dp: 20000
+    modbus:
+      enabled: yes
+      detection-ports:
+        dp: 502
 
 threading:
   set-cpu-affinity: no

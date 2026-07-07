@@ -84,6 +84,20 @@
 # Each source is registered here with that explicit URL, so suricata-update
 # fetches straight from the management box and never needs the real
 # internet-facing source index.
+#
+# Registration is persisted to /var/lib/suricata/sources/*.yaml, so once
+# deployed an analyst can update rules later just by running `suricata-update`
+# directly on the node (no Ansible needed) — an engineer refreshes the
+# sources on the management box (prep_artefacts.yml or check_updates.yml
+# -e refresh_suricata=true), then the analyst re-runs suricata-update here.
+
+- name: Configure suricata-update to live-reload after a manual run
+  ansible.builtin.copy:
+    dest: /etc/suricata/update.yaml
+    content: |
+      reload-command: suricatasc -c reload-rules
+    mode: '0644'
+  tags: suricata
 
 - name: Fetch Suricata source manifest from artifact server
   ansible.builtin.uri:
@@ -97,15 +111,24 @@
     _suri_sources: "{{ (_suri_manifest_raw.content | from_json).sources }}"
   tags: suricata
 
-# suricata-update's own enable-source lookup is broken for any name
-# containing a "/" (e.g. "ipfire/dbl"): it falls back to re-deriving names
-# from filenames on disk via a hyphen replace that it never un-does, so
-# "ipfire/dbl" (file ipfire-dbl.yaml) can never match itself and
-# enable-source errors "Unknown source". Sidestep it entirely by using the
-# slash-free "safe" name (manifest file name minus ".rules") as the actual
-# suricata-update source identifier — safe_filename() is a no-op on a
-# string with no slashes, so lookups always succeed regardless of what's
-# in the bundled/online index.
+# Two suricata-update quirks worked around here:
+#
+# 1. Its enable-source lookup is broken for any name containing a "/" (e.g.
+#    "ipfire/dbl"): it falls back to re-deriving names from filenames on
+#    disk via a hyphen replace that it never un-does, so "ipfire/dbl" (file
+#    ipfire-dbl.yaml) can never match itself. Sidestepped by using the
+#    slash-free "safe" name (manifest file name minus ".rules") as the
+#    actual suricata-update source identifier — safe_filename() is a no-op
+#    on a string with no slashes, so lookups always succeed.
+#
+# 2. add-source already registers a source in the *enabled* state with our
+#    explicit URL intact — there is no separate enable step needed. Calling
+#    enable-source afterwards actively breaks it: enable-source rewrites
+#    the on-disk config from scratch without carrying the "url" field over,
+#    so the source silently loses its URL and suricata-update falls back to
+#    looking it up in the real/bundled index (where it doesn't exist) and
+#    skips it entirely — "Source no longer exists in index and will not be
+#    fetched". So: remove + add only, no enable-source call.
 
 - name: Remove any previously registered Suricata sources (clean re-add)
   ansible.builtin.command:
@@ -127,18 +150,7 @@
       - add-source
       - "{{ item.value.file | regex_replace('\\.rules$', '') }}"
       - "{{ artifact_base_url }}/suricata-sources/{{ item.value.file }}"
-  loop: "{{ _suri_sources | dict2items }}"
-  loop_control:
-    label: "{{ item.key }}"
-  changed_when: true
-  tags: suricata
-
-- name: Enable free Suricata sources
-  ansible.builtin.command:
-    argv:
-      - suricata-update
-      - enable-source
-      - "{{ item.value.file | regex_replace('\\.rules$', '') }}"
+      - --no-checksum
   loop: "{{ _suri_sources | dict2items }}"
   loop_control:
     label: "{{ item.key }}"
@@ -146,7 +158,10 @@
   tags: suricata
 
 - name: Build merged ruleset with suricata-update
-  ansible.builtin.command: suricata-update
+  # --force bypasses suricata-update's 15-minute / checksum-match fetch
+  # skip, so a re-run always pulls whatever is currently on the management
+  # box instead of silently reusing a locally cached copy.
+  ansible.builtin.command: suricata-update --force
   changed_when: true
   tags: suricata
 
@@ -193,4 +208,7 @@
       - "Check status: systemctl status suricata"
       - "Logs: /var/log/suricata/eve.json"
       - "Rules: /var/lib/suricata/rules"
+      - "To pull updated rules later: refresh sources on the management box"
+      - "(prep_artefacts.yml or check_updates.yml -e refresh_suricata=true),"
+      - "then on this node just run: suricata-update"
   tags: suricata
