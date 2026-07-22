@@ -1,7 +1,7 @@
 ---
 - name: Gather facts if not already gathered
   ansible.builtin.setup:
-  when: ansible_distribution is not defined
+  when: ansible_facts['distribution'] is not defined
   tags: zeek
 
 - name: Create keyrings directory
@@ -149,14 +149,14 @@
 - name: Install Zeek configuration
   ansible.builtin.shell: /opt/zeek/bin/zeekctl install
   environment:
-    PATH: "/opt/zeek/bin:{{ ansible_env.PATH }}"
+    PATH: "/opt/zeek/bin:{{ ansible_facts['env'].PATH }}"
   changed_when: false
   tags: zeek
 
 - name: Deploy Zeek
   ansible.builtin.shell: /opt/zeek/bin/zeekctl deploy
   environment:
-    PATH: "/opt/zeek/bin:{{ ansible_env.PATH }}"
+    PATH: "/opt/zeek/bin:{{ ansible_facts['env'].PATH }}"
   changed_when: false
   tags: zeek
 
@@ -238,7 +238,7 @@
 - name: Check Zeek status
   ansible.builtin.shell: /opt/zeek/bin/zeekctl status
   environment:
-    PATH: "/opt/zeek/bin:{{ ansible_env.PATH }}"
+    PATH: "/opt/zeek/bin:{{ ansible_facts['env'].PATH }}"
   register: zeek_status
   changed_when: false
   failed_when: false

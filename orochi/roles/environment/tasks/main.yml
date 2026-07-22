@@ -553,7 +553,7 @@
       # ==============================================
       # Orochi Security Stack Configuration
       # Operation: {{ op_id | default('unknown') }}
-      # Generated: {{ ansible_date_time.iso8601 }}
+      # Generated: {{ ansible_facts['date_time'].iso8601 }}
       # Target: {{ inventory_hostname }}
       # ==============================================
       STACK_VERSION={{ stack_version }}

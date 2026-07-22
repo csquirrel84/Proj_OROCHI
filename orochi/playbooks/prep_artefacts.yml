@@ -179,6 +179,8 @@
     # ── Docker images ──────────────────────────────────────────────────────────
 
     - name: Pull Docker image
+      # Retried: public registries reset connections mid-transfer (common over
+      # IPv6). Without this a single reset fails the whole prep run.
       community.docker.docker_image:
         name: "{{ item.src }}"
         source: pull
@@ -186,11 +188,23 @@
       loop: "{{ docker_images }}"
       loop_control:
         label: "{{ item.src }}"
+      register: _img_pull
+      until: _img_pull is succeeded
+      retries: 4
+      delay: 10
 
     - name: Tag and push to local registry
+      # push retried for the same transient-reset reason.
       ansible.builtin.shell: |
-        docker tag "{{ item.src }}" "localhost:5000/{{ item.local }}"
-        docker push "localhost:5000/{{ item.local }}"
+        set -e
+        n=0
+        until docker tag "{{ item.src }}" "localhost:5000/{{ item.local }}" \
+           && docker push "localhost:5000/{{ item.local }}"; do
+          n=$((n + 1))
+          [ "$n" -ge 4 ] && { echo "push failed after 4 attempts: {{ item.local }}" >&2; exit 1; }
+          echo "retry ${n}/4 in $((n * 5))s: {{ item.local }}" >&2
+          sleep $((n * 5))
+        done
       loop: "{{ docker_images }}"
       loop_control:
         label: "{{ item.local }}"
@@ -317,7 +331,7 @@
 
     - name: Add Docker apt repository
       ansible.builtin.apt_repository:
-        repo: "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+        repo: "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu {{ ansible_facts['distribution_release'] }} stable"
         state: present
         filename: docker
 
@@ -440,8 +454,13 @@
       # cd to the compose dir so docker compose picks up .env automatically,
       # resolving CLICKHOUSE_VERSION. Use `docker compose config --images`
       # which returns one fully-resolved image ref per line.
+      #
+      # Each pull+push is retried: public registries (lscr.io/linuxserver,
+      # ghcr, docker.io) intermittently reset the connection mid-transfer,
+      # especially over IPv6. Without retries a single reset kills the whole
+      # prep run. 'set -e' is intentionally NOT used at top level — the retry
+      # helper decides success/failure per image.
       ansible.builtin.shell: |
-        set -e
         COMPOSE_DIR="/tmp/rita-{{ rita_version }}-installer/files/opt"
         cd "$COMPOSE_DIR"
 
@@ -450,15 +469,33 @@
         echo "$IMAGES"
         echo ""
 
+        retry() {
+          local n=0 max=4
+          until "$@"; do
+            n=$((n + 1))
+            if [ "$n" -ge "$max" ]; then
+              echo "  FAILED after ${max} attempts: $*" >&2
+              return 1
+            fi
+            echo "  retry ${n}/${max} in $((n * 5))s: $*" >&2
+            sleep $((n * 5))
+          done
+        }
+
         echo "=== Pulling and caching ==="
+        rc=0
         echo "$IMAGES" | sort -u | while read img; do
           [ -z "$img" ] && continue
           echo "Pulling: $img"
-          docker pull "$img"
           LOCAL=$(echo "$img" | awk -F/ '{print $NF}')
-          docker tag "$img" "localhost:5000/rita/${LOCAL}"
-          docker push "localhost:5000/rita/${LOCAL}"
-          echo "Cached: localhost:5000/rita/${LOCAL}"
+          if retry docker pull "$img" \
+             && docker tag "$img" "localhost:5000/rita/${LOCAL}" \
+             && retry docker push "localhost:5000/rita/${LOCAL}"; then
+            echo "Cached: localhost:5000/rita/${LOCAL}"
+          else
+            echo "ERROR: could not cache $img" >&2
+            exit 1
+          fi
         done
       changed_when: true
       register: rita_image_cache

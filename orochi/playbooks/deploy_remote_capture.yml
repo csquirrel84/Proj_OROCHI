@@ -219,7 +219,7 @@
       ansible.builtin.pause:
         prompt: |
           Available interfaces:
-          {{ ansible_interfaces | reject('match', '^(lo|docker|br-|veth)') | list | join(', ') }}
+          {{ ansible_facts['interfaces'] | reject('match', '^(lo|docker|br-|veth)') | list | join(', ') }}
 
           Enter capture interface
       register: _iface_input
@@ -285,7 +285,7 @@
           ARKIME__pcapDir:                "/opt/arkime/raw"
           ARKIME__viewPort:               "{{ remote_capture_port | string }}"
           ARKIME__viewHost:               "{{ _view_host }}"
-          ARKIME__node:                   "{{ ansible_hostname }}"
+          ARKIME__node:                   "{{ ansible_facts['hostname'] }}"
           ARKIME__maxFileSizeG:           "5"
           ARKIME__freeSpaceG:             "5%"
           ARKIME__rotateIndex:            "daily"
@@ -313,11 +313,11 @@
     - name: Display remote capture status
       ansible.builtin.debug:
         msg:
-          - "Remote Arkime capture deployed on {{ ansible_hostname }}"
+          - "Remote Arkime capture deployed on {{ ansible_facts['hostname'] }}"
           - ""
           - "Interface: {{ remote_capture_interface }}"
           - "PCAP dir:  {{ remote_pcap_dir }}"
           - "ES target: https://{{ hostvars['localhost']['orochi_node_ip'] }}:{{ orochi_es_port }}"
           - ""
-          - "Sessions from this node appear in Arkime tagged as: {{ ansible_hostname }}"
+          - "Sessions from this node appear in Arkime tagged as: {{ ansible_facts['hostname'] }}"
           - "docker logs -f arkimecapture-remote"
