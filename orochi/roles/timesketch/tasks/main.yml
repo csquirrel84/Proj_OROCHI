@@ -141,6 +141,14 @@
 
       REDIS_URL = 'redis://redis-timesketch:6379'
 
+      # Celery reads these two keys, NOT REDIS_URL. Without them the worker
+      # container dies at import with KeyError: 'CELERY_BROKER_URL' and
+      # restart-loops forever (observed: restartCount=116) while the web UI
+      # runs fine — so deployments look healthy but timeline uploads never
+      # get indexed.
+      CELERY_BROKER_URL = 'redis://redis-timesketch:6379'
+      CELERY_RESULT_BACKEND = 'redis://redis-timesketch:6379'
+
       CSRF_ENABLED = True
       WTF_CSRF_ENABLED = True
 
@@ -245,10 +253,21 @@
   tags: timesketch
 
 - name: Initialise Timesketch database
+  # Retried: the timesketch container restarts once shortly after first start
+  # (observed: restarts=1, oom=false, then stable) and a docker exec landing
+  # inside that window is SIGKILLed (rc=137, instant, no output). That is a
+  # settle-window race, not a deployment failure. The timesketch-worker
+  # crash-looping until this init creates the schema is likewise expected
+  # ordering, not an error.
   ansible.builtin.shell: |
     docker exec timesketch tsctl db init
   register: ts_db_init
   changed_when: true
+  until: >-
+    ts_db_init.rc == 0 or
+    'already' in (ts_db_init.stdout | default('') + ts_db_init.stderr | default(''))
+  retries: 6
+  delay: 10
   failed_when:
     - ts_db_init.rc != 0
     - "'already' not in (ts_db_init.stdout | default('') + ts_db_init.stderr | default(''))"
@@ -279,6 +298,12 @@
       --password "{{ timesketch_password }}"
   register: ts_user_create
   changed_when: "'already exists' not in (ts_user_create.stdout | default('') + ts_user_create.stderr | default(''))"
+  # Retried for the same container settle-window race as db init above.
+  until: >-
+    ts_user_create.rc == 0 or
+    'already exists' in (ts_user_create.stdout | default('') + ts_user_create.stderr | default(''))
+  retries: 6
+  delay: 10
   failed_when:
     - ts_user_create.rc != 0
     - "'already exists' not in (ts_user_create.stdout | default('') + ts_user_create.stderr | default(''))"
@@ -290,6 +315,12 @@
     docker exec timesketch tsctl make-admin "{{ orochi_admin_user }}"
   register: ts_make_admin
   changed_when: true
+  # Retried for the same container settle-window race as db init above.
+  until: >-
+    ts_make_admin.rc == 0 or
+    'already' in (ts_make_admin.stdout | default('') + ts_make_admin.stderr | default(''))
+  retries: 6
+  delay: 10
   failed_when:
     - ts_make_admin.rc != 0
     - "'already' not in (ts_make_admin.stdout | default('') + ts_make_admin.stderr | default(''))"

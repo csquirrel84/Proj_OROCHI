@@ -248,6 +248,11 @@
 
 - name: Start Fleet Server container
   community.docker.docker_container:
+    # timeout raised from the 60s default: this container bind-mounts the
+    # whole root fs (/:/hostfs), /proc, /sys/fs/cgroup and the docker
+    # containers dir. Setting those up while ES/Kibana/Cassandra are doing
+    # heavy first-start I/O can exceed 60s and trip a docker API read timeout.
+    timeout: 300
     name: fleet-server
     image: "{{ images.elastic_agent }}"
     state: started

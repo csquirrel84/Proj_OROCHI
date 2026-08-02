@@ -116,6 +116,10 @@
     url: "{{ artifact_base_url }}/zeek-debs.tar.gz"
     dest: /tmp/zeek-debs.tar.gz
     mode: '0644'
+    # force: without it get_url skips the download when the dest exists, so a
+    # node re-run within the same boot keeps installing a STALE bundle even
+    # after the management box regenerated it. LAN download, negligible cost.
+    force: true
   tags: zeek
 
 - name: Extract Zeek debs
@@ -126,14 +130,58 @@
   tags: zeek
 
 - name: Install Zeek from pre-cached packages
+  # WHY apt-get, not `dpkg -i *.deb`: the bundle is a full dependency closure;
+  # a flat dpkg glob unpacks in filename order and fails when a package lands
+  # before its pre-dependency is configured. apt orders pre-dependencies
+  # correctly. Safe to re-run: apt heals a half-installed state.
+  #
+  # WHY --no-install-recommends (required, not cosmetic): zeekctl Recommends
+  # mail-transport-agent, and apt satisfies that by pulling courier-mta plus
+  # courier-authlib, gnutls-bin, libunbound8. The bundle was built with
+  # --no-install-recommends so none of those are present; without this flag
+  # apt tries to fetch them from the internet and fails on an offline node.
+  # dpkg -i never hit this because dpkg ignores Recommends entirely.
+  #
+  # WHY NO --no-download: apt has a bug where --no-download combined with
+  # local .deb file arguments registers each deb under its basename, then the
+  # install stage rejects it with "Internal Error, Pathname to install is not
+  # absolute" (reproduced on hello_2.10 with a stock apt — the flag, not the
+  # path form, is the trigger). The flag is also unnecessary for offline
+  # safety: every dependency is local, so apt has nothing to fetch; if a
+  # future bundle were incomplete, apt would fail loudly on the unreachable
+  # repo either way. The ./*.deb form (not bare filenames) is what tells apt
+  # these are files, not package names.
+  #
+  # DEBIAN_FRONTEND exported for the WHOLE block including dpkg --configure
+  # -a: without it a half-configured package throwing a conffile/debconf
+  # question blocks forever on stdin that never comes.
+  #
+  # NOTE: no comments inside the shell block below — Ansible runs shell
+  # content through its argument splitter, and prose (apostrophes, parens)
+  # trips "unbalanced jinja2 block or quotes". Commentary lives up here.
+  # Success is judged on STATE, not log text: the final dpkg-query verifies
+  # zeek-core is actually installed, and its exit code is the task result. A
+  # failed_when that greps for "Setting up zeek-core" breaks idempotency —
+  # on a re-run where Zeek is already installed apt legitimately prints
+  # "0 upgraded, 0 newly installed" and sets up nothing, which is success,
+  # not failure.
   ansible.builtin.shell: |
+    set -e
+    export DEBIAN_FRONTEND=noninteractive
     trap 'rm -f /usr/sbin/policy-rc.d' EXIT
     echo 'exit 101' > /usr/sbin/policy-rc.d
     chmod +x /usr/sbin/policy-rc.d
-    DEBIAN_FRONTEND=noninteractive dpkg -i --force-confold /tmp/zeek-debs/*.deb || true
+    dpkg --configure -a --force-confold || true
+    cd /tmp/zeek-debs
+    apt-get install -y \
+      --no-install-recommends --allow-downgrades \
+      -o Dpkg::Options::=--force-confold \
+      -o Dpkg::Options::=--force-confdef \
+      -o DPkg::Lock::Timeout=300 \
+      ./*.deb
+    dpkg-query -W -f '${db:Status-Status}' zeek-core | grep -qx installed
   register: zeek_install
   changed_when: "'Setting up' in zeek_install.stdout"
-  failed_when: "'Setting up zeek-core' not in zeek_install.stdout"
   tags: zeek
 
 - name: Add Zeek to system PATH

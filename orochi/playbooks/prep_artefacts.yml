@@ -284,6 +284,20 @@
       loop_control:
         label: "{{ item.dest }}"
 
+    - name: Write RITA version file
+      # AUTHORITATIVE version record for the node. The rita role reads this
+      # file from the artifact server instead of trusting group_vars, because
+      # group_vars/all.yml gets overwritten by every repo push from the dev
+      # machine — prep persisting a newly selected version there is undone by
+      # the next push, leaving the node requesting a tarball that does not
+      # exist (observed: prep cached v5.1.2, push reverted group_vars to
+      # v5.1.1, node 404d). A version file living NEXT TO the artifact cannot
+      # drift from it. Same pattern as zeek/suricata/velociraptor-version.txt.
+      ansible.builtin.copy:
+        content: "{{ rita_version }}\n"
+        dest: "{{ artifacts_dir }}/rita-version.txt"
+        mode: '0644'
+
     # ── Velociraptor — resolve latest release from GitHub API ─────────────────
 
     - name: Get latest Velociraptor release from GitHub
@@ -323,25 +337,47 @@
 
     # ── Docker .deb packages ───────────────────────────────────────────────────
 
-    - name: Add Docker GPG key
-      ansible.builtin.get_url:
-        url: https://download.docker.com/linux/ubuntu/gpg
-        dest: /etc/apt/keyrings/docker.asc
-        mode: '0644'
-
-    - name: Add Docker apt repository
-      ansible.builtin.apt_repository:
-        repo: "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu {{ ansible_facts['distribution_release'] }} stable"
-        state: present
-        filename: docker
-
-    - name: Download Docker .deb packages
+    - name: Download Docker .deb packages (full closure, clean container)
+      # CRITICAL: download the COMPLETE dependency closure inside a pristine
+      # ubuntu:25.10 container, NOT on the management box. `apt-get install
+      # --download-only` on the host only fetches dependencies the host does
+      # NOT already have — and the mgmt box runs Docker, so it already has most
+      # of them. That silently omits them from the bundle, leaving a minimal
+      # node unable to install Docker offline. A clean container matching the
+      # node's release has nothing pre-installed, so apt must download every
+      # dependency. Over-inclusion is safe: roles/common installs with
+      # `apt-get install <debs>`, which skips debs the node already has and
+      # orders pre-dependencies correctly. The Docker repo + key are set up
+      # INSIDE the container so the mgmt host apt config stays untouched.
       ansible.builtin.shell: |
-        apt-get update -qq
-        apt-get install -y --reinstall --download-only \
-          -o Dir::Cache::Archives={{ artifacts_dir }}/docker-debs \
-          docker-ce docker-ce-cli containerd.io \
-          docker-buildx-plugin docker-compose-plugin
+        set -e
+        rm -rf {{ artifacts_dir }}/docker-debs
+        mkdir -p {{ artifacts_dir }}/docker-debs
+        docker run --rm \
+          -v {{ artifacts_dir }}/docker-debs:/debs \
+          ubuntu:25.10 \
+          bash -c '
+            set -e
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update -qq
+            apt-get install -y --no-install-recommends ca-certificates curl gnupg
+            install -m 0755 -d /etc/apt/keyrings
+            curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+              -o /etc/apt/keyrings/docker.asc
+            chmod a+r /etc/apt/keyrings/docker.asc
+            . /etc/os-release
+            echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${VERSION_CODENAME} stable" \
+              > /etc/apt/sources.list.d/docker.list
+            apt-get update -qq
+            apt-get install -y --download-only \
+              -o Dir::Cache::Archives=/debs \
+              docker-ce docker-ce-cli containerd.io \
+              docker-buildx-plugin docker-compose-plugin
+            chmod -R a+rX /debs
+          '
+        # apt leaves a partial/ dir and lock files; the node installs *.deb
+        # (non-recursive) so those are ignored, but tidy up anyway.
+        rm -rf {{ artifacts_dir }}/docker-debs/partial {{ artifacts_dir }}/docker-debs/lock
       changed_when: true
 
     - name: Create Docker debs tarball
@@ -352,25 +388,43 @@
 
     # ── Zeek .deb packages ─────────────────────────────────────────────────────
 
-    - name: Add Zeek GPG key
+    - name: Download Zeek .deb packages (full closure, clean container)
+      # Same rationale as Docker/Suricata: download the full dependency closure
+      # in a pristine ubuntu:25.10 container so no host-installed dependency is
+      # silently omitted from the bundle. --no-install-recommends is what keeps
+      # courier/gnutls-bin/libunbound8 (NOT Zeek dependencies — they only ever
+      # arrived as recommends) out of the bundle; those recommends riding along
+      # in a host download were the root cause that contaminated earlier nodes
+      # and blocked apt. The opensuse Zeek repo only publishes for
+      # xUbuntu_24.04, but those packages install cleanly on 25.10 (what the
+      # node runs), so a 25.10 container resolves the identical closure the node
+      # needs. The repo + key are set up INSIDE the container; the mounted
+      # zeek-release.key is the same one served to the node (single source).
       ansible.builtin.shell: |
-        gpg --dearmor < {{ artifacts_dir }}/zeek-release.key \
-          > /etc/apt/keyrings/zeek-archive-keyring.gpg
-      args:
-        creates: /etc/apt/keyrings/zeek-archive-keyring.gpg
-
-    - name: Add Zeek apt repository
-      ansible.builtin.apt_repository:
-        repo: "deb [signed-by=/etc/apt/keyrings/zeek-archive-keyring.gpg] http://download.opensuse.org/repositories/security:/zeek/xUbuntu_24.04/ /"
-        state: present
-        filename: zeek
-
-    - name: Download Zeek .deb packages
-      ansible.builtin.shell: |
-        apt-get update -qq
-        apt-get install -y --reinstall --download-only \
-          -o Dir::Cache::Archives={{ artifacts_dir }}/zeek-debs \
-          zeek-core zeekctl zeek-client zeek-btest zeek-btest-data
+        set -e
+        rm -rf {{ artifacts_dir }}/zeek-debs
+        mkdir -p {{ artifacts_dir }}/zeek-debs
+        docker run --rm \
+          -v {{ artifacts_dir }}/zeek-debs:/debs \
+          -v {{ artifacts_dir }}/zeek-release.key:/zeek-release.key:ro \
+          ubuntu:25.10 \
+          bash -c '
+            set -e
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update -qq
+            apt-get install -y --no-install-recommends gnupg ca-certificates
+            install -m 0755 -d /etc/apt/keyrings
+            gpg --dearmor < /zeek-release.key \
+              > /etc/apt/keyrings/zeek-archive-keyring.gpg
+            echo "deb [signed-by=/etc/apt/keyrings/zeek-archive-keyring.gpg] http://download.opensuse.org/repositories/security:/zeek/xUbuntu_24.04/ /" \
+              > /etc/apt/sources.list.d/zeek.list
+            apt-get update -qq
+            apt-get install -y --download-only --no-install-recommends \
+              -o Dir::Cache::Archives=/debs \
+              zeek-core zeekctl zeek-client zeek-btest zeek-btest-data
+            chmod -R a+rX /debs
+          '
+        rm -rf {{ artifacts_dir }}/zeek-debs/partial {{ artifacts_dir }}/zeek-debs/lock
       changed_when: true
 
     - name: Detect downloaded Zeek version
@@ -396,13 +450,36 @@
 
     # ── Suricata .deb packages — Ubuntu default repos ─────────────────────────
 
-    - name: Download Suricata .deb packages
+    - name: Download Suricata .deb packages (full closure, clean container)
+      # CRITICAL: download inside a clean ubuntu:25.10 container, NOT on the
+      # management box. `apt-get install --download-only` only fetches deps the
+      # host does NOT already have installed — so building the bundle on the
+      # mgmt box silently omits any dependency the mgmt box happens to have
+      # (libunwind8, libpciaccess0, a current libjq1, ...), producing a bundle
+      # that cannot satisfy Suricata offline on the node. A pristine container
+      # matching the node's release has nothing pre-installed, so apt is forced
+      # to download the COMPLETE dependency closure. Over-inclusion is safe (the
+      # node skips debs it already has); under-inclusion is what broke us.
       ansible.builtin.shell: |
-        apt-get update -qq
-        apt-get install -y --reinstall --download-only \
-          -o Dir::Cache::Archives={{ artifacts_dir }}/suricata-debs \
-          suricata suricata-update jq \
-          libevent-2.1-7t64 libevent-core-2.1-7t64 libevent-pthreads-2.1-7t64
+        set -e
+        rm -rf {{ artifacts_dir }}/suricata-debs
+        mkdir -p {{ artifacts_dir }}/suricata-debs
+        docker run --rm \
+          -v {{ artifacts_dir }}/suricata-debs:/debs \
+          ubuntu:25.10 \
+          bash -c '
+            set -e
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update -qq
+            apt-get install -y --download-only \
+              -o Dir::Cache::Archives=/debs \
+              suricata suricata-update jq \
+              libevent-2.1-7t64 libevent-core-2.1-7t64 libevent-pthreads-2.1-7t64
+            chmod -R a+rX /debs
+          '
+        # apt leaves a partial/ dir and lock files; the node installs /*.deb
+        # (non-recursive glob) so those are ignored, but tidy up anyway.
+        rm -rf {{ artifacts_dir }}/suricata-debs/partial {{ artifacts_dir }}/suricata-debs/lock
       changed_when: true
 
     - name: Detect downloaded Suricata version
@@ -540,29 +617,34 @@
 
     # ── Warm apt-cacher-ng with standard packages ──────────────────────────────
 
-    - name: Configure management box apt to use local proxy for warming
-      ansible.builtin.copy:
-        dest: /etc/apt/apt.conf.d/99orochi-cacher
-        content: |
-          Acquire::http::Proxy "http://localhost:{{ mgmt_apt_proxy_port }}";
-        mode: '0644'
-
-    - name: Warm apt cache with standard Orochi packages
+    - name: Warm apt-cacher-ng with standard Orochi packages (full closure, clean container)
+      # Same host-state bug class as the deb bundles: warming from the mgmt
+      # box with --download-only fetches NOTHING for packages the mgmt box
+      # already has installed or cached, so they never pass through the proxy
+      # and are never cached. On the bench this is invisible (apt-cacher-ng
+      # fetches on demand while the mgmt box is online); in the field with the
+      # mgmt box offline, the node fails to install e.g. python3-docker. A
+      # clean ubuntu:25.10 container has nothing installed, so apt resolves
+      # the FULL closure and every deb transits the proxy into the cache.
+      # --network host so the container reaches apt-cacher-ng on localhost.
+      # NO failed_when:false — silent warming failure means a broken field
+      # deployment, so this must fail loudly.
       ansible.builtin.shell: |
-        apt-get update -qq
-        apt-get install -y --download-only \
-          iptables iptables-persistent netfilter-persistent \
-          wireguard \
-          python3-docker python3-requests python3-urllib3 \
-          software-properties-common apt-transport-https gnupg \
-          ca-certificates curl
+        set -e
+        docker run --rm --network host ubuntu:25.10 bash -c '
+          set -e
+          export DEBIAN_FRONTEND=noninteractive
+          echo "Acquire::http::Proxy \"http://localhost:{{ mgmt_apt_proxy_port }}\";" \
+            > /etc/apt/apt.conf.d/01orochi-proxy
+          apt-get update -qq
+          apt-get install -y --download-only \
+            iptables iptables-persistent netfilter-persistent \
+            wireguard \
+            python3-docker python3-requests python3-urllib3 \
+            software-properties-common apt-transport-https gnupg \
+            ca-certificates curl
+        '
       changed_when: true
-      failed_when: false
-
-    - name: Remove proxy warming config
-      ansible.builtin.file:
-        path: /etc/apt/apt.conf.d/99orochi-cacher
-        state: absent
 
     # ── Nginx artifact server ──────────────────────────────────────────────────
 
@@ -620,6 +702,7 @@
         - "velociraptor-version.txt"
         - "zeek-version.txt"
         - "suricata-version.txt"
+        - "rita-version.txt"
         - "rita-{{ rita_version }}.tar.gz"
         - "docker-debs.tar.gz"
         - "zeek-debs.tar.gz"

@@ -56,6 +56,10 @@
     url: "{{ artifact_base_url }}/suricata-debs.tar.gz"
     dest: /tmp/suricata-debs.tar.gz
     mode: '0644'
+    # force: without it get_url skips the download when the dest exists, so a
+    # node re-run within the same boot keeps installing a STALE bundle even
+    # after the management box regenerated it. LAN download, negligible cost.
+    force: true
   tags: suricata
 
 - name: Extract Suricata debs
@@ -65,15 +69,75 @@
     remote_src: true
   tags: suricata
 
+# apt refuses to install ANYTHING while the system has broken packages. Some
+# Ubuntu node images arrive with a half-installed courier mail stack + stale
+# gnutls/unbound (courier wants a newer libgnutls30t64 than the base ships),
+# which blocks the Suricata install with an unrelated dpkg failure. None of
+# these are OROCHI dependencies. Purge them so a contaminated-but-online node
+# can still deploy. No-op on a clean node. See OROCHI_CONTEXT.md "Tested
+# Baseline" — the real fix is a clean node, this is a safety net.
+- name: Clear non-OROCHI broken packages that block apt (courier/gnutls stragglers)
+  ansible.builtin.shell: |
+    export DEBIAN_FRONTEND=noninteractive
+    # only the broken (non 'ii') courier/gnutls/unbound packages, if any
+    broken=$(dpkg -l 2>/dev/null | awk '/^.[^i] /{print $2}' \
+      | grep -E '^(courier|gnutls-bin|libgnutls-dane0t64|libunbound8)' || true)
+    [ -z "$broken" ] && { echo "no blocking packages"; exit 0; }
+    echo "purging: $broken"
+    apt-get purge -y 'courier*' gnutls-bin libgnutls-dane0t64 libunbound8 2>/dev/null || true
+    dpkg --purge --force-all $broken 2>/dev/null || true
+    dpkg --configure -a --force-confold || true
+  register: _suri_prefix_clean
+  changed_when: "'purging:' in _suri_prefix_clean.stdout"
+  failed_when: false
+  tags: suricata
+
 - name: Install Suricata from pre-cached packages
+  # apt-get (not `dpkg -i *.deb`): the current Ubuntu Suricata pulls in the
+  # DPDK stack, where sse3-support / sse4.2-support PRE-DEPEND on isa-support
+  # being *configured* first. A flat `dpkg -i *.deb` unpacks the glob in
+  # filename order and hits sse* before isa-support is configured, which dpkg
+  # cannot resolve. apt orders pre-dependencies correctly. Offline is
+  # guaranteed by the bundle being a complete dependency closure (built in a
+  # clean container by prep_artefacts.yml) — apt has nothing left to fetch.
+  # This also heals a half-installed state left by a previously failed dpkg
+  # run, so it is safe to re-run.
+  # DEBIAN_FRONTEND exported for the WHOLE block including dpkg --configure
+  # -a: without it a half-configured package throwing a conffile/debconf
+  # question blocks forever on stdin that never comes.
+  #
+  # DPkg::Lock::Timeout: fail after 5 min if another apt process (the
+  # unattended-upgrades / apt-daily timer on a fresh node) holds the dpkg
+  # lock, instead of blocking indefinitely.
+  #
+  # WHY NO --no-download: apt has a bug where --no-download combined with
+  # local .deb file arguments registers each deb under its basename, then the
+  # install stage rejects it with "Internal Error, Pathname to install is not
+  # absolute" (reproduced on a stock apt — the flag is the trigger). The flag
+  # is also unnecessary for offline safety: every dependency is local, so apt
+  # has nothing to fetch; if a future bundle were incomplete, apt would fail
+  # loudly on the unreachable repo either way. The ./*.deb form (not bare
+  # filenames) is what tells apt these are files, not package names.
+  #
+  # NOTE: no comments inside the shell block below — Ansible runs shell
+  # content through its argument splitter, and prose (apostrophes, parens)
+  # trips "unbalanced jinja2 block or quotes". Commentary lives up here.
   ansible.builtin.shell: |
     set -e
+    export DEBIAN_FRONTEND=noninteractive
     trap 'rm -f /usr/sbin/policy-rc.d' EXIT
     echo 'exit 101' > /usr/sbin/policy-rc.d
     chmod +x /usr/sbin/policy-rc.d
-    DEBIAN_FRONTEND=noninteractive dpkg -i --force-confold /tmp/suricata-debs/*.deb
+    dpkg --configure -a --force-confold || true
+    cd /tmp/suricata-debs
+    apt-get install -y \
+      --allow-downgrades \
+      -o Dpkg::Options::=--force-confold \
+      -o Dpkg::Options::=--force-confdef \
+      -o DPkg::Lock::Timeout=300 \
+      ./*.deb
   register: suricata_install
-  changed_when: "'Setting up' in suricata_install.stdout"
+  changed_when: "'Setting up' in suricata_install.stdout or 'Unpacking' in suricata_install.stdout"
   tags: suricata
 
 # ── Rules — build via suricata-update, pointed at the management box ──────────

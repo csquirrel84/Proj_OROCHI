@@ -14,7 +14,9 @@
     url: "{{ artifact_base_url }}/velociraptor-linux-amd64"
     dest: /opt/orochi/velociraptor-build/velociraptor
     mode: '0755'
-    force: false
+    # force: without it a re-run keeps a STALE binary cached on the node even
+    # after prep downloaded a newer release. LAN download, negligible cost.
+    force: true
 
 - name: Create Velociraptor Dockerfile
   ansible.builtin.copy:

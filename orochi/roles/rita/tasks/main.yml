@@ -20,11 +20,49 @@
     mode: '0755'
   tags: rita
 
+# ── Resolve RITA version from the artifact server, NOT group_vars ─────────────
+# group_vars/all.yml is overwritten by every repo push from the dev machine,
+# so the version prep persisted there can be silently reverted, making the
+# node request a tarball that is not on the server (observed: prep cached
+# v5.1.2, a push reverted group_vars to v5.1.1, node 404d). rita-version.txt
+# is written by prep_artefacts.yml right next to the tarball it describes, so
+# it can never drift from the artifact actually being served. Fallback to the
+# group_vars value exists only for artifact stores built before this file
+# existed — with a visible warning, and any mismatch still fails loudly on
+# the tarball download rather than deploying the wrong version.
+
+- name: Fetch RITA version from artifact server
+  ansible.builtin.uri:
+    url: "{{ artifact_base_url }}/rita-version.txt"
+    return_content: true
+    status_code: [200, 404]
+  register: _rita_version_raw
+  tags: rita
+
+- name: Pin rita_version to the artefact on the server
+  ansible.builtin.set_fact:
+    rita_version: "{{ _rita_version_raw.content | trim }}"
+  when: _rita_version_raw.status == 200
+  tags: rita
+
+- name: Warn if rita-version.txt is missing from the artifact server
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: {{ artifact_base_url }}/rita-version.txt not found — falling
+      back to group_vars rita_version ({{ rita_version }}). Re-run
+      prep_artefacts.yml on the management box to publish the version file.
+  when: _rita_version_raw.status != 200
+  tags: rita
+
 - name: Download RITA installer tarball from artifact server
   ansible.builtin.get_url:
     url: "{{ artifact_base_url }}/rita-{{ rita_version }}.tar.gz"
     dest: /tmp/rita-installer.tar.gz
     mode: '0644'
+    # force: without it get_url skips the download when the dest exists, so a
+    # node re-run within the same boot keeps extracting a STALE installer even
+    # after the version on the management box changed. LAN download, cheap.
+    force: true
   tags: rita
 
 - name: Extract RITA installer
@@ -138,9 +176,21 @@
 # ── Pull images from local registry then launch ───────────────────────────────
 
 - name: Pull RITA images from local registry
+  # `docker compose pull` honors the pull_policy: never we patch into every
+  # service, so it skips ALL pulls and exits 0 (observed on the node:
+  # "Skipped" x3, rc=0) — a guaranteed no-op that only appeared to work on
+  # nodes already holding the images from earlier deployments. Pull per-image
+  # with plain docker pull instead, which ignores pull_policy and fails
+  # loudly naming the missing image, rather than deferring the explosion to
+  # `up`. pull_policy: never STAYS in the compose file — the running stack
+  # must never depend on the management box being reachable at runtime.
   ansible.builtin.shell: |
+    set -e
     cd /opt/rita
-    docker compose pull
+    for img in $(docker compose config --images | sort -u); do
+      echo "pulling: $img"
+      docker pull "$img"
+    done
   changed_when: true
   register: rita_pull
   tags: rita

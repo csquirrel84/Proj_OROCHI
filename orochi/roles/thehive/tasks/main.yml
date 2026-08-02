@@ -67,7 +67,13 @@
       HEAP_NEWSIZE: "{{ resources.cassandra.heap_new }}"
     memory: "{{ resources.cassandra.memory }}"
     healthcheck:
-      test: ["CMD-SHELL", "[ $$(nodetool statusgossip) = running ] || exit 1"]
+      # Single $ — NOT $$. The $$ idiom is docker-compose escaping; Ansible
+      # passes this string to Docker verbatim, so $$ becomes the shell PID
+      # and the test is a syntax error that fails every probe, leaving the
+      # container permanently "unhealthy" while Cassandra is actually fine.
+      test:
+        - CMD-SHELL
+        - '[ "$(nodetool statusgossip)" = running ] || exit 1'
       interval: 30s
       timeout: 10s
       retries: 5
