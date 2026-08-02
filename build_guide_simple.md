@@ -83,6 +83,23 @@ During install:
 
 ---
 
+### Step 1a — Give the orochi user passwordless sudo (REQUIRED)
+
+Ansible runs every task with sudo and is configured **not** to ask for a sudo
+password. Without this step, deployment hangs and fails with
+`Timeout waiting for privilege escalation prompt`. On the orochi node, once,
+after first boot:
+
+```bash
+echo 'orochi ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/orochi
+sudo chmod 440 /etc/sudoers.d/orochi
+```
+
+(Alternative, if you cannot change sudoers: run the deployer as
+`ansible-playbook fuse.yml --ask-become-pass` and type the password each run.)
+
+---
+
 ### Step 2 — Physical cabling
 
 1. Management box ethernet → orochi node analyst NIC
@@ -116,13 +133,28 @@ ansible-playbook fuse.yml
 
 Here is exactly what you will see and do:
 
-**a) Operation name**
+**a) Operation selection**
+
+If any operations already exist on this box, they are listed as a numbered menu:
 
 ```
-Operation name (e.g. BRASS):
+Available operations:
+  [1]  OP_BASTION
+  [2]  OP_BRASS
+
+  Enter a NUMBER to continue that operation,
+  or type a NEW name (e.g. BRASS) to start a new deployment.
+
+Operation (number from the list above, or a new name):
 ```
 
-Type a short name for this engagement, e.g. `BRASS`. This creates the config file `OP_BRASS.env` — everything you answer below is saved into it. If you run the deployer again later **with the same name**, it will show your saved answers and ask "You have a saved configuration for OP_BRASS. Use it? (y/n)" — type `y` and you skip all the questions. A different name starts a fresh configuration for a new op.
+- **Continuing an existing op:** type its number (e.g. `2`) and press Enter. Do not retype the name — the number cannot be mistyped into accidentally creating a new op.
+- **Starting a new op:** type a short name for the engagement, e.g. `BRASS`. This creates the config file `OP_BRASS.env` — everything you answer below is saved into it.
+- A number that is not on the menu is rejected and you are asked again — it will never silently create a new operation.
+
+(On a fresh management box with no operations yet, you are simply asked `Operation name (e.g. BRASS):`.)
+
+When you continue an existing op, it will show your saved answers and ask "You have a saved configuration for OP_BRASS. Use it? (y/n)" — type `y` and you skip all the questions.
 
 **b) Orochi node IP (first run of this op only)**
 
@@ -255,3 +287,110 @@ ansible-playbook fuse.yml
 Starting a **new engagement**? Just enter a new operation name — a fresh config is created and the old op's config stays untouched.
 
 All roles are idempotent — re-running a step that already completed is safe.
+
+---
+
+## Enrolling an Endpoint in Fleet
+
+The target network has no internet, so the copy-paste command Kibana shows you
+**will not work as-is** — its first line downloads the installer from
+`artifacts.elastic.co`, which the endpoint cannot reach. The orochi node hosts
+its own copy of the installers instead.
+
+1. In Kibana go to **Fleet → Agents → Add agent**, choose the policy, and copy
+   only the **enrollment token** (the long `--enrollment-token=...` value).
+2. Use the install commands printed at the end of the deployment run — they
+   point at the node and are already filled in with the right IP, port, and
+   version. Paste the enrollment token into `<TOKEN>`.
+
+If you need them again without re-running the deployer, they are simply:
+
+**Windows (PowerShell as Administrator)** — replace `<NODE-IP>`, `<VERSION>`, `<TOKEN>`:
+
+```powershell
+$ProgressPreference = 'SilentlyContinue'
+Invoke-WebRequest -Uri http://<NODE-IP>:8890/beats/elastic-agent/elastic-agent-<VERSION>-windows-x86_64.zip -OutFile elastic-agent.zip
+Expand-Archive .\elastic-agent.zip -DestinationPath .
+cd elastic-agent-<VERSION>-windows-x86_64
+.\elastic-agent.exe install --url=https://<NODE-IP>:8220 --enrollment-token=<TOKEN> --insecure
+```
+
+**Linux (as root):**
+
+```bash
+curl -O http://<NODE-IP>:8890/beats/elastic-agent/elastic-agent-<VERSION>-linux-x86_64.tar.gz
+tar xzvf elastic-agent-<VERSION>-linux-x86_64.tar.gz
+cd elastic-agent-<VERSION>-linux-x86_64
+./elastic-agent install --url=https://<NODE-IP>:8220 --enrollment-token=<TOKEN> --insecure
+```
+
+`--insecure` accepts the node's self-signed Fleet certificate. It affects
+certificate *verification* only — agent traffic is still encrypted.
+
+To check what the node is serving, browse to
+`http://<NODE-IP>:8890/beats/elastic-agent/` from any machine that can reach it.
+
+**What's available on the node:** every installable Elastic Agent package for
+the deployed version — Windows (`.zip` and `.msi`, 64-bit and ARM), Linux
+(`.tar.gz`, 64-bit and ARM), macOS (Intel and Apple Silicon), `.deb` and
+`.rpm`. Use whichever matches the endpoint; the commands above just show the
+two most common. Browse `http://<NODE-IP>:8890/beats/elastic-agent/` to see
+the exact filenames.
+
+> Windows `.msi` installs are often easier for managed estates:
+> `msiexec /i elastic-agent-<VERSION>-windows-x86_64.msi /qn` then run the
+> `elastic-agent install ...` enrolment command.
+
+---
+
+## Rebuilding the Management Box (node stays deployed)
+
+If the management box dies or is rebuilt while an orochi node is live, the node
+keeps running on its own — nothing on it depends on the management box at
+runtime. But the new management box has lost everything from Steps 0.1–0.4,
+plus the operation config. Recover in this exact order:
+
+**1. Redo the pre-deployment steps** on the new box: push the repo (Step 0.2),
+install Ansible and run `setup_mgmt_box.yml` (Step 0.3), run
+`prep_artefacts.yml` (Step 0.4).
+
+**2. Give `orochiman` passwordless sudo** (the rebuild wiped it — without this
+every playbook fails with `sudo: Authentication failed`):
+
+```bash
+echo 'orochiman ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/orochiman
+sudo chmod 440 /etc/sudoers.d/orochiman
+```
+
+**3. Re-copy the SSH key to the node** — the rebuild generated a NEW key, and
+the node still trusts only the old one (symptom: `Permission denied
+(publickey,password)`):
+
+```bash
+ssh-copy-id -i ~/.ssh/orochi_id_ed25519.pub orochi@<node-ip>
+```
+
+**4. If the new management box has a different IP**, repoint the node — the old
+IP is baked into four files on the node from the original deploy. As root on
+the node:
+
+```bash
+OLD=<old-mgmt-ip>; NEW=<new-mgmt-ip>
+sed -i "s/$OLD/$NEW/" /etc/apt/apt.conf.d/01orochi-proxy
+sed -i "s/$OLD/$NEW/" /etc/docker/daemon.json
+sed -i "s/$OLD/$NEW/" /var/lib/suricata/sources/*.yaml
+sed -i "s/$OLD/$NEW/" /opt/rita/docker-compose.yml
+```
+
+(The daemon.json change takes effect on the next `systemctl restart docker` —
+that briefly restarts every container, so do it at a quiet moment.)
+
+**5. Know what is permanently lost:** the old `OP_<NAME>.env` and the secrets
+inside it (Arkime password secret, API keys — the engagement password was
+never stored). The running node is unaffected, but the next `fuse.yml` run
+will treat the op as new and generate FRESH secrets that will not match the
+live services. Before redeploying any service for this op, recreate
+`OP_<NAME>.env` with the same op name and node/management IPs — and get help
+recovering the live secret values off the node if you need to redeploy
+Arkime or Fleet.
+

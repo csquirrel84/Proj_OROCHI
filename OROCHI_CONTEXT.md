@@ -127,7 +127,7 @@ Option 12 / `playbooks/deploy_remote_capture.yml` deploy `arkimecapture-remote` 
 | Docker for services, bare metal for Zeek/Suricata | Repeatability and offline image caching vs raw packet access |
 | Ansible only — Terraform abandoned | No VMs to provision |
 | Single engagement password | One credential per engagement, fans out to every service (TheHive excepted — hardcoded default, change on first login) |
-| Per-operation `<OP_NAME>.env` on the control node | fuse prompts for an op name first; each op gets its own config (node IP, mgmt IP, interface, versions, Arkime secret, Kibana key). Same op name = reuse offer; new name = clean config. Names normalised (`brass` → `OP_BRASS`) |
+| Per-operation `<OP_NAME>.env` on the control node | fuse opens with a NUMBERED menu of existing ops — pick a number to continue one, or type a new name for a fresh deployment (invalid numbers are rejected, never silently creating a new op). Each op gets its own config (node IP, mgmt IP, interface, versions, Arkime secret, Kibana key). Same op = reuse offer. Names normalised (`brass` → `OP_BRASS`) |
 | Local registry + artifact server + apt proxy | The node never needs internet |
 | Remote capture: sessions to central ES, PCAP local | Bandwidth-light visibility from multiple capture points |
 | Fixed management network 10.16.255.0/24 | Removes "why can't my laptop see the node" troubleshooting |
@@ -191,3 +191,35 @@ Proj_OROCHI/
 - Operator skill: **assume non-technical** — every runtime decision is a prompt with a sane default
 - Export and destroy (when built): **always separate steps**, export verified first
 - Users are fixed: `orochiman` on the management box, `orochi` on the node — Ansible connects with `~/.ssh/orochi_id_ed25519`
+- The `orochi` node user **must** have passwordless sudo (`orochi ALL=(ALL) NOPASSWD:ALL` in `/etc/sudoers.d/orochi`). `ansible.cfg` sets `become_ask_pass = False`, so without it every run fails with `Timeout waiting for privilege escalation prompt`. (Fallback: `ansible-playbook fuse.yml --ask-become-pass`.)
+
+---
+
+## Tested Baseline / Known-Good Environment
+
+> **If a fresh deploy throws OS/package/interpreter errors, suspect the node OS
+> first — not the roles.** Everything below was validated against these versions.
+> A node running a *newer* Ubuntu than 25.10, or a *dirty* base image, is the
+> single most common cause of a failing run.
+
+- **Node OS:** Ubuntu **Server 25.10**, freshly installed, nothing added beyond
+  the base system + OpenSSH. Do not deploy onto an upgraded/mixed release.
+  A node on Ubuntu 26.04 (Python 3.14, DPDK-ified Suricata, kernel 7.x) hit
+  pre-dependency ordering failures, a debconf hang, and interpreter-discovery
+  warnings that a clean 25.10 node does not.
+- **Management box OS:** Ubuntu 24.04 LTS or 25.10.
+- **`.deb` bundles install via `apt-get install ./*.deb`, never `dpkg -i *.deb`** —
+  modern packages (e.g. Suricata's DPDK deps) have pre-dependencies that a flat
+  `dpkg -i` glob cannot order. The suricata/common roles already do this; keep it.
+- **Stray/half-configured packages on the node break apt globally.** OROCHI
+  assumes a *clean* base OS; it cannot paper over pre-existing broken packages
+  (e.g. a leftover `courier-base` half-config will hang `dpkg --configure -a`).
+  When in doubt, flatten and reinstall the node rather than debugging its apt state.
+- **ansible-core note:** `stdout_callback = default` + `callback_result_format
+  = yaml` (the `yaml` callback was removed from community.general). The ini key
+  is `callback_result_format` — NOT `result_format`, which is the option's
+  documented *name* but is silently ignored as an ini key, leaving debug output
+  as one `\n`-escaped blob. Banners in fuse.yml are additionally emitted as
+  lists of lines so they render under any callback config. Facts are referenced
+  as `ansible_facts['...']` (bare `ansible_*` fact injection is deprecated for
+  removal in ansible-core 2.24).

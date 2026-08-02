@@ -295,9 +295,18 @@ Both the registry and nginx containers are started with `restart_policy: unless-
 ### 0.5 Install the Orochi Node OS
 
 Install **Ubuntu Server 25.10** on the orochi node. During install:
-- Create user `orochi` with sudo access (passwordless sudo is acceptable: `orochi ALL=(ALL) NOPASSWD:ALL`)
+- Create user `orochi` with sudo access
 - Enable OpenSSH server
 - Do **not** install any additional packages — Docker, Suricata, Zeek etc. are all installed by Ansible
+
+**Then grant the `orochi` user passwordless sudo — this is required, not optional.** `ansible.cfg` sets `become_ask_pass = False`, so Ansible never supplies a sudo password; without this the deploy fails with `Timeout waiting for privilege escalation prompt`. On the node, once:
+
+```bash
+echo 'orochi ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/orochi
+sudo chmod 440 /etc/sudoers.d/orochi
+```
+
+(If site policy forbids passwordless sudo, run the deployer with `ansible-playbook fuse.yml --ask-become-pass` and enter the password each run instead.)
 
 ### 0.6 Distribute the SSH Key
 
@@ -355,13 +364,14 @@ The playbook runs entirely on `localhost` (the management box). It:
 2. **Pulls Docker images** from their upstream sources (docker.elastic.co, Docker Hub, GitHub Container Registry, Google Artifact Registry) and pushes them all into the local registry under the paths `group_vars/all.yml` references. The orochi node never contacts any upstream registry — it only talks to the management box registry.
 3. **Downloads binary artefacts** (RITA tarball, Zeek signing key) via direct URL.
 4. **Resolves the latest Velociraptor release** from the GitHub API and downloads the `linux-amd64` binary.
-5. **Downloads Docker CE `.deb` packages** using `apt-get --download-only --reinstall` (the `--reinstall` flag is required — without it, apt skips packages that are already installed at the current version, and nothing gets downloaded).
-6. **Downloads Zeek `.deb` packages** the same way, after adding the Zeek OpenSUSE apt repository.
-7. **Downloads Suricata `.deb` packages** from standard Ubuntu repos.
-8. **Downloads Suricata rules** by spinning up a temporary Ubuntu container, running `suricata-update` inside it, and tarring the resulting rule files to `/opt/orochi/artifacts/suricata-rules.tar.gz`. The orochi node extracts this tarball during deployment — it never runs suricata-update itself.
-9. **Warms apt-cacher-ng** by temporarily pointing the management box's own apt at the local proxy and downloading standard packages (iptables, wireguard, Python libraries, etc.).
-10. **Starts the nginx artifact server** at `localhost:8888` serving `/opt/orochi/artifacts/`.
-11. **Verifies** that all expected registry images and artifact files are present. Fails loudly if anything is missing.
+5. **Downloads Docker CE `.deb` packages** inside a pristine `ubuntu:25.10` container (matching the node's release). This matters: running `apt-get --download-only` directly on the management box only fetches dependencies the management box does *not* already have installed, silently producing an incomplete bundle that cannot install offline on a minimal node. A clean container has nothing pre-installed, so apt is forced to download the complete dependency closure. The Docker apt repo and signing key are set up inside the container, leaving the management box's own apt configuration untouched.
+6. **Downloads Zeek `.deb` packages** the same clean-container way, with `--no-install-recommends` (Zeek's `zeekctl` *recommends* a mail-transport-agent, which would otherwise drag the courier mail stack into the bundle and break apt on every node).
+7. **Downloads Suricata `.deb` packages** the same clean-container way, from standard Ubuntu repos.
+8. **Downloads Suricata rule sources** by spinning up a temporary Ubuntu container and mirroring every free source as per-source `.rules` files plus a `manifest.json` under `/opt/orochi/artifacts/suricata-sources/`. The node registers these URLs with `suricata-update`, so rules can later be refreshed on the node without internet access.
+9. **Mirrors Elastic Agent installers.** Queries `artifacts-api.elastic.co` for every installable package matching the stack version (or uses an explicit `elastic_agent_artifacts` list if one is pinned), checks free disk space, then downloads each package plus its `.sha512` and `.asc` into `elastic-artifacts/beats/elastic-agent/`, and writes a `manifest.json` the node reads to know what to mirror locally. This is the source for the node-hosted artifact registry that endpoints enrol against — see Option 1 below.
+10. **Warms apt-cacher-ng** inside a clean `ubuntu:25.10` container routed through the proxy (same host-state reasoning as the deb bundles: warming from the management box itself skips anything the box already has, leaving holes in the cache that only surface in the field when the management box is offline). This step fails loudly if warming fails — a silently cold cache means a broken offline deployment later.
+11. **Starts the nginx artifact server** at `localhost:8888` serving `/opt/orochi/artifacts/`.
+12. **Verifies** that all expected registry images and artifact files are present. Fails loudly if anything is missing.
 
 ### What Gets Cached On-Disk
 
@@ -374,9 +384,22 @@ The playbook runs entirely on `localhost` (the management box). It:
 │   ├── zeek-debs.tar.gz            ← tarball of above
 │   ├── suricata-debs/              ← Suricata .deb files (directory)
 │   ├── suricata-debs.tar.gz        ← tarball of above
-│   ├── suricata-rules.tar.gz       ← ET Open rules from suricata-update
+│   ├── suricata-sources/           ← per-source .rules files + manifest.json
+│   ├── elastic-artifacts/          ← Elastic Agent installer mirror
+│   │   ├── manifest.json           ← which packages the node should mirror
+│   │   └── beats/elastic-agent/    ← .zip/.tar.gz + .sha512 + .asc per platform
+│   │                                 (layout must match artifacts.elastic.co —
+│   │                                  the agent appends beats/elastic-agent/)
 │   ├── velociraptor-linux-amd64
-│   ├── rita-v5.1.1.tar.gz          ← RITA installer (docker-compose stack + config)
+│   ├── velociraptor-version.txt
+│   ├── zeek-version.txt
+│   ├── suricata-version.txt
+│   ├── rita-v<version>.tar.gz      ← RITA installer (docker-compose stack + config)
+│   ├── rita-version.txt            ← authoritative RITA version — the node reads
+│   │                                 THIS, not group_vars, because every repo push
+│   │                                 overwrites group_vars/all.yml and would revert
+│   │                                 a version prep selected (version files live
+│   │                                 next to the artifact and cannot drift from it)
 │   └── zeek-release.key
 └── registry/                       ← Docker layer blobs
     ├── docker/registry/v2/...      ← all tool images
@@ -578,6 +601,24 @@ Deploys Elasticsearch 9.x, Kibana, and Fleet Server. This is the foundation — 
 
 **Certificate handling:** The `certificates` role generates a self-signed CA and node certificate under `/opt/orochi/certs/`. Kibana and Fleet use these. Velociraptor generates its own separate PKI.
 
+**Node-hosted Elastic Artifact Registry:** the Fleet role also stands up an `elastic-artifacts` nginx container on port **8890**, serving the Elastic Agent installers mirrored by `prep_artefacts.yml` at the exact upstream layout (`/beats/elastic-agent/<file>`), and registers it with Fleet as the **default agent binary download source** via `POST /api/fleet/agent_download_sources`. This is what makes agent enrolment and Fleet-issued agent upgrades work on an air-gapped target network, where `artifacts.elastic.co` is unreachable.
+
+> **Kibana's "Add agent" flyout may still display an `artifacts.elastic.co` URL** in its copy-paste command — historically it did not rewrite that URL from the configured download source ([elastic/kibana#164475](https://github.com/elastic/kibana/issues/164475)). That download fails on an isolated endpoint. The Fleet role prints working install commands (pointing at the node) at the end of deployment — use those, taking only the `--enrollment-token` value from the Kibana flyout.
+
+**Which installers get mirrored:** by default `elastic_agent_artifacts` in `group_vars/all.yml` is **empty, which means auto-discover** — `prep_artefacts.yml` queries `artifacts-api.elastic.co` for the stack version being deployed and mirrors every installable package it returns. For 9.x that is 12 packages:
+
+| Platform | Packages |
+|---|---|
+| Windows | `.zip` and `.msi`, x86_64 and arm64 |
+| Linux | `.tar.gz`, x86_64 and arm64 |
+| macOS | `.tar.gz`, x86_64 (Intel) and aarch64 (Apple Silicon) |
+| Debian/Ubuntu | `.deb`, amd64 and arm64 |
+| RHEL/Rocky/SUSE | `.rpm`, x86_64 and aarch64 |
+
+Docker images, build contexts, and the `-core`/`-fips`/`-cloud`/`-slim`/`-wolfi`/`-complete`/`-service` variants are filtered out — none of them is what an endpoint installs. Each package is accompanied by its `.sha512` and `.asc` (Elastic Agent verifies both on install and upgrade), so 12 packages means 36 files.
+
+> **Disk:** the full set is roughly **10–12 GB on the management box and again on the node**. Both `prep_artefacts.yml` and the fleet role check free space first and abort with a clear message rather than half-filling the mirror (`elastic_agent_mirror_min_free_gb`, default 20 GB). To mirror less, either trim `elastic_agent_package_types` (e.g. drop `msi` and `rpm`) or pin an explicit `elastic_agent_artifacts` list.
+
 **Estimated time:** 15–25 minutes
 
 > Elastic Stack must be deployed before Arkime. All other tools are independent of it.
@@ -643,7 +684,7 @@ Installs Suricata IDS from the pre-cached `.deb` tarball.
 **What it deploys:** Suricata runs as a bare-metal systemd service. The role:
 1. Downloads `suricata-debs.tar.gz` from the artifact server and installs
 2. Writes `/etc/suricata/suricata.yaml` (templated) — configures `HOME_NET`, all required port-groups (HTTP_PORTS, SSH_PORTS, ORACLE_PORTS, DNP3_PORTS, MODBUS_PORTS, FTP_PORTS, SHELLCODE_PORTS, FILE_DATA_PORTS), EVE JSON output, af-packet capture on the selected capture interface
-3. Downloads `suricata-rules.tar.gz` (Emerging Threats Open ruleset, ~55,000 signatures) from the artifact server and extracts to `/var/lib/suricata/rules/`
+3. Registers every free rule source (ET Open, abuse.ch SSLbl/URLhaus, OISF traffic-id, etc.) with `suricata-update`, pointing each at the management box's `suricata-sources/` mirror, then builds the merged ruleset into `/var/lib/suricata/rules/`. Because registration is persisted, an analyst can refresh rules later by re-running `suricata-update` on the node (after the sources are refreshed on the management box) — no Ansible needed
 4. Creates a systemd service override (`Type=simple`, `Restart=on-failure`)
 5. Enables and starts the service (non-blocking)
 
