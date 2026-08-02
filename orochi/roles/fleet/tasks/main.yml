@@ -354,6 +354,31 @@
   when: _ea_manifest.status != 200
   tags: fleet
 
+- name: Check free space before mirroring Elastic Agent packages to the node
+  # The full 9.x set is ~10-12 GB. Running out of disk mid-mirror leaves
+  # truncated installers that endpoints would download and fail to extract,
+  # so refuse up front rather than corrupt the registry.
+  ansible.builtin.shell: |
+    df -BG --output=avail {{ orochi_base_path }} | tail -1 | tr -dc '0-9'
+  register: _ea_node_free_gb
+  changed_when: false
+  when: _ea_manifest.status == 200
+  tags: fleet
+
+- name: Fail if the node is short on disk for the agent mirror
+  ansible.builtin.fail:
+    msg: >-
+      Only {{ _ea_node_free_gb.stdout }} GB free at {{ orochi_base_path }} on
+      the node — need at least {{ elastic_agent_mirror_min_free_gb }} GB to
+      mirror {{ (_ea_manifest.content | from_json) | length }} Elastic Agent
+      packages. Free space on the node, or reduce the mirrored set via
+      elastic_agent_artifacts / elastic_agent_package_types in
+      group_vars/all.yml and re-run prep_artefacts.yml.
+  when:
+    - _ea_manifest.status == 200
+    - (_ea_node_free_gb.stdout | int) < (elastic_agent_mirror_min_free_gb | int)
+  tags: fleet
+
 - name: Mirror Elastic Agent installers to the node
   # force: false — version-pinned filenames cannot go stale, and these are
   # ~1 GB each. Runs over the LAN from the management box, never the internet.
@@ -367,6 +392,29 @@
   loop_control:
     label: "{{ item.0 }}{{ item.1 }}"
   when: _ea_manifest.status == 200
+  tags: fleet
+
+# Same reasoning as the management box: version-pinned filenames + force:false
+# means superseded packages would accumulate on the node forever. Prunes only
+# after the current set has mirrored successfully.
+- name: Find files currently in the node Elastic Agent mirror
+  ansible.builtin.find:
+    paths: "{{ directories.agent_artifacts }}/beats/elastic-agent"
+    patterns: "*"
+  register: _ea_node_present
+  when: _ea_manifest.status == 200
+  tags: fleet
+
+- name: Prune Elastic Agent packages from superseded versions on the node
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ _ea_node_present.files | default([]) }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+  when:
+    - _ea_manifest.status == 200
+    - (item.path | basename) not in ((_ea_manifest.content | from_json) | product(['', '.sha512', '.asc']) | map('join') | list)
   tags: fleet
 
 - name: Start Elastic Agent artifact registry container

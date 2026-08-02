@@ -184,6 +184,34 @@
   changed_when: "'Setting up' in zeek_install.stdout"
   tags: zeek
 
+- name: Install zeekctl websocket dependency
+  # Zeek 8 zeekctl talks to the running Zeek over a websocket. Without the
+  # python3-websockets module every zeekctl invocation prints
+  # "websockets non-functional" and `zeekctl print` / `zeekctl netstats` fail
+  # outright — including on every 5-minute zeekctl-cron watchdog run, which
+  # fills the journal. Capture and logging are unaffected either way.
+  # Comes from apt-cacher-ng on the management box (warmed by
+  # prep_artefacts.yml), so this stays fully offline on the node.
+  # Non-fatal: a node whose cache predates this addition should still deploy
+  # Zeek successfully, just without the print/netstats commands.
+  ansible.builtin.apt:
+    name: python3-websockets
+    state: present
+  register: _zeek_ws
+  failed_when: false
+  tags: zeek
+
+- name: Warn if the zeekctl websocket dependency could not be installed
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: python3-websockets could not be installed
+      ({{ _zeek_ws.msg | default('see apt output') }}). Zeek will capture and
+      log normally, but `zeekctl print` and `zeekctl netstats` stay
+      non-functional. Re-run prep_artefacts.yml on the management box to warm
+      the package into the apt cache, then re-run this role.
+  when: _zeek_ws is failed or (_zeek_ws.msg | default('') is search('No package'))
+  tags: zeek
+
 - name: Add Zeek to system PATH
   ansible.builtin.copy:
     dest: /etc/profile.d/zeek.sh

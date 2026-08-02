@@ -80,16 +80,53 @@
       failed_when: false
       changed_when: false
 
-    - name: Parse latest stable Elastic Stack version
+    - name: Parse latest PUBLICLY DOWNLOADABLE Elastic Stack version
+      # The artifacts API lists versions that are STAGED but not yet publicly
+      # released. They carry no -SNAPSHOT suffix, so a naive "highest version
+      # wins" picks something whose binaries return 404 on
+      # artifacts.elastic.co and whose images are absent from docker.elastic.co
+      # (observed: prep offering 9.5.0 when 9.4.4 was the newest real release).
+      # So: walk newest-first and select the first version that actually has a
+      # downloadable artefact. HEAD requests only — no payload is fetched.
       ansible.builtin.shell: |
         python3 - <<'EOF'
-        import json, re
+        import json, re, sys, urllib.request, urllib.error
         versions = {{ _elastic_versions_raw.json.versions | to_json }}
         stable = sorted(
           [v for v in versions if re.match(r'^[0-9]+\.[0-9]+\.[0-9]+$', v)],
-          key=lambda v: tuple(int(x) for x in v.split('.'))
+          key=lambda v: tuple(int(x) for x in v.split('.')),
+          reverse=True
         )
-        print(stable[-1] if stable else '')
+        def probe(v):
+            url = ("https://artifacts.elastic.co/downloads/beats/elastic-agent/"
+                   "elastic-agent-%s-linux-x86_64.tar.gz" % v)
+            req = urllib.request.Request(url, method='HEAD')
+            try:
+                with urllib.request.urlopen(req, timeout=15) as r:
+                    return r.status, None
+            except urllib.error.HTTPError as e:
+                return e.code, None
+            except Exception as e:
+                return None, type(e).__name__
+        errors = 0
+        for v in stable[:8]:
+            code, err = probe(v)
+            if err:
+                errors += 1
+                sys.stderr.write("  %s: probe error (%s)\n" % (v, err))
+                continue
+            sys.stderr.write("  %s: HTTP %s\n" % (v, code))
+            if code == 200:
+                print(v)
+                sys.exit(0)
+        # Reaching here means nothing was confirmed published. Distinguish
+        # "all probes errored" (network/proxy problem) from "genuinely not
+        # published" so the operator is not sent chasing the wrong thing.
+        if errors:
+            sys.stderr.write(
+                "WARNING: could not reach artifacts.elastic.co to confirm which "
+                "versions are published - you will be prompted to enter the "
+                "version manually.\n")
         EOF
       register: _elastic_latest_raw
       changed_when: false
@@ -299,6 +336,88 @@
         state: directory
         mode: '0755'
 
+    - name: Discover available Elastic Agent packages for this stack version
+      # Authoritative list straight from Elastic, so the mirror always matches
+      # the version being deployed with no hand-maintained filenames.
+      ansible.builtin.uri:
+        url: "https://artifacts-api.elastic.co/v1/search/{{ stack_version }}/elastic-agent"
+        return_content: true
+        timeout: 30
+      register: _ea_api
+      failed_when: false
+      changed_when: false
+      when: elastic_agent_artifacts | length == 0
+
+    - name: Build the Elastic Agent package list
+      # Keeps only what an ENDPOINT installs: name must be exactly
+      # elastic-agent-<version>-* (excludes the -core/-fips/-cloud/-slim/
+      # -wolfi/-complete/-service/-ironbank variants) AND the package type must
+      # be a real installer (excludes docker images and build contexts, which
+      # otherwise sail through the name filter as .tar.gz files).
+      ansible.builtin.set_fact:
+        elastic_agent_artifacts: >-
+          {{ (_ea_api.json.packages | default({}) | dict2items
+              | selectattr('key', 'match', '^elastic-agent-' ~ (stack_version | regex_escape) ~ '-')
+              | selectattr('value.type', 'in', elastic_agent_package_types)
+              | map(attribute='key') | sort | list) }}
+      when: elastic_agent_artifacts | length == 0
+
+    - name: Fail if no Elastic Agent packages could be resolved
+      ansible.builtin.fail:
+        msg: >-
+          Could not determine Elastic Agent packages for {{ stack_version }}
+          (artifacts API status {{ _ea_api.status | default('unreachable') }}).
+          Check internet access from this box, or pin an explicit
+          elastic_agent_artifacts list in group_vars/all.yml.
+      when: elastic_agent_artifacts | length == 0
+
+    - name: Show the Elastic Agent packages to be mirrored
+      ansible.builtin.debug:
+        msg: "{{ ['Mirroring ' ~ (elastic_agent_artifacts | length) ~ ' Elastic Agent packages for ' ~ stack_version ~ ' (plus .sha512 and .asc for each):'] + elastic_agent_artifacts }}"
+
+    - name: Verify the packages are actually published (not a staged release)
+      # The search API also answers for STAGED versions, returning
+      # staging.elastic.co URLs. We mirror from the public
+      # artifacts.elastic.co path, which 404s for anything not yet released.
+      # Probe one package up front so the failure is a clear message rather
+      # than a 404 twenty minutes into a multi-GB download loop.
+      ansible.builtin.uri:
+        url: "https://artifacts.elastic.co/downloads/beats/elastic-agent/{{ elastic_agent_artifacts | first }}"
+        method: HEAD
+        status_code: [200, 403, 404]
+        timeout: 30
+      register: _ea_probe
+      changed_when: false
+
+    - name: Fail if the chosen Elastic version is not publicly downloadable
+      ansible.builtin.fail:
+        msg: >-
+          {{ elastic_agent_artifacts | first }} is not available on
+          artifacts.elastic.co (HTTP {{ _ea_probe.status }}). Elastic Stack
+          {{ stack_version }} appears to be STAGED but not publicly released
+          yet. Re-run and choose the newest version that is actually
+          published, or set stack_version explicitly in group_vars/all.yml.
+      when: _ea_probe.status != 200
+
+    - name: Check free space before mirroring Elastic Agent packages
+      # These packages total ~10-12 GB. Running out of disk MID-download leaves
+      # a half-written mirror that looks complete to a later run, so refuse up
+      # front instead.
+      ansible.builtin.shell: |
+        df -BG --output=avail {{ artifacts_dir }} | tail -1 | tr -dc '0-9'
+      register: _ea_free_gb
+      changed_when: false
+
+    - name: Fail if the management box is short on disk
+      ansible.builtin.fail:
+        msg: >-
+          Only {{ _ea_free_gb.stdout }} GB free at {{ artifacts_dir }} —
+          need at least {{ elastic_agent_mirror_min_free_gb }} GB to mirror
+          {{ elastic_agent_artifacts | length }} Elastic Agent packages.
+          Free space, or reduce the set by pinning elastic_agent_artifacts
+          (or trimming elastic_agent_package_types) in group_vars/all.yml.
+      when: (_ea_free_gb.stdout | int) < (elastic_agent_mirror_min_free_gb | int)
+
     - name: Download Elastic Agent installers (+ checksums and signatures)
       # force: false — filenames are version-pinned, so an existing file can
       # never be stale content. These are ~1 GB each; re-downloading them on
@@ -316,6 +435,28 @@
       until: _ea_dl is succeeded
       retries: 3
       delay: 10
+
+    # ── Prune superseded Elastic Agent packages ──────────────────────────────
+    # Filenames are version-pinned and downloaded with force: false, so
+    # WITHOUT this every Elastic version bump silently adds another ~12 GB and
+    # nothing is ever reclaimed — the disk fills after two or three upgrades.
+    # Runs only AFTER the new set has downloaded successfully, so a failed
+    # download can never leave the box with no installers at all.
+
+    - name: Find files currently in the Elastic Agent mirror
+      ansible.builtin.find:
+        paths: "{{ artifacts_dir }}/elastic-artifacts/beats/elastic-agent"
+        patterns: "*"
+      register: _ea_present
+
+    - name: Prune Elastic Agent packages from superseded versions
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ _ea_present.files }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
+      when: (item.path | basename) not in (elastic_agent_artifacts | product(['', '.sha512', '.asc']) | map('join') | list)
 
     - name: Create Elastic Agent artifact manifest
       # The node reads this to know which files to mirror — so adding a
@@ -682,6 +823,7 @@
             iptables iptables-persistent netfilter-persistent \
             wireguard \
             python3-docker python3-requests python3-urllib3 \
+            python3-websockets \
             software-properties-common apt-transport-https gnupg \
             ca-certificates curl
         '

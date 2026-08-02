@@ -49,22 +49,44 @@ redis_version: "7-alpine"
 
 # ── Elastic Agent installer mirror ────────────────────────────────────────────
 # Endpoints on the target network cannot reach artifacts.elastic.co, so the
-# node hosts its own Elastic Artifact Registry (see roles/fleet). These files
-# are mirrored during prep_artefacts.yml and served from the node.
+# node hosts its own Elastic Artifact Registry (see roles/fleet). Packages are
+# mirrored by prep_artefacts.yml and served from the node.
 #
-# SIZE WARNING: each elastic-agent package is roughly 1 GB — the two defaults
-# below cost ~2.5 GB on the management box AND ~2.5 GB on the node. Add
-# platforms only if you will actually enrol them.
+# EMPTY LIST = AUTO-DISCOVER: prep queries the Elastic artifacts API for the
+# stack version actually being deployed and mirrors every installable package
+# it finds. This is why bumping the Elastic version needs no edit here.
 #
-# To add more, append the exact upstream filename (see
-# https://artifacts.elastic.co/downloads/beats/elastic-agent/), e.g.:
-#   - "elastic-agent-{{ stack_version }}-amd64.deb"
-#   - "elastic-agent-{{ stack_version }}-x86_64.rpm"
-#   - "elastic-agent-{{ stack_version }}-linux-arm64.tar.gz"
-#   - "elastic-agent-{{ stack_version }}-darwin-aarch64.tar.gz"
-elastic_agent_artifacts:
-  - "elastic-agent-{{ stack_version }}-windows-x86_64.zip"
-  - "elastic-agent-{{ stack_version }}-linux-x86_64.tar.gz"
+# For 9.x that is 12 packages:
+#   Windows  .zip + .msi   (x86_64, arm64)
+#   Linux    .tar.gz       (x86_64, arm64)
+#   macOS    .tar.gz       (x86_64/Intel, aarch64/Apple Silicon)
+#   Debian   .deb          (amd64, arm64)
+#   RedHat   .rpm          (x86_64, aarch64)
+#
+# SIZE: roughly 10-12 GB, stored on the management box AND again on the node.
+# prep and the fleet role both refuse to start the download if free space is
+# below elastic_agent_mirror_min_free_gb.
+#
+# To pin an explicit set instead of auto-discovery, list exact upstream
+# filenames here, e.g.:
+#   elastic_agent_artifacts:
+#     - "elastic-agent-{{ stack_version }}-windows-x86_64.zip"
+#     - "elastic-agent-{{ stack_version }}-linux-x86_64.tar.gz"
+elastic_agent_artifacts: []
+
+# Package types kept by auto-discovery. Docker images, build contexts and the
+# -core/-fips/-cloud/-slim/-wolfi/-complete/-service variants are always
+# excluded: none of them are what an endpoint installs.
+elastic_agent_package_types:
+  - zip     # Windows
+  - msi     # Windows installer
+  - tar     # Linux + macOS tarballs
+  - deb     # Debian/Ubuntu
+  - rpm     # RHEL/Rocky/SUSE
+
+# Abort the mirror rather than filling the disk. Applies to the management
+# box (/opt/orochi/artifacts) and the node (/opt/orochi/agent-artifacts).
+elastic_agent_mirror_min_free_gb: 20
 
 
 # ==============================================
