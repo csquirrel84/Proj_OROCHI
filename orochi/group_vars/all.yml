@@ -47,6 +47,25 @@ arkime_version: "v6-latest"
 timesketch_version: "latest"
 redis_version: "7-alpine"
 
+# ── Elastic Agent installer mirror ────────────────────────────────────────────
+# Endpoints on the target network cannot reach artifacts.elastic.co, so the
+# node hosts its own Elastic Artifact Registry (see roles/fleet). These files
+# are mirrored during prep_artefacts.yml and served from the node.
+#
+# SIZE WARNING: each elastic-agent package is roughly 1 GB — the two defaults
+# below cost ~2.5 GB on the management box AND ~2.5 GB on the node. Add
+# platforms only if you will actually enrol them.
+#
+# To add more, append the exact upstream filename (see
+# https://artifacts.elastic.co/downloads/beats/elastic-agent/), e.g.:
+#   - "elastic-agent-{{ stack_version }}-amd64.deb"
+#   - "elastic-agent-{{ stack_version }}-x86_64.rpm"
+#   - "elastic-agent-{{ stack_version }}-linux-arm64.tar.gz"
+#   - "elastic-agent-{{ stack_version }}-darwin-aarch64.tar.gz"
+elastic_agent_artifacts:
+  - "elastic-agent-{{ stack_version }}-windows-x86_64.zip"
+  - "elastic-agent-{{ stack_version }}-linux-x86_64.tar.gz"
+
 
 # ==============================================
 # DOCKER IMAGE REFERENCES
@@ -87,6 +106,9 @@ ports:
   timesketch: 5000
   portal_http: 80
   portal_https: 443
+  # Node-hosted Elastic Artifact Registry — endpoints fetch agent installers
+  # and upgrade binaries from here instead of artifacts.elastic.co.
+  agent_artifacts: 8890
 
 
 # ==============================================
@@ -173,3 +195,4 @@ directories:
   portal: "{{ orochi_base_path }}/portal"
   rita: "{{ orochi_base_path }}/rita"
   logs: "{{ orochi_base_path }}/logs"
+  agent_artifacts: "{{ orochi_base_path }}/agent-artifacts"

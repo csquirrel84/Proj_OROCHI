@@ -225,6 +225,21 @@
   when: fw_analyst_iface != fw_capture_iface
   tags: firewall
 
+- name: Allow Elastic Agent artifact registry from the capture interface
+  # Endpoints being enrolled live on the monitored network and download the
+  # agent installer (and Fleet-issued upgrade binaries) from this node. Without
+  # this rule LOCKDOWN silently breaks enrolment: the installer download times
+  # out with no clue as to why.
+  ansible.builtin.iptables:
+    chain: DOCKER-USER
+    in_interface: "{{ fw_capture_iface }}"
+    protocol: tcp
+    destination_port: "{{ ports.agent_artifacts }}"
+    jump: RETURN
+    action: insert
+  when: fw_analyst_iface != fw_capture_iface
+  tags: firewall
+
 - name: Allow established/related to containers
   ansible.builtin.iptables:
     chain: DOCKER-USER

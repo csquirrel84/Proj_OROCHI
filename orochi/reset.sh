@@ -81,6 +81,7 @@ echo -e "${YELLOW}[2/9] Removing Docker containers...${NC}"
 
 CONTAINERS=(
     tool-portal
+    elastic-artifacts
     timesketch
     timesketch-worker
     redis-timesketch

@@ -284,6 +284,47 @@
       loop_control:
         label: "{{ item.dest }}"
 
+    # ── Elastic Agent installers (node-hosted artifact registry) ─────────────
+    # Endpoints on the target network can reach the orochi node but NOT
+    # artifacts.elastic.co, so the node serves its own Elastic Artifact
+    # Registry (roles/fleet). The directory layout below is not arbitrary —
+    # Elastic Agent appends "beats/elastic-agent/<file>" to the configured
+    # download-source host, so it must be mirrored exactly.
+    # .sha512 and .asc accompany each package: agent verifies both during
+    # install and upgrade, and a missing checksum fails the upgrade.
+
+    - name: Create Elastic Agent artifact registry directory
+      ansible.builtin.file:
+        path: "{{ artifacts_dir }}/elastic-artifacts/beats/elastic-agent"
+        state: directory
+        mode: '0755'
+
+    - name: Download Elastic Agent installers (+ checksums and signatures)
+      # force: false — filenames are version-pinned, so an existing file can
+      # never be stale content. These are ~1 GB each; re-downloading them on
+      # every prep run would be pure waste.
+      ansible.builtin.get_url:
+        url: "https://artifacts.elastic.co/downloads/beats/elastic-agent/{{ item.0 }}{{ item.1 }}"
+        dest: "{{ artifacts_dir }}/elastic-artifacts/beats/elastic-agent/{{ item.0 }}{{ item.1 }}"
+        mode: '0644'
+        force: false
+        timeout: 120
+      loop: "{{ elastic_agent_artifacts | product(['', '.sha512', '.asc']) | list }}"
+      loop_control:
+        label: "{{ item.0 }}{{ item.1 }}"
+      register: _ea_dl
+      until: _ea_dl is succeeded
+      retries: 3
+      delay: 10
+
+    - name: Create Elastic Agent artifact manifest
+      # The node reads this to know which files to mirror — so adding a
+      # platform to elastic_agent_artifacts needs no node-side change.
+      ansible.builtin.copy:
+        content: "{{ elastic_agent_artifacts | to_nice_json }}\n"
+        dest: "{{ artifacts_dir }}/elastic-artifacts/manifest.json"
+        mode: '0644'
+
     - name: Write RITA version file
       # AUTHORITATIVE version record for the node. The rita role reads this
       # file from the artifact server instead of trusting group_vars, because
@@ -704,6 +745,8 @@
         - "suricata-version.txt"
         - "rita-version.txt"
         - "rita-{{ rita_version }}.tar.gz"
+        - "elastic-artifacts/manifest.json"
+        - "elastic-artifacts/beats/elastic-agent/{{ elastic_agent_artifacts | first }}"
         - "docker-debs.tar.gz"
         - "zeek-debs.tar.gz"
         - "suricata-debs.tar.gz"

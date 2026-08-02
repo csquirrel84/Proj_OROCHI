@@ -312,11 +312,185 @@
   ignore_errors: true
   tags: fleet
 
+# ══════════════════════════════════════════════════════════════════════════════
+# NODE-HOSTED ELASTIC ARTIFACT REGISTRY
+# ══════════════════════════════════════════════════════════════════════════════
+# Kibana's enrolment snippet defaults to downloading the installer from
+# artifacts.elastic.co — unreachable from an air-gapped target network, so the
+# copy-paste command fails at the first line. The node therefore serves its own
+# artifact registry, mirroring the exact upstream layout
+# (<host>/beats/elastic-agent/<file>), and registers it with Fleet as the
+# DEFAULT agent binary download source.
+#
+# That registration governs agent UPGRADES issued from Fleet (documented
+# behaviour). Whether the Kibana "Add agent" flyout rewrites its displayed
+# install command from this setting is version-dependent — it was an open
+# Kibana enhancement request (elastic/kibana#164475), so DO NOT rely on it:
+# the final task below prints known-good install commands pointing at the node,
+# and those are what an operator should copy.
+
+- name: Create Elastic Agent artifact registry directory on the node
+  ansible.builtin.file:
+    path: "{{ directories.agent_artifacts }}/beats/elastic-agent"
+    state: directory
+    mode: '0755'
+  tags: fleet
+
+- name: Fetch Elastic Agent artifact manifest from the management box
+  ansible.builtin.uri:
+    url: "{{ artifact_base_url }}/elastic-artifacts/manifest.json"
+    return_content: true
+    status_code: [200, 404]
+  register: _ea_manifest
+  tags: fleet
+
+- name: Warn if the management box has no Elastic Agent artifact mirror
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: {{ artifact_base_url }}/elastic-artifacts/manifest.json not
+      found — the node cannot host agent installers. Re-run
+      prep_artefacts.yml on the management box. Enrolment will still work,
+      but endpoints must obtain the installer by some other means.
+  when: _ea_manifest.status != 200
+  tags: fleet
+
+- name: Mirror Elastic Agent installers to the node
+  # force: false — version-pinned filenames cannot go stale, and these are
+  # ~1 GB each. Runs over the LAN from the management box, never the internet.
+  ansible.builtin.get_url:
+    url: "{{ artifact_base_url }}/elastic-artifacts/beats/elastic-agent/{{ item.0 }}{{ item.1 }}"
+    dest: "{{ directories.agent_artifacts }}/beats/elastic-agent/{{ item.0 }}{{ item.1 }}"
+    mode: '0644'
+    force: false
+    timeout: 120
+  loop: "{{ (_ea_manifest.content | from_json) | product(['', '.sha512', '.asc']) | list }}"
+  loop_control:
+    label: "{{ item.0 }}{{ item.1 }}"
+  when: _ea_manifest.status == 200
+  tags: fleet
+
+- name: Start Elastic Agent artifact registry container
+  # Plain nginx autoindex over the mirrored tree. Bound to the analyst NIC and
+  # the capture NIC alike: endpoints being enrolled live on the monitored
+  # network and must be able to reach it. HTTP, not HTTPS — agent installers
+  # are integrity-checked via .sha512/.asc, and a self-signed cert here would
+  # simply break the download for every endpoint.
+  community.docker.docker_container:
+    name: elastic-artifacts
+    image: "{{ images.nginx }}"
+    state: started
+    restart_policy: unless-stopped
+    hostname: elastic-artifacts
+    networks:
+      - name: "{{ orochi_network_name }}"
+    ports:
+      - "{{ ports.agent_artifacts }}:80"
+    volumes:
+      - "{{ directories.agent_artifacts }}:/usr/share/nginx/html:ro"
+  when: _ea_manifest.status == 200
+  tags: fleet
+
+- name: Get existing agent binary download sources
+  ansible.builtin.uri:
+    url: "https://localhost:{{ ports.kibana }}/api/fleet/agent_download_sources"
+    method: GET
+    user: elastic
+    password: "{{ elasticsearch_password }}"
+    force_basic_auth: true
+    headers:
+      kbn-xsrf: "true"
+    validate_certs: false
+    status_code: [200]
+  register: _ea_sources
+  when: _ea_manifest.status == 200
+  tags: fleet
+
+- name: Find any previously registered OROCHI download source
+  ansible.builtin.set_fact:
+    _ea_existing: "{{ (_ea_sources.json['items'] | default([]) | selectattr('name', 'equalto', 'OROCHI local artifact registry') | list | first) | default({}) }}"
+  when: _ea_manifest.status == 200
+  tags: fleet
+
+- name: Register the node as the default agent binary download source
+  ansible.builtin.uri:
+    url: "https://localhost:{{ ports.kibana }}/api/fleet/agent_download_sources"
+    method: POST
+    user: elastic
+    password: "{{ elasticsearch_password }}"
+    force_basic_auth: true
+    headers:
+      kbn-xsrf: "true"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "OROCHI local artifact registry"
+      host: "http://{{ orochi_server_ip }}:{{ ports.agent_artifacts }}/"
+      is_default: true
+    validate_certs: false
+    status_code: [200, 201]
+  when:
+    - _ea_manifest.status == 200
+    - _ea_existing | length == 0
+  tags: fleet
+
+- name: Update the OROCHI agent binary download source
+  # Keeps the host current if the node IP changed since the last deploy.
+  ansible.builtin.uri:
+    url: "https://localhost:{{ ports.kibana }}/api/fleet/agent_download_sources/{{ _ea_existing.id }}"
+    method: PUT
+    user: elastic
+    password: "{{ elasticsearch_password }}"
+    force_basic_auth: true
+    headers:
+      kbn-xsrf: "true"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "OROCHI local artifact registry"
+      host: "http://{{ orochi_server_ip }}:{{ ports.agent_artifacts }}/"
+      is_default: true
+    validate_certs: false
+    status_code: [200]
+  when:
+    - _ea_manifest.status == 200
+    - _ea_existing | length > 0
+  tags: fleet
+
 - name: Display Fleet Server status
   ansible.builtin.debug:
-    msg:
-      - "Fleet Server is running!"
-      - "URL: https://{{ orochi_server_ip }}:{{ ports.fleet }}"
-      - "Kibana Fleet: https://{{ orochi_server_ip }}:{{ ports.kibana }}/app/fleet"
-      - "Status: {{ fleet_server_status.json.status | default('Starting...') }}"
+    msg: "{{ _fleet_status_msg.split('\n') }}"
+  vars:
+    _fleet_status_msg: |-
+      Fleet Server is running!
+      URL: https://{{ orochi_server_ip }}:{{ ports.fleet }}
+      Kibana Fleet: https://{{ orochi_server_ip }}:{{ ports.kibana }}/app/fleet
+      Status: {{ fleet_server_status.json.status | default('Starting...') }}
+
+      Agent installers are served from this node at:
+        http://{{ orochi_server_ip }}:{{ ports.agent_artifacts }}/beats/elastic-agent/
+
+      Registered with Fleet as the DEFAULT agent binary download source, so
+      Fleet-issued agent upgrades pull from the node, not the internet.
+
+      NOTE: Kibana's "Add agent" flyout may still DISPLAY an
+      artifacts.elastic.co URL — that download will fail on an air-gapped
+      endpoint. Use the commands below instead; take the --enrollment-token
+      from the Kibana flyout.
+
+      Windows (PowerShell, as Administrator):
+        $ProgressPreference = 'SilentlyContinue'
+        Invoke-WebRequest -Uri http://{{ orochi_server_ip }}:{{ ports.agent_artifacts }}/beats/elastic-agent/elastic-agent-{{ stack_version }}-windows-x86_64.zip -OutFile elastic-agent.zip
+        Expand-Archive .\elastic-agent.zip -DestinationPath .
+        cd elastic-agent-{{ stack_version }}-windows-x86_64
+        .\elastic-agent.exe install --url=https://{{ orochi_server_ip }}:{{ ports.fleet }} --enrollment-token=<TOKEN> --insecure
+
+      Linux (as root):
+        curl -O http://{{ orochi_server_ip }}:{{ ports.agent_artifacts }}/beats/elastic-agent/elastic-agent-{{ stack_version }}-linux-x86_64.tar.gz
+        tar xzvf elastic-agent-{{ stack_version }}-linux-x86_64.tar.gz
+        cd elastic-agent-{{ stack_version }}-linux-x86_64
+        ./elastic-agent install --url=https://{{ orochi_server_ip }}:{{ ports.fleet }} --enrollment-token=<TOKEN> --insecure
+
+      (--insecure accepts the node's self-signed Fleet certificate. To verify
+      properly instead, ship the OROCHI CA to the endpoint and use
+      --certificate-authorities=<path-to-ca.crt>.)
   tags: fleet
