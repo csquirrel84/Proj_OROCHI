@@ -24,9 +24,23 @@
       register: _existing_ops
       changed_when: false
 
+    # Operator-proof selection: existing ops are shown as a NUMBERED menu so
+    # continuing an op is "type 2<Enter>" — no retyping names from memory
+    # (mistyped names silently fork a fresh config, which is exactly the
+    # mistake this prevents). A number picks that op; anything else is
+    # treated as a new operation name.
+    - name: Build operation menu lines
+      ansible.builtin.set_fact:
+        _ops_menu_lines: "{{ (_ops_menu_lines | default(['Available operations:'])) + ['  [%d]  %s' | format(_idx + 1, item)] }}"
+      loop: "{{ _existing_ops.stdout_lines }}"
+      loop_control:
+        index_var: _idx
+        label: "{{ item }}"
+      when: _existing_ops.stdout_lines | length > 0
+
     - name: Show existing operations
       ansible.builtin.debug:
-        msg: "Existing operations on this box: {{ _existing_ops.stdout_lines | join(', ') }}"
+        msg: "{{ _ops_menu_lines + ['', '  Enter a NUMBER to continue that operation,', '  or type a NEW name (e.g. BRASS) to start a new deployment.'] }}"
       when: _existing_ops.stdout_lines | length > 0
 
     - name: Check for legacy .env
@@ -43,17 +57,45 @@
 
     - name: Prompt for operation name
       ansible.builtin.pause:
-        prompt: "Operation name (e.g. BRASS)"
+        prompt: "{{ (_existing_ops.stdout_lines | length > 0) | ternary('Operation (number from the list above, or a new name)', 'Operation name (e.g. BRASS)') }}"
         echo: yes
       register: _op_name_input
       when: op_name is not defined
+
+    - name: Resolve a numeric menu choice to its operation name
+      # "2" → second op in the list. Anything non-numeric (or out of range)
+      # passes through untouched and is treated as an operation name. A side
+      # effect worth knowing: an op cannot be NAMED a bare number that
+      # collides with a menu index — acceptable, nobody names ops "3".
+      ansible.builtin.set_fact:
+        _op_selection: >-
+          {%- set inp = (op_name | default((_op_name_input | default({})).user_input, true) | default('', true)) | trim -%}
+          {%- set ops = _existing_ops.stdout_lines -%}
+          {%- if inp is match('^[0-9]+$') and (inp | int) >= 1 and (inp | int) <= (ops | length) -%}
+          {{ ops[(inp | int) - 1] }}
+          {%- else -%}
+          {{ inp }}
+          {%- endif -%}
+
+    - name: Reject a numeric choice that matches no menu entry
+      # A bare number that is not a valid menu index is a typo, not an op
+      # name — without this guard "99" would silently create a fresh OP_99
+      # config, the exact operator mistake the menu exists to prevent.
+      ansible.builtin.fail:
+        msg: >-
+          '{{ _op_selection }}' is not a valid choice.
+          {{ (_existing_ops.stdout_lines | length > 0)
+             | ternary('Enter a number between 1 and ' ~ (_existing_ops.stdout_lines | length) ~ ', or type', 'Type') }}
+          a name (e.g. BRASS) to start a new operation.
+      when:
+        - _op_selection is match('^[0-9]+$')
 
     - name: Normalise operation name
       # 'brass', 'op brass', 'OP_BRASS' all become OP_BRASS — case and
       # spacing differences can never fork an op's configuration.
       ansible.builtin.set_fact:
         op_id: >-
-          {%- set raw = (op_name | default(_op_name_input.user_input, true) | default('', true))
+          {%- set raw = _op_selection
                         | trim | upper | regex_replace('[^A-Z0-9]+', '_')
                         | regex_replace('^_+', '') | regex_replace('_+$', '') -%}
           {%- if raw | length == 0 -%}
@@ -124,10 +166,18 @@
         env_file: "{{ env_file }}"
         op_id: "{{ op_id }}"
 
+    # Banner/menu msgs are passed as a LIST of lines (split on newline), not
+    # one multi-line string: the default callback renders a single string as
+    # a \n-escaped blob unless ansible.cfg sets result_format=yaml — and that
+    # cfg is silently IGNORED when the repo dir is world-writable (easy to
+    # cause with an scp push). A list renders one line per row under every
+    # callback/config combination, so the ASCII art can no longer be mangled
+    # by environment state.
     - name: Display Orochi Banner
       ansible.builtin.debug:
-        msg: |
-
+        msg: '{{ _orochi_banner.split("\n") }}'
+      vars:
+        _orochi_banner: |-
           ╔═══════════════════════════════════════════════════════════════╗
           ║                                                               ║
           ║     ██████  ██████   ██████   ██████ ██   ██ ██               ║
@@ -144,11 +194,11 @@
           Operation: {{ op_id }}
           Target:    {{ orochi_node_ip }}
 
-
     - name: Display menu
       ansible.builtin.debug:
-        msg: |
-
+        msg: '{{ _orochi_menu.split("\n") }}'
+      vars:
+        _orochi_menu: |-
           ┌──────────────────────────────────────────┐
           │            DEPLOYMENT OPTIONS            │
           ├──────────────────────────────────────────┤
@@ -514,9 +564,11 @@
 
   post_tasks:
     - name: Display Access Information
+      # List-of-lines form — see banner comment above for why.
       ansible.builtin.debug:
-        msg: |
-
+        msg: '{{ _access_info.split("\n") }}'
+      vars:
+        _access_info: |-
           ╔═══════════════════════════════════════════════════════════════╗
           ║                    DEPLOYMENT COMPLETE                        ║
           ╠═══════════════════════════════════════════════════════════════╣
@@ -532,7 +584,6 @@
           ║  • TheHive:       http://<IP>:9000                            ║
           ║  • Velociraptor:  https://<IP>:8889                           ║
           ╚═══════════════════════════════════════════════════════════════╝
-
       when: (deploy_selections | intersect(['1','2','3','4','5','6','7','8','9','10','11'])) | length > 0
       tags: always
 
