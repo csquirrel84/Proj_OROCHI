@@ -52,7 +52,7 @@
     binary_artifacts:
       - url: "https://github.com/activecm/rita/releases/download/{{ rita_version }}/rita-{{ rita_version }}.tar.gz"
         dest: "rita-{{ rita_version }}.tar.gz"
-      - url: "https://download.opensuse.org/repositories/security:/zeek/xUbuntu_24.04/Release.key"
+      - url: "https://download.opensuse.org/repositories/security:/zeek/xUbuntu_{{ node_ubuntu_release }}/Release.key"
         dest: "zeek-release.key"
 
   tasks:
@@ -521,7 +521,8 @@
 
     - name: Download Docker .deb packages (full closure, clean container)
       # CRITICAL: download the COMPLETE dependency closure inside a pristine
-      # ubuntu:25.10 container, NOT on the management box. `apt-get install
+      # container matching the NODE's Ubuntu release (node_ubuntu_release),
+      # NOT on the management box. `apt-get install
       # --download-only` on the host only fetches dependencies the host does
       # NOT already have — and the mgmt box runs Docker, so it already has most
       # of them. That silently omits them from the bundle, leaving a minimal
@@ -537,7 +538,7 @@
         mkdir -p {{ artifacts_dir }}/docker-debs
         docker run --rm \
           -v {{ artifacts_dir }}/docker-debs:/debs \
-          ubuntu:25.10 \
+          ubuntu:{{ node_ubuntu_release }} \
           bash -c '
             set -e
             export DEBIAN_FRONTEND=noninteractive
@@ -572,15 +573,18 @@
 
     - name: Download Zeek .deb packages (full closure, clean container)
       # Same rationale as Docker/Suricata: download the full dependency closure
-      # in a pristine ubuntu:25.10 container so no host-installed dependency is
+      # in a pristine node-release container so no host-installed dependency is
       # silently omitted from the bundle. --no-install-recommends is what keeps
       # courier/gnutls-bin/libunbound8 (NOT Zeek dependencies — they only ever
       # arrived as recommends) out of the bundle; those recommends riding along
       # in a host download were the root cause that contaminated earlier nodes
-      # and blocked apt. The opensuse Zeek repo only publishes for
-      # xUbuntu_24.04, but those packages install cleanly on 25.10 (what the
-      # node runs), so a 25.10 container resolves the identical closure the node
-      # needs. The repo + key are set up INSIDE the container; the mounted
+      # and blocked apt. The opensuse Zeek repo path tracks node_ubuntu_release
+      # (xUbuntu_<release>) so the packages are built for the release the node
+      # actually runs — no cross-release gap to reason about. OBS does not
+      # publish for every Ubuntu release: verify the directory exists at
+      # https://download.opensuse.org/repositories/security:/zeek/ before
+      # bumping node_ubuntu_release, or this task 404s on apt-get update.
+      # The repo + key are set up INSIDE the container; the mounted
       # zeek-release.key is the same one served to the node (single source).
       ansible.builtin.shell: |
         set -e
@@ -589,7 +593,7 @@
         docker run --rm \
           -v {{ artifacts_dir }}/zeek-debs:/debs \
           -v {{ artifacts_dir }}/zeek-release.key:/zeek-release.key:ro \
-          ubuntu:25.10 \
+          ubuntu:{{ node_ubuntu_release }} \
           bash -c '
             set -e
             export DEBIAN_FRONTEND=noninteractive
@@ -598,7 +602,7 @@
             install -m 0755 -d /etc/apt/keyrings
             gpg --dearmor < /zeek-release.key \
               > /etc/apt/keyrings/zeek-archive-keyring.gpg
-            echo "deb [signed-by=/etc/apt/keyrings/zeek-archive-keyring.gpg] http://download.opensuse.org/repositories/security:/zeek/xUbuntu_24.04/ /" \
+            echo "deb [signed-by=/etc/apt/keyrings/zeek-archive-keyring.gpg] http://download.opensuse.org/repositories/security:/zeek/xUbuntu_{{ node_ubuntu_release }}/ /" \
               > /etc/apt/sources.list.d/zeek.list
             apt-get update -qq
             apt-get install -y --download-only --no-install-recommends \
@@ -633,7 +637,7 @@
     # ── Suricata .deb packages — Ubuntu default repos ─────────────────────────
 
     - name: Download Suricata .deb packages (full closure, clean container)
-      # CRITICAL: download inside a clean ubuntu:25.10 container, NOT on the
+      # CRITICAL: download inside a clean node-release container, NOT on the
       # management box. `apt-get install --download-only` only fetches deps the
       # host does NOT already have installed — so building the bundle on the
       # mgmt box silently omits any dependency the mgmt box happens to have
@@ -648,7 +652,7 @@
         mkdir -p {{ artifacts_dir }}/suricata-debs
         docker run --rm \
           -v {{ artifacts_dir }}/suricata-debs:/debs \
-          ubuntu:25.10 \
+          ubuntu:{{ node_ubuntu_release }} \
           bash -c '
             set -e
             export DEBIAN_FRONTEND=noninteractive
@@ -806,14 +810,14 @@
       # and are never cached. On the bench this is invisible (apt-cacher-ng
       # fetches on demand while the mgmt box is online); in the field with the
       # mgmt box offline, the node fails to install e.g. python3-docker. A
-      # clean ubuntu:25.10 container has nothing installed, so apt resolves
+      # clean node-release container has nothing installed, so apt resolves
       # the FULL closure and every deb transits the proxy into the cache.
       # --network host so the container reaches apt-cacher-ng on localhost.
       # NO failed_when:false — silent warming failure means a broken field
       # deployment, so this must fail loudly.
       ansible.builtin.shell: |
         set -e
-        docker run --rm --network host ubuntu:25.10 bash -c '
+        docker run --rm --network host ubuntu:{{ node_ubuntu_release }} bash -c '
           set -e
           export DEBIAN_FRONTEND=noninteractive
           echo "Acquire::http::Proxy \"http://localhost:{{ mgmt_apt_proxy_port }}\";" \

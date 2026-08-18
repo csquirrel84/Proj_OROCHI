@@ -34,7 +34,7 @@ artifact_base_url: "http://{{ mgmt_box_ip }}:{{ mgmt_artifact_port }}"
 # ==============================================
 # VERSION PINNING
 # ==============================================
-stack_version: "9.3.4"
+stack_version: "9.5.1"
 elasticsearch_hive_version: "7.17.9"
 thehive_version: "4.1.19"
 cassandra_version: "4.0"
@@ -46,6 +46,13 @@ rita_version: "v5.1.2"
 arkime_version: "v6-latest"
 timesketch_version: "latest"
 redis_version: "7-alpine"
+
+# Ubuntu release of the OROCHI NODE. prep_artefacts builds every .deb bundle
+# inside a container of this release so apt resolves the same dependency
+# closure the node will need offline. It must track the node's actual OS —
+# a mismatch produces debs the node cannot install (or that pull in the wrong
+# libc/openssl generation). Bump this only after the node itself is upgraded.
+node_ubuntu_release: "26.04"
 
 # ── Elastic Agent installer mirror ────────────────────────────────────────────
 # Endpoints on the target network cannot reach artifacts.elastic.co, so the

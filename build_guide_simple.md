@@ -12,7 +12,7 @@ Do this once before going on-site. You need internet for this phase only.
 
 ### Step 0.1 — Install Ubuntu on the management box
 
-Install Ubuntu Server 25.10 on the management laptop.
+Install Ubuntu Server 26.04 LTS on the management laptop.
 
 During install:
 - Create user: **`orochiman`** with sudo access
@@ -71,7 +71,7 @@ You can now disconnect from the internet.
 
 ### Step 1 — Install Ubuntu on the orochi node
 
-Boot the NUC from a USB drive, install Ubuntu Server 25.10.
+Boot the NUC from a USB drive, install Ubuntu Server 26.04 LTS.
 
 > **IMPORTANT:** During install you MUST create the user exactly as shown below.
 > If the username is wrong, Ansible will not be able to connect and deployment will fail.

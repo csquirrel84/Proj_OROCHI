@@ -198,16 +198,25 @@ Proj_OROCHI/
 ## Tested Baseline / Known-Good Environment
 
 > **If a fresh deploy throws OS/package/interpreter errors, suspect the node OS
-> first — not the roles.** Everything below was validated against these versions.
-> A node running a *newer* Ubuntu than 25.10, or a *dirty* base image, is the
-> single most common cause of a failing run.
+> first — not the roles.** A *dirty* base image, or a node whose release does
+> not match `node_ubuntu_release` in `group_vars/all.yml`, is the single most
+> common cause of a failing run.
 
-- **Node OS:** Ubuntu **Server 25.10**, freshly installed, nothing added beyond
-  the base system + OpenSSH. Do not deploy onto an upgraded/mixed release.
-  A node on Ubuntu 26.04 (Python 3.14, DPDK-ified Suricata, kernel 7.x) hit
-  pre-dependency ordering failures, a debconf hang, and interpreter-discovery
-  warnings that a clean 25.10 node does not.
-- **Management box OS:** Ubuntu 24.04 LTS or 25.10.
+- **Node OS:** Ubuntu **Server 26.04 LTS** (moved from 25.10 in August 2026,
+  when 25.10 went EOL and stopped receiving security patches). Freshly
+  installed, nothing added beyond the base system + OpenSSH.
+  `node_ubuntu_release` in `group_vars/all.yml` MUST match — prep_artefacts
+  builds every `.deb` bundle in a container of that release so apt resolves the
+  closure the node will actually need. Re-run prep_artefacts after any node
+  release change, or the node installs debs built against the wrong libc.
+- **Known 26.04 friction (recorded from the first attempt, kept as a signal):**
+  Python 3.14, DPDK-ified Suricata and kernel 7.x produced pre-dependency
+  ordering failures, a debconf hang, and interpreter-discovery warnings that
+  25.10 did not. The Suricata/Zeek half of that is now moot — both sensors moved
+  off the node to the pfSense firewall — but the debconf and interpreter issues
+  are not sensor-specific, so they remain the first things to check if a 26.04
+  deploy misbehaves.
+- **Management box OS:** Ubuntu 26.04 LTS (also moved from 25.10, August 2026).
 - **`.deb` bundles install via `apt-get install ./*.deb`, never `dpkg -i *.deb`** —
   modern packages (e.g. Suricata's DPDK deps) have pre-dependencies that a flat
   `dpkg -i` glob cannot order. The suricata/common roles already do this; keep it.
