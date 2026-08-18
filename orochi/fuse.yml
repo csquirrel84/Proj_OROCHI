@@ -700,7 +700,12 @@
     - name: Start Arkime remote capture container
       community.docker.docker_container:
         name: arkimecapture-remote
-        image: "{{ _registry_host }}:{{ mgmt_registry_port }}/arkime/arkime:{{ arkime_version }}"
+        # arkime_version from the orochi host, not group_vars: the environment
+        # role resolves the tag the operator actually chose (or the one found in
+        # the registry) as a fact on that host. A bare {{ arkime_version }} here
+        # silently falls back to the group_vars default, so the remote capture
+        # box could run a different Arkime build than the node it reports to.
+        image: "{{ _registry_host }}:{{ mgmt_registry_port }}/arkime/arkime:{{ hostvars['orochi']['arkime_version'] }}"
         state: started
         restart_policy: unless-stopped
         network_mode: host
@@ -713,7 +718,12 @@
           ARKIME__elasticsearch:          "https://{{ hostvars['localhost']['orochi_node_ip'] }}:{{ orochi_es_port }}"
           ARKIME__elasticsearchBasicAuth: "elastic:{{ hostvars['orochi']['common_password'] }}"
           ARKIME__caTrustFile:            "/opt/arkime/etc/ca.crt"
-          ARKIME__passwordSecret:         "{{ hostvars['orochi']['common_password'] }}"
+          # The HMAC secret Arkime salts user password hashes with — it must be
+          # the SAME value the node's arkime role used, not the engagement
+          # password. The environment role generates it randomly and persists it
+          # to the op's .env; a mismatch here leaves the remote node unable to
+          # validate any Arkime user.
+          ARKIME__passwordSecret:         "{{ hostvars['orochi']['arkime_password_secret'] }}"
           ARKIME__interface:              "{{ remote_capture_interface }}"
           ARKIME__pcapDir:                "/opt/arkime/raw"
           ARKIME__viewPort:               "{{ remote_capture_port | string }}"
