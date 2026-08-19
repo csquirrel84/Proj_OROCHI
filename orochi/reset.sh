@@ -81,6 +81,7 @@ echo -e "${YELLOW}[2/9] Removing Docker containers...${NC}"
 
 CONTAINERS=(
     tool-portal
+    slips
     elastic-artifacts
     timesketch
     timesketch-worker
@@ -144,6 +145,7 @@ for path in \
     /etc/rita \
     /var/log/rita \
     /usr/local/bin/rita \
+    /usr/local/bin/slips \
     /tmp/docker-debs \
     /tmp/docker-debs.tar.gz \
     /tmp/zeek-debs \

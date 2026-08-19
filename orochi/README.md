@@ -31,6 +31,7 @@ Pre-cache everything on a management box with internet, then deploy the full sta
 | 11 | Tool Portal | Service dashboard | 80 |
 | 12 | Arkime Remote Capture | Capture node on any additional box (not in `all`) | 8007 |
 | 13 | Lockdown Firewall | Flip capture-NIC firewall LOG → DROP (not in `all`) | — |
+| 14 | Slips | Behavioural ML detection over Zeek logs | 55000 |
 
 ## Quick Start
 

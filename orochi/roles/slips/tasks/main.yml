@@ -1,0 +1,247 @@
+---
+# ==============================================
+# SLIPS ROLE - Behavioural ML IDS over Zeek logs
+# Runs as a LIVE service: -g follows the growing Zeek spool that pfSense (or
+# the local zeek role) writes, so detections keep pace with the logs. The
+# wrapper at /usr/local/bin/slips remains for ad-hoc runs against archives.
+# ==============================================
+
+- name: Create Slips directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - "{{ directories.slips }}"
+    - "{{ directories.slips }}/config"
+    - "{{ directories.slips }}/config/local_ti_files"
+    - "{{ directories.slips }}/output"
+  tags: slips
+
+- name: Pull Slips image
+  community.docker.docker_image:
+    name: "{{ images.slips }}"
+    source: pull
+  tags: slips
+
+# ── Threat intel ──────────────────────────────────────────────────────────────
+# Two independent mechanisms, both used:
+#   ti_files                        — the 40+ REMOTE feeds. prep_artefacts
+#                                     mirrors them and rewrites every URL to
+#                                     point at the management box, so a node
+#                                     with no internet still gets TI.
+#   local_threat_intelligence_files — YOUR OWN indicators (engagement IOCs,
+#                                     JA3/JARM hashes). Never downloaded.
+
+- name: Fetch mirrored TI feed list from artifact server
+  ansible.builtin.get_url:
+    url: "{{ artifact_base_url }}/slips-feeds/TI_feeds.csv"
+    dest: "{{ directories.slips }}/config/TI_feeds.csv"
+    mode: '0644'
+    # force: the feed list changes whenever prep re-mirrors; a cached copy
+    # would keep pointing at feeds the management box no longer serves.
+    force: true
+  register: _slips_feeds
+  # Not fatal: an artifact store predating this feature should still deploy
+  # Slips, just without remote TI. Same idiom as the rita version-file check.
+  failed_when: false
+  tags: slips
+
+- name: Warn if the management box has no mirrored Slips feeds
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: {{ artifact_base_url }}/slips-feeds/TI_feeds.csv not found —
+      Slips will run with NO remote threat intel. Re-run prep_artefacts.yml
+      on the management box to mirror the feeds, then re-run this role.
+  when: _slips_feeds is failed
+  tags: slips
+
+- name: Seed an empty TI feed list when none was mirrored
+  # Without a readable ti_files path the threat_intelligence module errors on
+  # every flow. An empty list degrades cleanly to "no remote TI" instead.
+  ansible.builtin.copy:
+    dest: "{{ directories.slips }}/config/TI_feeds.csv"
+    content: "# No feeds mirrored - run prep_artefacts.yml on the management box\n"
+    mode: '0644'
+    force: false
+  when: _slips_feeds is failed
+  tags: slips
+
+# ── Configuration ─────────────────────────────────────────────────────────────
+# The config is the image's OWN slips.yaml with four keys patched — NOT a
+# minimal file of our own. Slips treats the file given to -c as the entire
+# configuration rather than a set of overrides, so a partial file leaves keys
+# unset and modules die on startup (observed: feeds_update_manager exiting with
+# "OSError: [Errno 9] Bad file descriptor" reading its SSL feeds path).
+# Extracting the stock file each run also means an image upgrade brings its new
+# defaults with it instead of silently keeping ours.
+
+- name: Extract the stock Slips configuration from the image
+  ansible.builtin.command: docker run --rm {{ images.slips }} cat config/slips.yaml
+  register: _slips_stock
+  changed_when: false
+  tags: slips
+
+- name: Write patched Slips configuration
+  # Modules that egress are disabled. The image already defaults most of these
+  # off (p2p_trust, fides, iris, cesnet, exporting_alerts, blocking,
+  # arp_poisoner) but virustotal starts by DEFAULT — confirmed in a live run —
+  # so this list is doing real work, not restating defaults.
+  # blocking/arp_poisoner are additionally impossible: the container is granted
+  # no NET_ADMIN, so they cannot touch the network even if re-enabled.
+  #
+  # client_ips matters for the ad-hoc wrapper, which runs with -f and no -i:
+  # there Slips has no interface to derive the local network from, and this is
+  # the documented way to tell it ("useful to specify it when analyzing pcaps
+  # or Zeek logs"). The live service gets its boundary from -i instead.
+  ansible.builtin.copy:
+    dest: "{{ directories.slips }}/config/slips.yaml"
+    mode: '0644'
+    content: >-
+      {{ _slips_stock.stdout
+         | regex_replace('(?m)^  client_ips: \[\]$',
+                         '  client_ips: [' ~ (suricata.home_net | default('192.168.0.0/16')) ~ ']')
+         | regex_replace('(?m)^  disable: \[template\]$',
+                         '  disable: ' ~ slips_disabled_modules)
+         | regex_replace('(?m)^  ti_files: .*$',
+                         '  ti_files: /config/TI_feeds.csv')
+         | regex_replace('(?m)^  local_threat_intelligence_files: .*$',
+                         '  local_threat_intelligence_files: /config/local_ti_files/') }}
+  vars:
+    slips_disabled_modules: >-
+      [template, p2p_trust, fides, iris, virustotal, risk_iq,
+      cesnet, exporting_alerts, blocking, arp_poisoner, cyst]
+  register: _slips_conf
+  tags: slips
+
+# ── Which interface defines "local" ───────────────────────────────────────────
+# NOT cosmetic, and the reason this container uses HOST networking. Slips
+# derives its internal/external boundary from the address on the -i interface,
+# and validates that the interface exists INSIDE the container. On a bridge
+# network the only visible NIC is eth0 on the Docker subnet, which yields
+# "used local network 172.18.0.0/16" and flags every monitored host as
+# external (observed). Host networking exposes the real NIC, giving the
+# correct "Used local network: <node subnet>".
+- name: Resolve the interface Slips uses to define the local network
+  ansible.builtin.set_fact:
+    slips_local_iface: "{{ slips_interface | default(ansible_facts['default_ipv4']['interface'], true) }}"
+  tags: slips
+
+- name: Start Slips live analysis container
+  # network_mode: host is REQUIRED — see the comment above. It also means the
+  # web UI binds {{ ports.slips }} directly on the host with no port mapping.
+  # Still no NET_ADMIN: this analyses shipped logs, it never captures or blocks.
+  community.docker.docker_container:
+    name: slips
+    image: "{{ images.slips }}"
+    state: started
+    restart_policy: unless-stopped
+    network_mode: host
+    volumes:
+      - "{{ zeek_log_dir | default('/opt/zeek/logs') }}/current:/zeek_logs:ro"
+      - "{{ directories.slips }}/config:/config:ro"
+      - "{{ directories.slips }}/output:/output"
+    # The web UI is hardcoded to bind 127.0.0.1 (webinterface/app.py:
+    # app.run(host="127.0.0.1", ...)) with no config option, which makes it
+    # unreachable from the analyst LAN, Tailscale, or the portal card.
+    # Publishing a port does not help: Docker forwards to the container IP,
+    # where nothing is listening either.
+    #
+    # So the bind is patched at CONTAINER START, not baked into an image. An
+    # upgraded image is therefore re-patched automatically. If upstream ever
+    # changes that line the grep fails and the container refuses to start —
+    # loud, rather than silently reverting to localhost-only.
+    #
+    # Scoped to app.py deliberately: the other 127.0.0.1 references are the
+    # Redis client target (webinterface/database/database.py) and the
+    # "has the web UI come up yet" probe (webinterface/utils.py). A tree-wide
+    # replace would break Redis. Binding 0.0.0.0 still accepts on loopback,
+    # so that probe keeps working.
+    command:
+      - bash
+      - -c
+      - |
+        set -e
+        if ! grep -q 'host="127.0.0.1"' webinterface/app.py; then
+          echo "SLIPS BIND PATCH FAILED: webinterface/app.py no longer contains" >&2
+          echo "host=\"127.0.0.1\" - upstream changed it. The web UI would be" >&2
+          echo "localhost-only. See roles/slips in the OROCHI repo." >&2
+          exit 1
+        fi
+        sed -i 's|host="127.0.0.1"|host="0.0.0.0"|' webinterface/app.py
+        exec ./slips.py -c /config/slips.yaml           -g /zeek_logs -i {{ slips_local_iface }}           -o /output -w
+    # docker_container compares the container spec, not the contents of mounted
+    # files — so a changed slips.yaml would otherwise be ignored until some
+    # unrelated change forced a recreate.
+    recreate: "{{ _slips_conf is changed }}"
+  tags: slips
+
+- name: Wait for the Slips web interface
+  ansible.builtin.wait_for:
+    host: localhost
+    port: "{{ ports.slips }}"
+    delay: 10
+    timeout: 180
+  register: _slips_web
+  ignore_errors: true
+  tags: slips
+
+- name: Show Slips logs if the web interface did not come up
+  ansible.builtin.command: docker logs --tail 30 slips
+  register: _slips_logs
+  changed_when: false
+  when: _slips_web is failed
+  tags: slips
+
+- name: Display Slips startup logs
+  ansible.builtin.debug:
+    msg: "{{ _slips_logs.stdout_lines | default([]) + _slips_logs.stderr_lines | default([]) }}"
+  when: _slips_web is failed
+  tags: slips
+
+- name: Install slips wrapper for ad-hoc analysis
+  # The live container handles current traffic; this is for retrospective runs
+  # against a dated archive. Separate container, separate Redis, so an ad-hoc
+  # run cannot disturb the running service.
+  # No -it: that breaks under cron and ansible with "the input device is not
+  # a TTY". No -i either: with -f, client_ips in the config defines the local
+  # network instead.
+  ansible.builtin.copy:
+    dest: /usr/local/bin/slips
+    mode: '0755'
+    content: |
+      #!/bin/bash
+      set -e
+      if [[ $# -lt 1 ]]; then
+        echo "Usage: slips <zeek-log-dir> [extra slips args]" >&2
+        echo "  e.g. slips /opt/zeek/logs/2026-08-18" >&2
+        echo "Live analysis runs continuously in the 'slips' container." >&2
+        exit 1
+      fi
+      LOGS=$(realpath "$1"); shift
+      [[ -d "$LOGS" ]] || { echo "Not a directory: $LOGS" >&2; exit 1; }
+      exec docker run --rm \
+        -v "$LOGS":/zeek_logs:ro \
+        -v {{ directories.slips }}/config:/config:ro \
+        -v {{ directories.slips }}/output:/output \
+        {{ images.slips }} \
+        ./slips.py -c /config/slips.yaml -f /zeek_logs -o /output "$@"
+  tags: slips
+
+- name: Display Slips status
+  ansible.builtin.debug:
+    msg:
+      - "Slips {{ slips_version }} running as a live service."
+      - ""
+      - "Web UI:     http://{{ orochi_server_ip }}:{{ ports.slips }}"
+      - "Watching:   {{ zeek_log_dir | default('/opt/zeek/logs') }}/current (growing)"
+      - "Local net:  derived from {{ slips_local_iface }}"
+      - "Alerts:     {{ directories.slips }}/output/"
+      - "Own IOCs:   {{ directories.slips }}/config/local_ti_files/"
+      - ""
+      - "Ad-hoc run against an archive:  slips /opt/zeek/logs/<date>"
+      - "External modules (P2P, VirusTotal, RiskIQ, CESNET) are DISABLED."
+      - ""
+      - "NOTE: Slips is CPU-hungry — it will use most available cores while it"
+      - "catches up on a log backlog. Watch it on a shared node."
+  tags: slips

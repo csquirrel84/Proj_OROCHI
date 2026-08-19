@@ -52,12 +52,13 @@ Dev addressing: management box `100.99.102.28` (Tailscale, user `orochiman`), no
 | `arkimecapture` | Full packet capture (promiscuous, `NET_ADMIN`/`NET_RAW`) |
 | `arkimeviewer` | PCAP review UI (port 8005) |
 | `arkimecapture-remote` | Optional — capture on additional boxes around the target network, shipping sessions to the node's ES while keeping PCAP local |
+| `slips` | Behavioural ML IDS following the growing Zeek spool (web UI :55000). Host networking is REQUIRED — Slips derives its internal/external boundary from the `-i` interface and validates it inside the container, so on a bridge it would use the Docker subnet. No `NET_ADMIN`: it analyses, never captures or blocks. Pinned to v1.1.21 — `latest`/v1.1.22 crashes at startup. Its web UI hardcodes a `127.0.0.1` bind, so the role rewrites that line to `0.0.0.0` at container start; an upgrade re-patches automatically, and if upstream changes the line the container refuses to start rather than silently reverting. **No authentication** — keep it off the monitored network |
 
 ### Bare metal (systemd)
 | Service | Role |
 |---------|------|
 | Zeek | Network metadata (installed from cached `.deb`s) |
-| Suricata | Network IDS (cached `.deb`s + cached free rulesets, ~15 min first start). Ships with the **Suricata Manager** — a stdlib-Python control API on the analyst NIC (:7000) to toggle per-source rules and pull refreshed bundles from the mgmt box, hot-reloading via `suricatasc` |
+| Suricata | Network IDS (cached `.deb`s + cached free rulesets, ~15 min first start). Rule sources are registered against the mgmt box, so an analyst refreshes them by running `suricata-update` on the node — no Ansible needed |
 
 ### Docker Compose stack at `/opt/rita/`
 | Container | Role |
@@ -97,15 +98,15 @@ Passive Capture (on-node)
 `playbooks/prep_artefacts.yml` — pulls and pushes all Docker images to the local registry (including all RITA compose images, resolved from the installer's own compose file), downloads Velociraptor (latest from GitHub API), Zeek/Suricata/Docker `.deb` tarballs, Suricata ET Open rules, writes version files, warms the apt cache, verifies everything, then declares the box offline-ready. Offers latest-Elastic-version detection with prompt, persists the choice to `group_vars/all.yml`.
 
 ### Phase 2 — On-site deployment (fully offline)
-`fuse.yml` — single entry point. Prompts first for an **Operation Name** (normalised to `OP_<NAME>`, selects/creates `OP_<NAME>.env`), resolves node IP (prompt on first run of the op, env file thereafter), prompts once for the **engagement password** (fans out to every service), always runs `bootstrap_node` (resolves/persists mgmt box IP, configures apt proxy, Docker insecure-registry trust), then presents a 12-option menu:
+`fuse.yml` — single entry point. Prompts first for an **Operation Name** (normalised to `OP_<NAME>`, selects/creates `OP_<NAME>.env`), resolves node IP (prompt on first run of the op, env file thereafter), prompts once for the **engagement password** (fans out to every service), always runs `bootstrap_node` (resolves/persists mgmt box IP, configures apt proxy, Docker insecure-registry trust), then presents a 14-option menu:
 
 ```
 1 Elastic Stack   2 TheHive 4      3 Velociraptor   4 Zeek
 5 Suricata        6 Arkime         7 CyberChef      8 Mattermost
 9 RITA            10 Timesketch    11 Tool Portal   12 Arkime Remote Capture
-13 Lockdown Firewall (LOG → DROP)
+13 Lockdown Firewall (LOG → DROP)   14 Slips (behavioural ML over Zeek logs)
 Space-separated multi-select, 'status', 'teardown'.
-'all' = 1-11 only — 12 (needs a capture target) and 13 (starts blocking
+'all' = 1-11 + 14 — 12 (needs a capture target) and 13 (starts blocking
 traffic) must always be selected explicitly. Option 12 prompts for a
 target: Enter = skip, 'local' = mgmt box, IP = remote host (root SSH).
 ```

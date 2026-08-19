@@ -147,10 +147,12 @@ Running 'teardown' stops and removes containers but does **not** delete these di
 | OS | Ubuntu 24.04 LTS | Ubuntu 26.04 LTS |
 | CPU | 4 cores | 8 cores |
 | RAM | 8 GB | 16 GB |
-| Storage | 100 GB free | 200 GB free |
+| Storage | 100 GB free | 250 GB free |
 | NICs | 1 (WiFi OK) | 2 (WiFi + ethernet) |
 
-The management box needs sufficient disk to cache all Docker image layers (approximately 40–60 GB) plus the binary artefacts (~2 GB). Docker image layers are deduplicated — the cache is smaller than the sum of individual image sizes.
+Disk is the binding constraint here, and the Elastic Agent mirror is the reason: roughly **10–12 GB** on its own, on top of 40–60 GB of Docker image layers and ~2 GB of binary artefacts. Docker layers are deduplicated, so the cache is smaller than the sum of the individual images. Both `prep_artefacts.yml` and the fleet role refuse to start the agent mirror below `elastic_agent_mirror_min_free_gb` (default 20 GB) rather than half-fill it.
+
+The management box is otherwise undemanding — it serves files over a LAN link. CPU only matters during `prep_artefacts.yml`, which builds the `.deb` bundles inside containers.
 
 ### Orochi Node (Deployment Target)
 
@@ -162,27 +164,59 @@ The management box needs sufficient disk to cache all Docker image layers (appro
 | Storage | 500 GB SSD | 2 TB NVMe |
 | NICs | 2 | 3 (management + target network + dedicated capture) |
 
-**RAM breakdown at full deployment (approximate):**
-- Elasticsearch 9.x: 4 GB container limit (2 GB heap)
-- Elasticsearch 7.x (TheHive): 1 GB container limit
-- Kibana: 2 GB
-- Cassandra: 2 GB
-- TheHive: 2 GB
-- Velociraptor: ~512 MB
-- Timesketch: 2 GB
-- Mattermost + PostgreSQL: ~1.5 GB
-- Suricata (bare metal): ~1–2 GB (scales with rule count)
-- Zeek (bare metal): ~512 MB
-- Arkime capture + viewer (Docker): ~1 GB
-- **Total:** approximately 20–22 GB active use. 32 GB is the practical minimum; 64 GB is comfortable.
+### CPU sizing — the constraint people miss
 
-**NIC roles:**
+RAM is easy to size because the limits are declared. CPU is not, and three workloads will take everything you give them:
+
+| Workload | Behaviour |
+|----------|-----------|
+| **Slips** (option 14) | Measured at **6.5 of 8 cores** while catching up on a Zeek backlog. It is not rate-limited — it uses whatever is idle. |
+| **Suricata** first start | Compiles 55,000+ ET Open signatures, pinning a core or two for **8–15 minutes**. Normal, not a fault. |
+| **Elasticsearch** indexing | Bursty, and competes directly with the above during heavy ingest. |
+
+On an 8-core node running Slips, load averages above 20 are normal and the box stays responsive — but Suricata will drop packets under sustained saturation, and a sensor that drops packets is lying to you on every dashboard. **16 cores is the real recommendation** if you intend to run Slips alongside on-node Suricata and Arkime. If you are constrained to 8, run Slips on demand via the wrapper rather than as a live service, or move the sensors off-box (see below).
+
+### RAM breakdown at full deployment (approximate)
+
+| Component | Usage |
+|-----------|-------|
+| Elasticsearch 9.x | 4 GB limit (2 GB heap) |
+| Elasticsearch 7.x (TheHive/Timesketch) | 1 GB limit |
+| Kibana | 2 GB |
+| Cassandra | 2 GB |
+| TheHive | 2 GB |
+| Timesketch | 2 GB |
+| Mattermost + PostgreSQL | ~1.5 GB |
+| Arkime capture + viewer | ~1 GB |
+| Slips | ~1.5 GB and rising with profile count |
+| Suricata (if on-node) | 1–2 GB, scales with rule count |
+| Zeek (if on-node) | ~512 MB |
+| Velociraptor | ~512 MB |
+
+**Total: roughly 20–24 GB active.** 32 GB is the practical minimum; 64 GB is comfortable and leaves headroom for ES heap growth on a long engagement.
+
+### Storage sizing
+
+Everything except packet capture is modest. **PCAP is what fills the disk**, and Arkime is configured for 1-day index rotation with 30-day retention, freeing space at 5% remaining. On a busy network 500 GB is a few days of full capture — size for the engagement length and the link speed, not for the software.
+
+The node also holds a second copy of the Elastic Agent mirror (**10–12 GB**) so endpoints can enrol without internet.
+
+### NIC roles
 
 | NIC | Purpose |
 |-----|---------|
-| Analyst NIC | Management traffic — SSH from management box, Docker pulls, apt |
-| Target NIC | Connected to the target network. Currently also used as the packet capture interface. |
-| Future USB NIC | Dedicated packet capture (promiscuous mode). |
+| Analyst NIC | Management traffic — SSH from the management box, Docker pulls, apt |
+| Target NIC | Connected to the monitored network; also the capture interface unless a dedicated one exists |
+| Dedicated capture NIC | Optional third NIC in promiscuous mode, keeping capture off the management path |
+
+> **If the sensors run elsewhere** — for example Zeek and Suricata on a pfSense firewall shipping logs to the node — the node needs no capture NIC and no promiscuous interface at all. It becomes a Docker host plus an Elastic Agent, and its CPU requirement drops sharply because the two packet-inspection workloads are gone. Slips and RITA still work: both read the shipped Zeek logs rather than the wire.
+
+### Running on a hypervisor
+
+The node deploys fine to a VM (Proxmox, ESXi, Hyper-V) and this is often the better choice — snapshots before a risky change, and the ability to grow CPU and RAM without rebuilding. Two things to get right:
+
+- **Give it real cores**, not oversubscribed vCPUs shared with other guests. The workloads above are genuinely CPU-bound, and steal time will show up as dropped packets.
+- **Pass through or bridge the capture NIC properly** if capturing on the node — a virtualised NIC in promiscuous mode needs the vSwitch configured to allow it, or Zeek and Suricata see nothing while appearing perfectly healthy.
 
 ---
 
@@ -555,9 +589,10 @@ Before displaying the menu, `fuse.yml` always runs the `bootstrap_node` role as 
 │  [11]  Tool Portal                       │
 │  [12]  Arkime Remote Capture             │
 │  [13]  Lockdown Firewall (LOG → DROP)    │
+│  [14]  Slips (Zeek log ML analysis)      │
 ├──────────────────────────────────────────┤
 │  Space-separated numbers  e.g. 1 4 5 6   │
-│  'all' to deploy 1-11 (never 12 or 13)   │
+│  'all' = 1-11 + 14 (never 12 or 13)      │
 │  'status' or 'teardown'                  │
 └──────────────────────────────────────────┘
 ```
@@ -565,7 +600,7 @@ Before displaying the menu, `fuse.yml` always runs the `bootstrap_node` role as 
 **Selection syntax:**
 - A single number deploys one service: `6`
 - Space-separated numbers deploy several in one run: `1 4 5 6`
-- `all` deploys options 1–11 only. Options 12 (needs a capture target decision and usually extra hardware) and 13 (changes what traffic reaches the box) must always be selected explicitly.
+- `all` deploys options 1–11 and 14. Options 12 (needs a capture target decision and usually extra hardware) and 13 (changes what traffic reaches the box) must always be selected explicitly.
 - `status` shows running containers; `teardown` removes everything (with confirmation)
 
 Shared prerequisites (`common`, `environment`, `firewall`, `certificates`, `elasticsearch`) run **once per fuse run** based on the combined selection — selecting `1 6` does not deploy Elasticsearch twice. This makes any individual option safe to run standalone.
@@ -578,7 +613,7 @@ Shared prerequisites (`common`, `environment`, `firewall`, `certificates`, `elas
 
 ### `all` — Deploy Everything
 
-Deploys options 1–11. Use this for a full engagement build from a clean node. Options 12 (Arkime Remote Capture) and 13 (Lockdown Firewall) are **never** included in `all` — run them explicitly when needed.
+Deploys options 1–11 and 14. Use this for a full engagement build from a clean node. Options 12 (Arkime Remote Capture) and 13 (Lockdown Firewall) are **never** included in `all` — run them explicitly when needed.
 
 **Role execution order:**
 Shared prerequisites first — `common` → `environment` → `firewall` → `certificates` → `elasticsearch` — then per-service: `kibana` → `fleet` → `thehive` → `velociraptor` → `zeek` → `suricata` → `arkime` → `cyberchef` → `mattermost` → `rita` → `timesketch` → `nginx_proxy` → remote capture.
@@ -702,8 +737,6 @@ Once you see `Engine started.`, Suricata is live. Subsequent restarts are fast (
 - `/var/log/suricata/eve.json` — full JSON event log (alerts, DNS, HTTP, TLS, flows)
 - `/var/log/suricata/fast.log` — human-readable alert log
 - `/var/log/suricata/stats.log` — performance statistics
-
-**Suricata Manager (rule source control):** Option 5 also installs the OROCHI Suricata Manager — a small control API on the analyst NIC (port 7000), linked from the portal's Suricata card. It lists every cached rule source (ET Open, abuse.ch SSLBL/URLhaus, OISF traffic-id, etc.) with a rule count and tick box. Untick a source and press **Apply & Reload** to rebuild the live ruleset and hot-reload Suricata via `suricatasc` — no 8–15 minute restart. Press **Update rules from mgmt box** to pull a refreshed source bundle from the management box artifact server (after you've run `check_updates.yml -e refresh_suricata=true` there with internet) and reload in place. The Manager binds to the analyst interface only, so it is never exposed on the monitored network — the firewall lockdown does not reach it.
 
 **Estimated time:** 5 minutes to deploy, 8–15 minutes for first service startup
 
@@ -890,6 +923,45 @@ If legitimate traffic (agent callbacks from unexpected ports, remote capture box
 
 ---
 
+### Option 14 — Deploy Slips
+
+Deploys [Slips](https://github.com/stratosphereips/StratosphereLinuxIPS), a behavioural machine-learning IDS, as a **live service** analysing the same Zeek logs RITA uses. It complements the other two detection layers rather than duplicating them: Suricata matches signatures, RITA scores beaconing statistically, Slips profiles behaviour and matches threat intel.
+
+**What it deploys:** a single `slips` container following the growing Zeek spool (`-g /opt/zeek/logs/current`), with a web UI on port 55000.
+
+> **Host networking is required, not a preference.** Slips derives its internal/external boundary from the address on the `-i` interface, and validates that interface *inside* the container. On a bridge network the only visible NIC is `eth0` on the Docker subnet, so Slips reports `used local network 172.18.0.0/16` and flags every monitored host as external. Host networking exposes the real NIC. It is still granted **no `NET_ADMIN`**, so it can never capture or block.
+
+**Version pinning matters here.** `latest` (== v1.1.22) crashes at startup — `_start_redis_server` calls the printer before its observers are valid, so it dies before Redis is even invoked. `group_vars/all.yml` pins **v1.1.21**, which runs clean. Do not bump this without testing.
+
+**Threat intel on an air-gapped node.** Slips fetches 40+ remote feeds by default. `prep_artefacts.yml` mirrors every one to the management box and rewrites `TI_feeds.csv` so each URL points there instead — the same approach used for Suricata rules. Your own indicators go in `/opt/orochi/slips/config/local_ti_files/` and are never downloaded.
+
+**Modules that egress are disabled**: `p2p_trust`, `fides`, `iris` (IoC sharing), `virustotal`, `risk_iq` (third-party submission), `cesnet`, `exporting_alerts` (external collectors), plus `blocking` and `arp_poisoner`. On an engagement any of these would be client data leaving the network. Note the image enables **virustotal by default**, so this is doing real work.
+
+**Web UI bind patch — read this before upgrading the image.** Slips hardcodes its web interface to `127.0.0.1` in `webinterface/app.py` (`app.run(host="127.0.0.1", ...)`) and offers no config option for it, which would leave the UI reachable only from a shell on the node — not from the analyst LAN, not over Tailscale, and not from the portal card. Publishing a Docker port does not help, because Docker forwards to the container IP where nothing is listening either.
+
+The role therefore rewrites that one line to `0.0.0.0` **at container start**, before exec'ing Slips. Two consequences worth understanding:
+
+- **An image upgrade re-applies the patch automatically** — it operates on the running container's filesystem, not a baked image, so there is nothing to remember after a version bump.
+- **If upstream changes that line, the container refuses to start** with `SLIPS BIND PATCH FAILED` in its logs, naming the file. That is deliberate: the alternative is silently reverting to localhost-only and leaving you wondering why the portal card is dead. If you hit it, check `webinterface/app.py` in the new image and update the `sed` in `roles/slips/tasks/main.yml`.
+
+The replace is scoped to `app.py` alone. The other `127.0.0.1` references in that tree are the Redis client target and the "has the web UI started yet" probe — a tree-wide replace would break Redis.
+
+> **The Slips web UI has no authentication.** Binding `0.0.0.0` exposes it on every interface the node holds, including the capture/target NIC. Under **firewall LOCKDOWN (option 13)** that NIC only permits 8220/9200, so it is not reachable from the monitored network. Under the default **MONITOR mode nothing is blocked** — the same is true of every other service, but Kibana and TheHive at least demand credentials and Slips does not. Bear it in mind on an engagement.
+
+**Ad-hoc analysis** of an archive, separate from the live service:
+
+```bash
+slips /opt/zeek/logs/2026-08-18
+```
+
+**Resource cost:** Slips is CPU-hungry — measured at 6.5 of 8 cores while catching up on a log backlog, with ~1.4 GB RAM. Watch it on a shared node.
+
+**Access:** `http://<node-ip>:55000` · **Alerts:** `/opt/orochi/slips/output/`
+
+**Estimated time:** 5 minutes
+
+---
+
 ### `status` — Show Status
 
 Runs `docker ps` on the orochi node and prints a formatted table of all running containers with their state and port mappings. Also check bare-metal services on the node:
@@ -956,6 +1028,7 @@ Replace `<node-ip>` with the orochi node's IP address.
 | **Mattermost** | `http://<node-ip>:8065` | HTTP | Setup wizard on first visit | — |
 | **Timesketch** | `http://<node-ip>:5000` | HTTP | `admin` | engagement password |
 | **Tool Portal** | `http://<node-ip>:80` | HTTP | — | — |
+| **Slips** | `http://<node-ip>:55000` | HTTP | — | — |
 
 > ⚠️ **TheHive default password is `secret`**. Change it immediately after first login: Admin → Users → admin → Edit.
 
@@ -1126,7 +1199,7 @@ All version pins are in `group_vars/all.yml`. To update any tool:
 - `cassandra_version: "4.0"` — TheHive 4 is tested against Cassandra 4
 - `stack_version` for Elasticsearch, Kibana, and Fleet Agent must all be the **same version** — the Elastic stack enforces version parity
 
-**Refreshing Suricata rules mid-engagement:** once deployed you don't re-run prep for new rules. On the management box run `check_updates.yml -e refresh_suricata=true`, then on the node open the portal's **Suricata Manager** and press **Update rules from mgmt box** — it pulls the refreshed bundle and hot-reloads Suricata. The node only ever pulls from the management box, never the internet.
+**Refreshing Suricata rules mid-engagement:** on the management box run `check_updates.yml -e refresh_suricata=true` (needs internet) to re-mirror the sources, then on the node run `suricata-update` — the sources are already registered against the management box, so no Ansible run is required. The node only ever pulls from the management box, never the internet.
 
 ---
 

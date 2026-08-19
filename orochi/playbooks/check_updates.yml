@@ -75,6 +75,7 @@
           - "Velociraptor  : latest {{ (_velox_latest.json.tag_name | default('?')) if _velox_latest.json is defined else '?' }}  (resolved fresh at prep time — always current)"
           - "RITA          : pinned {{ rita_version }}  latest {{ (_rita_latest.json.tag_name | default('?')) if _rita_latest.json is defined else '?' }}{{ '   ** UPDATE **' if (_rita_latest.json.tag_name | default('') if _rita_latest.json is defined else '') not in ['', rita_version] else '   up to date' }}  (also auto-checked & promptable in prep_artefacts.yml)"
           - "Arkime        : pinned {{ arkime_version }}  (rolling tag — re-pulled each prep)"
+          - "Slips         : pinned {{ slips_version }}  [DO NOT use latest/v1.1.22 — it crashes at startup]"
           - "TheHive 4     : {{ thehive_version }}  [FROZEN] {{ frozen_note }}"
           - "ES for TheHive: {{ elasticsearch_hive_version }}  [FROZEN]"
           - "Suricata rules: refresh with  -e refresh_suricata=true"

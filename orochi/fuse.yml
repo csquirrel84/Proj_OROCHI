@@ -215,9 +215,10 @@
           │  [11]  Tool Portal                       │
           │  [12]  Arkime Remote Capture             │
           │  [13]  Lockdown Firewall (LOG → DROP)    │
+          │  [14]  Slips (Zeek log ML analysis)      │
           ├──────────────────────────────────────────┤
           │  Space-separated numbers  e.g. 1 4 5 6   │
-          │  'all' to deploy 1-11 (never 12 or 13)   │
+          │  'all' = 1-11 + 14 (never 12 or 13)      │
           │  'status' or 'teardown'                  │
           └──────────────────────────────────────────┘
 
@@ -236,7 +237,7 @@
             {#- 'all' deliberately excludes 12 (needs extra hardware / a target
                 decision) and 13 (changes what traffic reaches the box).
                 Both must be selected explicitly. -#}
-            {{ ['1','2','3','4','5','6','7','8','9','10','11'] }}
+            {{ ['1','2','3','4','5','6','7','8','9','10','11','14'] }}
           {%- elif raw in ['status', 'teardown'] -%}
             {{ [raw] }}
           {%- else -%}
@@ -249,7 +250,7 @@
           Invalid selection '{{ item }}'.
           Valid choices: 1-13 (space-separated), 'all' (deploys 1-11 —
           12 and 13 must be selected explicitly), 'status', 'teardown'.
-      when: item not in ['1','2','3','4','5','6','7','8','9','10','11','12','13','status','teardown']
+      when: item not in ['1','2','3','4','5','6','7','8','9','10','11','12','13','14','status','teardown']
       loop: "{{ deploy_selections }}"
 
     - name: Fail if nothing was selected
@@ -414,6 +415,7 @@
             state: absent
           loop:
             - tool-portal
+            - slips
             - timesketch
             - timesketch-worker
             - redis-timesketch
@@ -475,7 +477,7 @@
     - name: Deploy common role
       ansible.builtin.include_role:
         name: common
-      when: (deploy_selections | intersect(['1','2','3','4','5','6','7','8','9','10','11','13'])) | length > 0
+      when: (deploy_selections | intersect(['1','2','3','4','5','6','7','8','9','10','11','13','14'])) | length > 0
 
     - name: Deploy environment role
       ansible.builtin.include_role:
@@ -562,6 +564,11 @@
         name: nginx_proxy
       when: "'11' in deploy_selections"
 
+    - name: Deploy Slips
+      ansible.builtin.include_role:
+        name: slips
+      when: "'14' in deploy_selections"
+
   post_tasks:
     - name: Display Access Information
       # List-of-lines form — see banner comment above for why.
@@ -584,7 +591,7 @@
           ║  • TheHive:       http://<IP>:9000                            ║
           ║  • Velociraptor:  https://<IP>:8889                           ║
           ╚═══════════════════════════════════════════════════════════════╝
-      when: (deploy_selections | intersect(['1','2','3','4','5','6','7','8','9','10','11'])) | length > 0
+      when: (deploy_selections | intersect(['1','2','3','4','5','6','7','8','9','10','11','14'])) | length > 0
       tags: always
 
     - name: Show install log location

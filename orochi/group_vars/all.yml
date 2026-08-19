@@ -46,6 +46,7 @@ rita_version: "v5.1.2"
 arkime_version: "v6-latest"
 timesketch_version: "latest"
 redis_version: "7-alpine"
+slips_version: "v1.1.21"   # v1.1.22/latest crashes at startup (printer observer bug in _start_redis_server)
 
 # Ubuntu release of the OROCHI NODE. prep_artefacts builds every .deb bundle
 # inside a container of this release so apt resolves the same dependency
@@ -115,7 +116,7 @@ images:
   timesketch:         "{{ mgmt_box_ip }}:{{ mgmt_registry_port }}/timesketch/timesketch:{{ timesketch_version }}"
   redis:              "{{ mgmt_box_ip }}:{{ mgmt_registry_port }}/redis:{{ redis_version }}"
   arkime:             "{{ mgmt_box_ip }}:{{ mgmt_registry_port }}/arkime/arkime:{{ arkime_version }}"
-
+  slips:              "{{ mgmt_box_ip }}:{{ mgmt_registry_port }}/stratosphereips/slips:{{ slips_version }}"
 
 # ==============================================
 # PORT CONFIGURATION
@@ -138,6 +139,10 @@ ports:
   # Node-hosted Elastic Artifact Registry — endpoints fetch agent installers
   # and upgrade binaries from here instead of artifacts.elastic.co.
   agent_artifacts: 8890
+  # Slips runs with host networking (its -i interface must be a REAL host NIC
+  # or it derives the wrong local network), so this is the port it binds
+  # directly on the host - there is no container port mapping to remap it.
+  slips: 55000
 
 
 # ==============================================
@@ -225,3 +230,4 @@ directories:
   rita: "{{ orochi_base_path }}/rita"
   logs: "{{ orochi_base_path }}/logs"
   agent_artifacts: "{{ orochi_base_path }}/agent-artifacts"
+  slips: "{{ orochi_base_path }}/slips"

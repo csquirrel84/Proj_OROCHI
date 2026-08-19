@@ -48,6 +48,8 @@
         local: "redis:{{ redis_version }}"
       - src: "ghcr.io/arkime/arkime/arkime:{{ arkime_version }}"
         local: "arkime/arkime:{{ arkime_version }}"
+      - src: "stratosphereips/slips:{{ slips_version }}"
+        local: "stratosphereips/slips:{{ slips_version }}"
 
     binary_artifacts:
       - url: "https://github.com/activecm/rita/releases/download/{{ rita_version }}/rita-{{ rita_version }}.tar.gz"
@@ -801,6 +803,29 @@
       ansible.builtin.debug:
         msg: "{{ rules_result.stdout_lines | select('match', '^(OK|SKIP)') | list }}"
 
+    # ── Slips threat intel feeds ───────────────────────────────────────────────
+    # Slips' feeds_update_manager fetches every URL in TI_feeds.csv at startup
+    # and every TI_files_update_period thereafter. The deployed node has no
+    # internet, so we mirror each feed here and ship a rewritten CSV whose URLs
+    # point at this box — the same trick used for the Suricata rule sources.
+    # The script runs INSIDE the Slips image because that is where the
+    # authoritative upstream TI_feeds.csv lives; no hand-maintained feed list.
+
+    - name: Mirror Slips threat intel feeds (rewritten CSV points at this box)
+      ansible.builtin.shell: |
+        docker run --rm \
+          -v {{ artifacts_dir }}:/output \
+          -v {{ playbook_dir }}/../files/fetch_slips_feeds.py:/fetch.py:ro \
+          --entrypoint python3 \
+          stratosphereips/slips:{{ slips_version }} \
+          /fetch.py /output/slips-feeds "{{ artifact_base_url }}"
+      changed_when: true
+      register: slips_feeds_result
+
+    - name: Show Slips feed mirror summary
+      ansible.builtin.debug:
+        msg: "{{ slips_feeds_result.stdout_lines | select('match', '^OK') | list }}"
+
     # ── Warm apt-cacher-ng with standard packages ──────────────────────────────
 
     - name: Warm apt-cacher-ng with standard Orochi packages (full closure, clean container)
@@ -866,6 +891,7 @@
         - "timesketch/timesketch"
         - "redis"
         - "arkime/arkime"
+        - "stratosphereips/slips"
       loop_control:
         label: "{{ item }}"
 
@@ -897,6 +923,7 @@
         - "zeek-debs.tar.gz"
         - "suricata-debs.tar.gz"
         - "suricata-sources/manifest.json"
+        - "slips-feeds/TI_feeds.csv"
         - "zeek-release.key"
       loop_control:
         label: "{{ item }}"

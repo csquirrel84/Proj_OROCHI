@@ -196,16 +196,17 @@ Type the number of the interface connected to the orochi node. It is saved and y
 │  ...                                     │
 │  [12]  Arkime Remote Capture             │
 │  [13]  Lockdown Firewall (LOG → DROP)    │
+│  [14]  Slips (Zeek log ML analysis)      │
 ├──────────────────────────────────────────┤
 │  Space-separated numbers  e.g. 1 4 5 6   │
-│  'all' to deploy 1-11 (never 12 or 13)   │
+│  'all' = 1-11 + 14 (never 12 or 13)      │
 │  'status' or 'teardown'                  │
 └──────────────────────────────────────────┘
 
 Selection:
 ```
 
-Type **`all`** and press Enter to deploy the full stack (options 1–11).
+Type **`all`** and press Enter to deploy the full stack (options 1–11 and 14).
 
 Options 12 and 13 are intentionally left out of `all`:
 - **12 (Arkime Remote Capture)** places an extra capture box elsewhere in the network — run it on its own when you actually have that box
