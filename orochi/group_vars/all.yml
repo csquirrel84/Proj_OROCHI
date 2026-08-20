@@ -55,6 +55,16 @@ slips_version: "v1.1.21"   # v1.1.22/latest crashes at startup (printer observer
 # libc/openssl generation). Bump this only after the node itself is upgraded.
 node_ubuntu_release: "26.04"
 
+# Extra Slips whitelist entries, appended to the stock file by roles/slips.
+# Format: <type>,<value>,<direction>,<what_to_ignore>
+#   type:            ip | domain | organization | mac
+#   direction:       src | dst | both
+#   what_to_ignore:  alerts (keep the flows visible) | flows | both
+# NOTE: CIDR is NOT supported for the ip type — Slips validates entries with
+# validators.ipv4/ipv6 and silently discards anything else. List addresses
+# individually. Broadcast, multicast and Docker bridges are handled already.
+slips_whitelist_extra: []
+
 # ── Elastic Agent installer mirror ────────────────────────────────────────────
 # Endpoints on the target network cannot reach artifacts.elastic.co, so the
 # node hosts its own Elastic Artifact Registry (see roles/fleet). Packages are

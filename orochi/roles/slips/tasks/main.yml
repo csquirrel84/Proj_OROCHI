@@ -82,6 +82,54 @@
   changed_when: false
   tags: slips
 
+# ── Whitelist ─────────────────────────────────────────────────────────────────
+# Slips flags broadcast, multicast and Docker-bridge traffic as "connection to
+# a private IP outside of the used local network" at Medium/High severity. On a
+# real deployment that was 11,678 alerts from two addresses alone — enough to
+# bury the genuine detections.
+#
+# The stock file is EXTENDED, not replaced: it carries Slips' own operational
+# whitelist (useragentstring.com, macvendorlookup.com, ip-api.com — services
+# Slips itself queries). Dropping those would make Slips alert on itself.
+#
+# CIDR DOES NOT WORK HERE. update_whitelisted_ips() validates with
+# validators.ipv4/ipv6 and silently returns on anything else, so "172.16.0.0/12"
+# is discarded with no error — it looks configured and is not. Entries must be
+# individual addresses.
+
+- name: Extract the stock Slips whitelist from the image
+  ansible.builtin.command: docker run --rm {{ images.slips }} cat config/whitelist.conf
+  register: _slips_stock_wl
+  changed_when: false
+  tags: slips
+
+- name: Write extended Slips whitelist
+  ansible.builtin.copy:
+    dest: "{{ directories.slips }}/config/whitelist.conf"
+    mode: '0644'
+    content: |
+      {{ _slips_stock_wl.stdout }}
+
+      ; ── OROCHI additions ────────────────────────────────────────────────
+      ; Infrastructure noise. 'both,both' suppresses alerts AND hides the
+      ; flows; use 'both,alerts' instead to keep the flows visible in the UI
+      ; while silencing the evidence.
+      ip,{{ ansible_facts['default_ipv4']['broadcast'] | default('255.255.255.255') }},both,both
+      ip,255.255.255.255,both,both
+      ip,239.255.255.250,both,both
+      ip,224.0.0.251,both,both
+      ip,224.0.0.252,both,both
+      {% for net in ansible_facts['all_ipv4_addresses'] | default([]) %}
+      {% if net.startswith('172.1') or net.startswith('172.2') or net.startswith('172.3') %}
+      ip,{{ net }},both,both
+      {% endif %}
+      {% endfor %}
+      {% for entry in slips_whitelist_extra | default([]) %}
+      {{ entry }}
+      {% endfor %}
+  register: _slips_wl
+  tags: slips
+
 - name: Write patched Slips configuration
   # Modules that egress are disabled. The image already defaults most of these
   # off (p2p_trust, fides, iris, cesnet, exporting_alerts, blocking,
@@ -106,7 +154,9 @@
          | regex_replace('(?m)^  ti_files: .*$',
                          '  ti_files: /config/TI_feeds.csv')
          | regex_replace('(?m)^  local_threat_intelligence_files: .*$',
-                         '  local_threat_intelligence_files: /config/local_ti_files/') }}
+                         '  local_threat_intelligence_files: /config/local_ti_files/')
+         | regex_replace('(?m)^  local_whitelist_path: .*$',
+                         '  local_whitelist_path: /config/whitelist.conf') }}
   vars:
     slips_disabled_modules: >-
       [template, p2p_trust, fides, iris, virustotal, risk_iq,
@@ -173,7 +223,7 @@
     # docker_container compares the container spec, not the contents of mounted
     # files — so a changed slips.yaml would otherwise be ignored until some
     # unrelated change forced a recreate.
-    recreate: "{{ _slips_conf is changed }}"
+    recreate: "{{ (_slips_conf is changed) or (_slips_wl is changed) }}"
   tags: slips
 
 - name: Wait for the Slips web interface
