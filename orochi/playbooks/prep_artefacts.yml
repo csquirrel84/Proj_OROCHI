@@ -505,11 +505,33 @@
         velox_version: "{{ velox_release.json.tag_name | regex_replace('^v', '') }}"
 
     - name: Download Velociraptor binary
+      # force: true — the version file below is rewritten on every run, so the
+      # binary must be refreshed with it or the two drift apart.
       ansible.builtin.get_url:
         url: "{{ velox_download_url }}"
-        dest: "{{ artifacts_dir }}/velociraptor-linux-amd64"
-        mode: '0755'
-        force: false
+        dest: "{{ artifacts_dir }}/velociraptor-linux-amd64.download"
+        mode: '0644'
+        force: true
+
+    - name: Install Velociraptor binary (decompress if the release asset is gzipped)
+      # Recent releases publish velociraptor-<ver>-linux-amd64.gz, not a bare
+      # ELF. Copying the .gz in as-is gives the node image an unexecutable
+      # blob ("exec format error"), so sniff the magic bytes and gunzip.
+      ansible.builtin.shell: |
+        set -e
+        src={{ artifacts_dir }}/velociraptor-linux-amd64.download
+        dst={{ artifacts_dir }}/velociraptor-linux-amd64
+        if [ "$(head -c2 "$src" | od -An -tx1 | tr -d ' ')" = "1f8b" ]; then
+          gunzip -c "$src" > "$dst.tmp"
+        else
+          cp "$src" "$dst.tmp"
+        fi
+        [ "$(head -c4 "$dst.tmp" | od -An -tx1 | tr -d ' ')" = "7f454c46" ] \
+          || { echo "Velociraptor download is not an ELF binary" >&2; exit 1; }
+        chmod 0755 "$dst.tmp"
+        mv "$dst.tmp" "$dst"
+        rm -f "$src"
+      changed_when: true
 
     - name: Write Velociraptor version file
       ansible.builtin.copy:
