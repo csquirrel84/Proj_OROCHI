@@ -29,7 +29,7 @@
           - rsync
           - unzip
           - gnupg
-          - software-properties-common
+          - python3-apt
           - python3-pip
           - python3-netaddr
           - python3-jmespath
