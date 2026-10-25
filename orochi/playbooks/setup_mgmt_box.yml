@@ -1,5 +1,5 @@
 ---
-# Sets up a fresh Ubuntu management box with everything needed to deploy Orochi.
+# Sets up a fresh Debian 13 management box with everything needed to deploy Orochi.
 #
 # Run directly on the management box:
 #   sudo apt update && sudo apt install -y ansible
@@ -46,13 +46,13 @@
 
     - name: Add Docker GPG key
       ansible.builtin.get_url:
-        url: https://download.docker.com/linux/ubuntu/gpg
+        url: https://download.docker.com/linux/debian/gpg
         dest: /etc/apt/keyrings/docker.asc
         mode: '0644'
 
     - name: Add Docker apt repository
       ansible.builtin.apt_repository:
-        repo: "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu {{ ansible_facts['distribution_release'] }} stable"
+        repo: "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian {{ ansible_facts['distribution_release'] }} stable"
         state: present
         filename: docker
 
@@ -84,13 +84,13 @@
     - name: Configure apt-cacher-ng
       # PassThroughPattern is deliberately narrow: '.*' would make the box an
       # open HTTP CONNECT proxy on port 3142 — dangerous on a hostile network.
-      # The orochi node only fetches Ubuntu archives over plain HTTP through
+      # The orochi node only fetches Debian archives over plain HTTP through
       # this proxy (HTTPS repos are configured DIRECT), so CONNECT passthrough
-      # is limited to Ubuntu infrastructure.
+      # is limited to Debian infrastructure.
       ansible.builtin.copy:
         dest: /etc/apt-cacher-ng/local.conf
         content: |
-          PassThroughPattern: ^(([a-z0-9-]+\.)*(ubuntu|canonical)\.com):443$
+          PassThroughPattern: ^(([a-z0-9-]+\.)*debian\.org):443$
           DnsCacheSeconds: 2000
           ExThreshold: 100
         mode: '0644'

@@ -7,7 +7,7 @@ usage() {
     exit 1
 }
 
-USER="ubuntu"
+USER="orochiman"
 IP=""
 
 # Support both `push_to_mgmt.sh <IP> [User]` and `-i/-u` flags.

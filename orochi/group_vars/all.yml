@@ -47,12 +47,15 @@ arkime_version: "v6-latest"
 timesketch_version: "latest"
 redis_version: "7-alpine"
 
-# Ubuntu release of the OROCHI NODE. prep_artefacts builds every .deb bundle
-# inside a container of this release so apt resolves the same dependency
-# closure the node will need offline. It must track the node's actual OS —
-# a mismatch produces debs the node cannot install (or that pull in the wrong
-# libc/openssl generation). Bump this only after the node itself is upgraded.
-node_ubuntu_release: "26.04"
+# Debian release of the OROCHI NODE (Debian 13 "trixie"). prep_artefacts builds
+# every .deb bundle inside a container of this release so apt resolves the same
+# dependency closure the node will need offline. It must track the node's
+# actual OS — a mismatch produces debs the node cannot install (or that pull in
+# the wrong libc/openssl generation). Bump these only after the node itself is
+# upgraded. node_debian_release is the number used in the Zeek OBS repo path
+# (Debian_13); node_debian_codename is the Docker image tag / apt suite.
+node_debian_release: "13"
+node_debian_codename: "trixie"
 
 # ── Elastic Agent installer mirror ────────────────────────────────────────────
 # Endpoints on the target network cannot reach artifacts.elastic.co, so the
@@ -88,7 +91,7 @@ elastic_agent_package_types:
   - zip     # Windows
   - msi     # Windows installer
   - tar     # Linux + macOS tarballs
-  - deb     # Debian/Ubuntu
+  - deb     # Debian
   - rpm     # RHEL/Rocky/SUSE
 
 # Abort the mirror rather than filling the disk. Applies to the management
@@ -107,7 +110,7 @@ images:
   elastic_agent:      "{{ mgmt_box_ip }}:{{ mgmt_registry_port }}/elastic-agent/elastic-agent:{{ stack_version }}"
   cassandra:          "{{ mgmt_box_ip }}:{{ mgmt_registry_port }}/cassandra:{{ cassandra_version }}"
   thehive:            "{{ mgmt_box_ip }}:{{ mgmt_registry_port }}/thehiveproject/thehive4:{{ thehive_version }}"
-  debian_slim:        "{{ mgmt_box_ip }}:{{ mgmt_registry_port }}/debian:bookworm-slim"
+  debian_slim:        "{{ mgmt_box_ip }}:{{ mgmt_registry_port }}/debian:trixie-slim"
   mattermost:         "{{ mgmt_box_ip }}:{{ mgmt_registry_port }}/mattermost/mattermost-team-edition:{{ mattermost_version }}"
   postgres:           "{{ mgmt_box_ip }}:{{ mgmt_registry_port }}/postgres:{{ postgres_version }}"
   cyberchef:          "{{ mgmt_box_ip }}:{{ mgmt_registry_port }}/gchq/cyberchef:{{ cyberchef_version }}"

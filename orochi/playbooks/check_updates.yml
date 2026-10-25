@@ -138,7 +138,7 @@
             docker run --rm \
               -v {{ artifacts_dir }}:/output \
               -v {{ playbook_dir }}/../files/fetch_suricata_sources.py:/fetch.py:ro \
-              ubuntu:noble \
+              debian:{{ node_debian_codename }} \
               bash -c '
                 set -e
                 apt-get update -qq

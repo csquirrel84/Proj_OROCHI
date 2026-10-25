@@ -2,7 +2,7 @@ param(
     [Parameter(Mandatory=$true)]
     [string]$IP,
 
-    [string]$User = "ubuntu"
+    [string]$User = "orochiman"
 )
 
 # WARNING: keep this a plain overwrite-copy (scp -r). Do NOT switch to any

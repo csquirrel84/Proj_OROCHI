@@ -2,7 +2,7 @@
 
 An Ansible-based, fully offline-capable DFIR deployment framework, inspired by [Project Tiamat](https://github.com/csquirrel84/PROJ_TIAMAT).
 
-Pre-cache everything on a management box with internet, then deploy the full stack to a bare metal Ubuntu node with **zero internet access** — under 6 hours from clean hardware to operational.
+Pre-cache everything on a management box with internet, then deploy the full stack to a bare metal Debian 13 node with **zero internet access** — under 6 hours from clean hardware to operational.
 
 ## Features
 

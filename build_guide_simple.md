@@ -10,12 +10,12 @@ Do this once before going on-site. You need internet for this phase only.
 
 ---
 
-### Step 0.1 — Install Ubuntu on the management box
+### Step 0.1 — Install Debian on the management box
 
-Install Ubuntu Server 26.04 LTS on the management laptop.
+Install Debian 13 (trixie) on the management laptop.
 
 During install:
-- Create user: **`orochiman`** with sudo access
+- Create user: **`orochiman`** with sudo access (leave the root password empty in the Debian installer so `sudo` is installed)
 - Enable OpenSSH server when prompted
 - No additional packages needed
 
@@ -69,15 +69,15 @@ You can now disconnect from the internet.
 
 ---
 
-### Step 1 — Install Ubuntu on the orochi node
+### Step 1 — Install Debian on the orochi node
 
-Boot the NUC from a USB drive, install Ubuntu Server 26.04 LTS.
+Boot the NUC from a USB drive, install Debian 13 (trixie).
 
 > **IMPORTANT:** During install you MUST create the user exactly as shown below.
 > If the username is wrong, Ansible will not be able to connect and deployment will fail.
 
 During install:
-- Create user: **`orochi`** (exactly this name, lowercase) with sudo access
+- Create user: **`orochi`** (exactly this name, lowercase) with sudo access (leave the root password empty in the Debian installer so `sudo` is installed)
 - Enable OpenSSH server when prompted
 - No additional packages needed
 

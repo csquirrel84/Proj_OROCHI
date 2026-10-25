@@ -270,7 +270,7 @@
 # The zeek systemd unit is Type=oneshot — a crashed Zeek worker is never
 # restarted by systemd. `zeekctl cron` restarts crashed workers and rotates
 # stats; this is the supervision mechanism ZeekControl expects.
-# Implemented as a systemd timer, NOT ansible.builtin.cron: Ubuntu Server
+# Implemented as a systemd timer, NOT ansible.builtin.cron: Debian
 # minimal has no crontab binary and the node is offline, so cron cannot be
 # assumed or installed.
 - name: Create zeekctl watchdog service unit

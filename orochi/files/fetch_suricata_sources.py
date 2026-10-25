@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Download every FREE Suricata rule source into per-source .rules files
-plus a manifest.json. Run inside an ubuntu container by prep_artefacts.yml
+plus a manifest.json. Run inside an debian container by prep_artefacts.yml
 and check_updates.yml.
 
 "Free" = any source in the suricata-update index that needs no auth

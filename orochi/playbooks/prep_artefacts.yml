@@ -32,8 +32,8 @@
         local: "cassandra:{{ cassandra_version }}"
       - src: "thehiveproject/thehive4:{{ thehive_version }}"
         local: "thehiveproject/thehive4:{{ thehive_version }}"
-      - src: "debian:bookworm-slim"
-        local: "debian:bookworm-slim"
+      - src: "debian:trixie-slim"
+        local: "debian:trixie-slim"
       - src: "mattermost/mattermost-team-edition:{{ mattermost_version }}"
         local: "mattermost/mattermost-team-edition:{{ mattermost_version }}"
       - src: "postgres:{{ postgres_version }}"
@@ -52,7 +52,7 @@
     binary_artifacts:
       - url: "https://github.com/activecm/rita/releases/download/{{ rita_version }}/rita-{{ rita_version }}.tar.gz"
         dest: "rita-{{ rita_version }}.tar.gz"
-      - url: "https://download.opensuse.org/repositories/security:/zeek/xUbuntu_{{ node_ubuntu_release }}/Release.key"
+      - url: "https://download.opensuse.org/repositories/security:/zeek/Debian_{{ node_debian_release }}/Release.key"
         dest: "zeek-release.key"
 
   tasks:
@@ -521,7 +521,7 @@
 
     - name: Download Docker .deb packages (full closure, clean container)
       # CRITICAL: download the COMPLETE dependency closure inside a pristine
-      # container matching the NODE's Ubuntu release (node_ubuntu_release),
+      # container matching the NODE's Debian release (node_debian_release),
       # NOT on the management box. `apt-get install
       # --download-only` on the host only fetches dependencies the host does
       # NOT already have — and the mgmt box runs Docker, so it already has most
@@ -538,18 +538,18 @@
         mkdir -p {{ artifacts_dir }}/docker-debs
         docker run --rm \
           -v {{ artifacts_dir }}/docker-debs:/debs \
-          ubuntu:{{ node_ubuntu_release }} \
+          debian:{{ node_debian_codename }} \
           bash -c '
             set -e
             export DEBIAN_FRONTEND=noninteractive
             apt-get update -qq
             apt-get install -y --no-install-recommends ca-certificates curl gnupg
             install -m 0755 -d /etc/apt/keyrings
-            curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+            curl -fsSL https://download.docker.com/linux/debian/gpg \
               -o /etc/apt/keyrings/docker.asc
             chmod a+r /etc/apt/keyrings/docker.asc
             . /etc/os-release
-            echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${VERSION_CODENAME} stable" \
+            echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian ${VERSION_CODENAME} stable" \
               > /etc/apt/sources.list.d/docker.list
             apt-get update -qq
             apt-get install -y --download-only \
@@ -578,12 +578,12 @@
       # courier/gnutls-bin/libunbound8 (NOT Zeek dependencies — they only ever
       # arrived as recommends) out of the bundle; those recommends riding along
       # in a host download were the root cause that contaminated earlier nodes
-      # and blocked apt. The opensuse Zeek repo path tracks node_ubuntu_release
-      # (xUbuntu_<release>) so the packages are built for the release the node
+      # and blocked apt. The opensuse Zeek repo path tracks node_debian_release
+      # (Debian_<release>) so the packages are built for the release the node
       # actually runs — no cross-release gap to reason about. OBS does not
-      # publish for every Ubuntu release: verify the directory exists at
+      # publish for every Debian release: verify the directory exists at
       # https://download.opensuse.org/repositories/security:/zeek/ before
-      # bumping node_ubuntu_release, or this task 404s on apt-get update.
+      # bumping node_debian_release, or this task 404s on apt-get update.
       # The repo + key are set up INSIDE the container; the mounted
       # zeek-release.key is the same one served to the node (single source).
       ansible.builtin.shell: |
@@ -593,7 +593,7 @@
         docker run --rm \
           -v {{ artifacts_dir }}/zeek-debs:/debs \
           -v {{ artifacts_dir }}/zeek-release.key:/zeek-release.key:ro \
-          ubuntu:{{ node_ubuntu_release }} \
+          debian:{{ node_debian_codename }} \
           bash -c '
             set -e
             export DEBIAN_FRONTEND=noninteractive
@@ -602,7 +602,7 @@
             install -m 0755 -d /etc/apt/keyrings
             gpg --dearmor < /zeek-release.key \
               > /etc/apt/keyrings/zeek-archive-keyring.gpg
-            echo "deb [signed-by=/etc/apt/keyrings/zeek-archive-keyring.gpg] http://download.opensuse.org/repositories/security:/zeek/xUbuntu_{{ node_ubuntu_release }}/ /" \
+            echo "deb [signed-by=/etc/apt/keyrings/zeek-archive-keyring.gpg] http://download.opensuse.org/repositories/security:/zeek/Debian_{{ node_debian_release }}/ /" \
               > /etc/apt/sources.list.d/zeek.list
             apt-get update -qq
             apt-get install -y --download-only --no-install-recommends \
@@ -634,7 +634,7 @@
           -C {{ artifacts_dir }} zeek-debs/
       changed_when: true
 
-    # ── Suricata .deb packages — Ubuntu default repos ─────────────────────────
+    # ── Suricata .deb packages — Debian default repos ─────────────────────────
 
     - name: Download Suricata .deb packages (full closure, clean container)
       # CRITICAL: download inside a clean node-release container, NOT on the
@@ -652,7 +652,7 @@
         mkdir -p {{ artifacts_dir }}/suricata-debs
         docker run --rm \
           -v {{ artifacts_dir }}/suricata-debs:/debs \
-          ubuntu:{{ node_ubuntu_release }} \
+          debian:{{ node_debian_codename }} \
           bash -c '
             set -e
             export DEBIAN_FRONTEND=noninteractive
@@ -784,7 +784,7 @@
         docker run --rm \
           -v {{ artifacts_dir }}:/output \
           -v {{ playbook_dir }}/../files/fetch_suricata_sources.py:/fetch.py:ro \
-          ubuntu:noble \
+          debian:{{ node_debian_codename }} \
           bash -c '
             set -e
             apt-get update -qq
@@ -817,7 +817,7 @@
       # deployment, so this must fail loudly.
       ansible.builtin.shell: |
         set -e
-        docker run --rm --network host ubuntu:{{ node_ubuntu_release }} bash -c '
+        docker run --rm --network host debian:{{ node_debian_codename }} bash -c '
           set -e
           export DEBIAN_FRONTEND=noninteractive
           echo "Acquire::http::Proxy \"http://localhost:{{ mgmt_apt_proxy_port }}\";" \

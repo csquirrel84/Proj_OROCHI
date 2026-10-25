@@ -15,7 +15,7 @@ The guiding design principle: if it requires engineering knowledge to operate, i
 
 ## The Two-Box Model (implemented)
 
-**Management box** — Ubuntu laptop, the Ansible control node. Before going on-site it downloads and caches every artefact. On-site it runs three services the orochi node uses as its sole software source:
+**Management box** — Debian laptop, the Ansible control node. Before going on-site it downloads and caches every artefact. On-site it runs three services the orochi node uses as its sole software source:
 
 | Service | Port | Serves |
 |---------|------|--------|
@@ -23,7 +23,7 @@ The guiding design principle: if it requires engineering knowledge to operate, i
 | Nginx artifact server (`orochi-artifacts`) | 8888 | Velociraptor binary, RITA tarball, Zeek/Suricata/Docker `.deb` tarballs, Suricata rules, GPG keys, version files |
 | apt-cacher-ng | 3142 | Transparent apt proxy for the node |
 
-**Orochi node** — bare metal Ubuntu Server (currently an Intel NUC). Pulls everything from the management box, runs the full stack. Zero internet during or after deployment.
+**Orochi node** — bare-metal Debian 13 (currently an Intel NUC). Pulls everything from the management box, runs the full stack. Zero internet during or after deployment.
 
 Dev addressing: management box `100.99.102.28` (Tailscale, user `orochiman`), node `100.70.2.104` (Tailscale) / `192.168.0.200` (LAN, user `orochi`). Production: direct ethernet link, management box `10.16.255.253/24` (default in `group_vars/all.yml`).
 
@@ -123,7 +123,7 @@ Option 12 / `playbooks/deploy_remote_capture.yml` deploy `arkimecapture-remote` 
 
 | Decision | Rationale |
 |----------|-----------|
-| Bare metal Ubuntu, no hypervisor | NUC can't run a hypervisor + VMs efficiently; direct deployment is faster and simpler |
+| Bare metal Debian 13, no hypervisor | NUC can't run a hypervisor + VMs efficiently; direct deployment is faster and simpler |
 | Docker for services, bare metal for Zeek/Suricata | Repeatability and offline image caching vs raw packet access |
 | Ansible only — Terraform abandoned | No VMs to provision |
 | Single engagement password | One credential per engagement, fans out to every service (TheHive excepted — hardcoded default, change on first login) |
@@ -144,7 +144,7 @@ These are design intent. **None of the following exists in the codebase yet:**
 2. **Export playbook** — verified NDJSON archive to a blank per-engagement USB Evidence Drive, checksummed, before any destroy
 3. **Destroy playbook** — evidence-safe wipe, gated on confirmed export (current `reset.sh`/`teardown` are dev tools, not evidence-handling tools)
 4. **Management laptop wizard/front-end** — guided deployment UX
-5. **PXE boot** for node OS install (manual Ubuntu install for now)
+5. **PXE boot** for node OS install (manual Debian install for now)
 6. **Capture-network USB NIC** — hardware still to be procured
 
 > **Implemented since the list above was written:** the `firewall` role (per-interface iptables policy — analyst NIC open, capture/target NIC restricted to Fleet 8220 / ES 9200, SSH lockout guard, DOCKER-USER enforcement for published container ports, persisted via netfilter-persistent). It deploys in MONITOR mode (LOG-only, blocks nothing); menu option 13 "Lockdown Firewall" flips LOG → DROP after a typed confirmation and is never part of 'all'.
@@ -186,7 +186,7 @@ Proj_OROCHI/
 
 ## Constraints
 
-- Build time: **≤ 6 hours** from bare metal Ubuntu to operational stack
+- Build time: **≤ 6 hours** from bare metal Debian 13 to operational stack
 - Internet: **zero dependency** after the prep phase
 - Operator skill: **assume non-technical** — every runtime decision is a prompt with a sane default
 - Export and destroy (when built): **always separate steps**, export verified first
@@ -199,24 +199,25 @@ Proj_OROCHI/
 
 > **If a fresh deploy throws OS/package/interpreter errors, suspect the node OS
 > first — not the roles.** A *dirty* base image, or a node whose release does
-> not match `node_ubuntu_release` in `group_vars/all.yml`, is the single most
+> not match `node_debian_release` in `group_vars/all.yml`, is the single most
 > common cause of a failing run.
 
-- **Node OS:** Ubuntu **Server 26.04 LTS** (moved from 25.10 in August 2026,
-  when 25.10 went EOL and stopped receiving security patches). Freshly
-  installed, nothing added beyond the base system + OpenSSH.
-  `node_ubuntu_release` in `group_vars/all.yml` MUST match — prep_artefacts
-  builds every `.deb` bundle in a container of that release so apt resolves the
-  closure the node will actually need. Re-run prep_artefacts after any node
-  release change, or the node installs debs built against the wrong libc.
-- **Known 26.04 friction (recorded from the first attempt, kept as a signal):**
-  Python 3.14, DPDK-ified Suricata and kernel 7.x produced pre-dependency
-  ordering failures, a debconf hang, and interpreter-discovery warnings that
-  25.10 did not. The Suricata/Zeek half of that is now moot — both sensors moved
-  off the node to the pfSense firewall — but the debconf and interpreter issues
-  are not sensor-specific, so they remain the first things to check if a 26.04
-  deploy misbehaves.
-- **Management box OS:** Ubuntu 26.04 LTS (also moved from 25.10, August 2026).
+- **Node OS:** **Debian 13 "trixie"** (stable). Freshly installed, nothing added
+  beyond "SSH server" + "standard system utilities". Leave the root password
+  **empty** during install so the installer gives the `orochi` user `sudo`
+  (a Debian netinst with a root password does not install sudo, and the
+  playbooks need it). `node_debian_release` / `node_debian_codename` in
+  `group_vars/all.yml` MUST match — prep_artefacts builds every `.deb` bundle in
+  a container of that release so apt resolves the closure the node will
+  actually need. Re-run prep_artefacts after any node release change, or the
+  node installs debs built against the wrong libc.
+- **Refactored for Debian 13 (branch `debian13`):** Docker CE and Zeek repos now
+  use `download.docker.com/linux/debian` and OBS `Debian_13`; prep containers are
+  `debian:trixie`; the apt-cacher-ng CONNECT passthrough allows `debian.org`.
+  Debian 13 ships `iptables` as the nft backend and has no snap/netplan, so the
+  firewall role is unchanged. Not yet exercised end to end on real hardware —
+  treat the first deploy as a test run.
+- **Management box OS:** Debian 13 (trixie).
 - **`.deb` bundles install via `apt-get install ./*.deb`, never `dpkg -i *.deb`** —
   modern packages (e.g. Suricata's DPDK deps) have pre-dependencies that a flat
   `dpkg -i` glob cannot order. The suricata/common roles already do this; keep it.

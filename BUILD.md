@@ -38,7 +38,7 @@ OROCHI uses exactly two machines:
 - **Nginx artifact server** (port 8888) — serves binary files: Velociraptor executable, RITA tarball, Suricata and Zeek `.deb` tarballs, Zeek GPG key, Suricata rules archive.
 - **apt-cacher-ng** (port 3142) — transparent apt proxy. When the orochi node runs `apt-get install`, it routes through the management box cache instead of hitting the internet.
 
-**Orochi node** (the deployment target) — a bare-metal Ubuntu Server that pulls everything from the management box and runs the full security stack. It requires zero internet access during or after deployment.
+**Orochi node** (the deployment target) — a bare-metal Debian 13 that pulls everything from the management box and runs the full security stack. It requires zero internet access during or after deployment.
 
 ### How Ansible Drives Everything
 
@@ -76,7 +76,7 @@ This means you only have one credential to manage per engagement. **TheHive is t
 ```
 ┌─────────────────────────────────┐       ┌─────────────────────────────────┐
 │       MANAGEMENT BOX            │       │          OROCHI NODE             │
-│   (analyst laptop / NUC)        │       │   (bare metal Ubuntu Server)    │
+│   (analyst laptop / NUC)        │       │   (bare-metal Debian 13)    │
 │                                 │       │                                  │
 │  ┌─────────────────────────┐   │ethernet│  Docker containers:              │
 │  │ Local Docker Registry   │◄──┤ link  ├─► Elasticsearch 9.x (9200)      │
@@ -144,7 +144,7 @@ Running 'teardown' stops and removes containers but does **not** delete these di
 
 | Component | Minimum | Recommended |
 |-----------|---------|-------------|
-| OS | Ubuntu 24.04 LTS | Ubuntu 26.04 LTS |
+| OS | Debian 13 (trixie) | Debian 13 (trixie) |
 | CPU | 4 cores | 8 cores |
 | RAM | 8 GB | 16 GB |
 | Storage | 100 GB free | 200 GB free |
@@ -156,7 +156,7 @@ The management box needs sufficient disk to cache all Docker image layers (appro
 
 | Component | Minimum | Recommended |
 |-----------|---------|-------------|
-| OS | Ubuntu Server 26.04 LTS | Ubuntu Server 26.04 LTS |
+| OS | Debian 13 (trixie) | Debian 13 (trixie) |
 | CPU | 8 cores | 16 cores |
 | RAM | 32 GB | 64 GB |
 | Storage | 500 GB SSD | 2 TB NVMe |
@@ -232,10 +232,10 @@ If any of these three are unreachable, deployment will fail. `bootstrap_node` ch
 
 > **Run once** when first setting up the management box. Requires internet. Takes approximately 10 minutes.
 
-### 0.1 Install Ubuntu on the Management Box
+### 0.1 Install Debian on the Management Box
 
-Install Ubuntu 26.04 LTS on the management laptop. During install:
-- Create user `orochiman` with sudo access
+Install Debian 13 (trixie) on the management laptop. During install:
+- Create user `orochiman` with sudo access (leave the root password empty in the Debian installer so `sudo` is installed)
 - Enable OpenSSH server (optional — you'll be running everything locally)
 - Do not install any additional packages beyond the base system
 
@@ -294,9 +294,9 @@ Both the registry and nginx containers are started with `restart_policy: unless-
 
 ### 0.5 Install the Orochi Node OS
 
-Install **Ubuntu Server 26.04 LTS** on the orochi node (this must match
-`node_ubuntu_release` in `group_vars/all.yml` — see Phase 1). During install:
-- Create user `orochi` with sudo access
+Install **Debian 13 (trixie)** on the orochi node (this must match
+`node_debian_release` in `group_vars/all.yml` — see Phase 1). During install:
+- Create user `orochi` with sudo access (leave the root password empty in the Debian installer so `sudo` is installed)
 - Enable OpenSSH server
 - Do **not** install any additional packages — Docker, Suricata, Zeek etc. are all installed by Ansible
 
@@ -365,12 +365,12 @@ The playbook runs entirely on `localhost` (the management box). It:
 2. **Pulls Docker images** from their upstream sources (docker.elastic.co, Docker Hub, GitHub Container Registry, Google Artifact Registry) and pushes them all into the local registry under the paths `group_vars/all.yml` references. The orochi node never contacts any upstream registry — it only talks to the management box registry.
 3. **Downloads binary artefacts** (RITA tarball, Zeek signing key) via direct URL.
 4. **Resolves the latest Velociraptor release** from the GitHub API and downloads the `linux-amd64` binary.
-5. **Downloads Docker CE `.deb` packages** inside a pristine `ubuntu:{{ node_ubuntu_release }}` container — the tag comes from `node_ubuntu_release` in `group_vars/all.yml` and must match the node's actual Ubuntu release. This matters: running `apt-get --download-only` directly on the management box only fetches dependencies the management box does *not* already have installed, silently producing an incomplete bundle that cannot install offline on a minimal node. A clean container has nothing pre-installed, so apt is forced to download the complete dependency closure. The Docker apt repo and signing key are set up inside the container, leaving the management box's own apt configuration untouched.
+5. **Downloads Docker CE `.deb` packages** inside a pristine `debian:{{ node_debian_codename }}` container — the tag comes from `node_debian_release` in `group_vars/all.yml` and must match the node's actual Debian release. This matters: running `apt-get --download-only` directly on the management box only fetches dependencies the management box does *not* already have installed, silently producing an incomplete bundle that cannot install offline on a minimal node. A clean container has nothing pre-installed, so apt is forced to download the complete dependency closure. The Docker apt repo and signing key are set up inside the container, leaving the management box's own apt configuration untouched.
 6. **Downloads Zeek `.deb` packages** the same clean-container way, with `--no-install-recommends` (Zeek's `zeekctl` *recommends* a mail-transport-agent, which would otherwise drag the courier mail stack into the bundle and break apt on every node).
-7. **Downloads Suricata `.deb` packages** the same clean-container way, from standard Ubuntu repos.
-8. **Downloads Suricata rule sources** by spinning up a temporary Ubuntu container and mirroring every free source as per-source `.rules` files plus a `manifest.json` under `/opt/orochi/artifacts/suricata-sources/`. The node registers these URLs with `suricata-update`, so rules can later be refreshed on the node without internet access.
+7. **Downloads Suricata `.deb` packages** the same clean-container way, from standard Debian repos.
+8. **Downloads Suricata rule sources** by spinning up a temporary Debian container and mirroring every free source as per-source `.rules` files plus a `manifest.json` under `/opt/orochi/artifacts/suricata-sources/`. The node registers these URLs with `suricata-update`, so rules can later be refreshed on the node without internet access.
 9. **Mirrors Elastic Agent installers.** Queries `artifacts-api.elastic.co` for every installable package matching the stack version (or uses an explicit `elastic_agent_artifacts` list if one is pinned), checks free disk space, then downloads each package plus its `.sha512` and `.asc` into `elastic-artifacts/beats/elastic-agent/`, and writes a `manifest.json` the node reads to know what to mirror locally. This is the source for the node-hosted artifact registry that endpoints enrol against — see Option 1 below.
-10. **Warms apt-cacher-ng** inside a clean `ubuntu:{{ node_ubuntu_release }}` container routed through the proxy (same host-state reasoning as the deb bundles: warming from the management box itself skips anything the box already has, leaving holes in the cache that only surface in the field when the management box is offline). This step fails loudly if warming fails — a silently cold cache means a broken offline deployment later.
+10. **Warms apt-cacher-ng** inside a clean `debian:{{ node_debian_codename }}` container routed through the proxy (same host-state reasoning as the deb bundles: warming from the management box itself skips anything the box already has, leaving holes in the cache that only surface in the field when the management box is offline). This step fails loudly if warming fails — a silently cold cache means a broken offline deployment later.
 11. **Starts the nginx artifact server** at `localhost:8888` serving `/opt/orochi/artifacts/`.
 12. **Verifies** that all expected registry images and artifact files are present. Fails loudly if anything is missing.
 
@@ -613,7 +613,7 @@ Deploys Elasticsearch 9.x, Kibana, and Fleet Server. This is the foundation — 
 | Windows | `.zip` and `.msi`, x86_64 and arm64 |
 | Linux | `.tar.gz`, x86_64 and arm64 |
 | macOS | `.tar.gz`, x86_64 (Intel) and aarch64 (Apple Silicon) |
-| Debian/Ubuntu | `.deb`, amd64 and arm64 |
+| Debian | `.deb`, amd64 and arm64 |
 | RHEL/Rocky/SUSE | `.rpm`, x86_64 and aarch64 |
 
 Docker images, build contexts, and the `-core`/`-fips`/`-cloud`/`-slim`/`-wolfi`/`-complete`/`-service` variants are filtered out — none of them is what an endpoint installs. Each package is accompanied by its `.sha512` and `.asc` (Elastic Agent verifies both on install and upgrade), so 12 packages means 36 files.
@@ -1089,7 +1089,7 @@ OROCHI is hardware-agnostic for the orochi node. No MAC addresses or interface n
 
 ### If the Orochi Node Is Different Hardware
 
-1. Boot the new hardware with Ubuntu Server 26.04 LTS installed
+1. Boot the new hardware with Debian 13 (trixie) installed
 2. Delete the `OROCHI_NODE_IP` line from the operation's `<OP_NAME>.env` on the management box (or remove the file entirely) — `fuse.yml` will prompt for the new node's IP
 3. Run `fuse.yml` — the `environment` role lists available interfaces and prompts you to select the capture interface at runtime
 
